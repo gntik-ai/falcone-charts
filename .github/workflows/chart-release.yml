@@ -1,0 +1,63 @@
+name: Chart release
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - 'deploy/helm/**'
+      - 'deploy/kind/values-*.yaml'
+      - 'deploy/openshift/values-openshift.yaml'
+      - 'helm/**'
+      - 'services/**/helm/**'
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+      - 'deploy/helm/**'
+      - 'deploy/kind/values-*.yaml'
+      - 'deploy/openshift/values-openshift.yaml'
+      - 'helm/**'
+      - 'services/**/helm/**'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.1.4
+      - name: Verify vendored dependencies
+        run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
+      - name: Lint umbrella chart
+        run: helm lint charts/in-falcone
+      - name: Render default release
+        run: helm template falcone charts/in-falcone --namespace falcone >/dev/null
+      - name: Package chart
+        run: helm package charts/in-falcone --destination .chart-packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: in-falcone-chart
+          path: .chart-packages/*.tgz
+
+  publish:
+    if: github.event_name == 'push'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.1.4
+      - name: Verify vendored dependencies
+        run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
+      - name: Package chart
+        run: helm package charts/in-falcone --destination .chart-packages
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Publish OCI chart
+        run: helm push .chart-packages/in-falcone-*.tgz oci://ghcr.io/gntik-ai/charts
