@@ -2,6 +2,58 @@
 {{- $components := list "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" -}}
 {{- $coreServiceAliases := list "bootstrap" "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "seaweedfs" "grafana" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" "eso" "openbao" "temporal" "mcp" -}}
 {{- $supportedExposureKinds := list "Ingress" "LoadBalancer" "Route" -}}
+{{- $webhookKey := .Values.global.webhookSigningKey -}}
+{{- $adoption := $webhookKey.adoption -}}
+{{- $rotation := $webhookKey.rotation -}}
+{{- $reservedWebhookKey := "WEBHOOK_SIGNING_KEY" -}}
+{{- if and .Release.IsInstall (or (eq $adoption.mode "legacy") (ne $rotation.action "none")) -}}
+  {{- fail "webhook key adoption/rotation/recovery/finalization is upgrade-only and requires an existing deployment maintenance window" -}}
+{{- end -}}
+{{- range $entry := (.Values.controlPlane.env | default (list)) -}}
+  {{- if eq ($entry.name | default "") $reservedWebhookKey -}}
+    {{- fail "controlPlane.env must not define reserved WEBHOOK_SIGNING_KEY; configure global.webhookSigningKey Secret references only" -}}
+  {{- end -}}
+{{- end -}}
+{{- $transportSecurity := .Values.global.transportSecurity | default (dict) -}}
+{{- range $entry := ($transportSecurity.env | default (list)) -}}
+  {{- if eq ($entry.name | default "") $reservedWebhookKey -}}
+    {{- fail "global.transportSecurity.env must not define reserved WEBHOOK_SIGNING_KEY; configure global.webhookSigningKey Secret references only" -}}
+  {{- end -}}
+{{- end -}}
+{{- $controlPlaneInline := .Values.controlPlane.config.inline | default (dict) -}}
+{{- if hasKey $controlPlaneInline $reservedWebhookKey -}}
+  {{- fail "controlPlane.config.inline must not define reserved WEBHOOK_SIGNING_KEY; configure global.webhookSigningKey Secret references only" -}}
+{{- end -}}
+{{- if and (eq $adoption.mode "legacy") (eq ($adoption.requestId | default "") "") -}}
+  {{- fail "global.webhookSigningKey.adoption.requestId is required when adoption.mode=legacy" -}}
+{{- end -}}
+{{- if and (eq $adoption.mode "legacy") $webhookKey.create (ne $rotation.action "rotate") -}}
+  {{- fail "global.webhookSigningKey.create must be false for legacy adoption/recovery material; provision the exact historical value externally" -}}
+{{- end -}}
+{{- if and (eq $adoption.mode "none") (ne ($adoption.requestId | default "") "") -}}
+  {{- fail "global.webhookSigningKey.adoption.requestId must be empty when adoption.mode=none" -}}
+{{- end -}}
+{{- if eq $rotation.action "none" -}}
+  {{- if or $rotation.requestId $rotation.sourceSecretName $rotation.sourceSecretKey $rotation.rotationId -}}
+    {{- fail "global.webhookSigningKey.rotation fields must be empty when rotation.action=none" -}}
+  {{- end -}}
+{{- else -}}
+  {{- if eq ($rotation.requestId | default "") "" -}}
+    {{- fail "global.webhookSigningKey.rotation.requestId is required for lifecycle actions" -}}
+  {{- end -}}
+  {{- if eq $rotation.action "finalize" -}}
+    {{- if or (eq ($rotation.sourceSecretName | default "") "") (eq ($rotation.sourceSecretKey | default "") "") -}}
+      {{- fail "global.webhookSigningKey.rotation source Secret identity is required for finalize" -}}
+    {{- end -}}
+  {{- else -}}
+    {{- if or (eq ($rotation.sourceSecretName | default "") "") (eq ($rotation.sourceSecretKey | default "") "") (eq ($rotation.rotationId | default "") "") -}}
+      {{- fail "global.webhookSigningKey.rotation source identity and rotationId are required for rotate/recover" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if and (eq $rotation.sourceSecretName $webhookKey.secretName) (eq $rotation.sourceSecretKey $webhookKey.secretKey) -}}
+    {{- fail "global.webhookSigningKey source and target Secret identities must differ" -}}
+  {{- end -}}
+{{- end -}}
 {{- range $alias := $coreServiceAliases }}
   {{- $block := index $.Values $alias -}}
   {{- if and (kindIs "map" $block) (hasKey $block "enabled") -}}

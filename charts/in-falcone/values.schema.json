@@ -38,7 +38,8 @@
         "environment",
         "createNamespace",
         "airgap",
-        "privateRegistry"
+        "privateRegistry",
+        "webhookSigningKey"
       ],
       "properties": {
         "nameOverride": {
@@ -111,6 +112,104 @@
             }
           },
           "additionalProperties": true
+        },
+        "webhookSigningKey": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "create",
+            "secretName",
+            "secretKey",
+            "adoption",
+            "rotation"
+          ],
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            },
+            "secretKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "adoption": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "requestId"
+              ],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "legacy"
+                  ]
+                },
+                "requestId": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                }
+              }
+            },
+            "rotation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "requestId",
+                "sourceSecretName",
+                "sourceSecretKey",
+                "rotationId",
+                "recoveryWindowSeconds"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "rotate",
+                    "recover",
+                    "finalize"
+                  ]
+                },
+                "requestId": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "sourceSecretName": {
+                  "type": "string",
+                  "maxLength": 253,
+                  "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                },
+                "sourceSecretKey": {
+                  "type": "string",
+                  "maxLength": 253,
+                  "pattern": "^$|^[A-Za-z0-9._-]+$"
+                },
+                "rotationId": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "recoveryWindowSeconds": {
+                  "type": "integer",
+                  "minimum": 300,
+                  "maximum": 2592000
+                }
+              }
+            }
+          }
         },
         "defaultStorageClass": {
           "type": "string"

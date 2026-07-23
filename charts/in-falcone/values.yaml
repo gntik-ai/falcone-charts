@@ -12,6 +12,24 @@ global:
     registry: ""
     pullSecretNames: []
     caBundleConfigMap: ""
+  # Platform master key used only to wrap per-subscription webhook signing
+  # secrets at rest. Key material is never accepted here; it must live in the
+  # referenced Kubernetes Secret. Managed generation occurs inside the
+  # credential hook and managed Secrets are immutable/retained.
+  webhookSigningKey:
+    create: true
+    secretName: in-falcone-webhook-signing-key
+    secretKey: key
+    adoption:
+      mode: none
+      requestId: ""
+    rotation:
+      action: none
+      requestId: ""
+      sourceSecretName: ""
+      sourceSecretKey: ""
+      rotationId: ""
+      recoveryWindowSeconds: 604800
   defaultStorageClass: ""
   podSecurity:
     runAsNonRoot: true
@@ -135,6 +153,8 @@ deployment:
     currentVersion: ""
     supportedPreviousVersions:
       - 0.2.0
+      - 0.3.0
+      - 0.3.1
     allowDowngrade: false
     strategy: rolling
 platform:
@@ -3217,7 +3237,7 @@ controlPlane:
       kind: Deployment
   image:
     repository: ghcr.io/gntik-ai/in-falcone-control-plane
-    tag: 0.3.0
+    tag: 0.3.1
     pullPolicy: IfNotPresent
   replicas: 2
   serviceAccount:

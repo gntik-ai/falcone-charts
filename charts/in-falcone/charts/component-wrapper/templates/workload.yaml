@@ -27,6 +27,34 @@
 {{- $tsOn := and .Values.transportSecurityClient ($ts.enabled | default false) -}}
 {{- $tsEnv := ternary (default (list) $ts.env) (list) $tsOn -}}
 {{- $tsCa := and $tsOn (ne (default "" $ts.caSecretName) "") -}}
+{{- /* C-25 webhook master-key injection is deliberately alias-specific. Globals
+       are visible to this dependency, while no generic component value accepts
+       key material or an override env entry. */ -}}
+{{- $webhookKey := default (dict) .Values.global.webhookSigningKey -}}
+{{- $isControlPlane := and (eq (.Values.wrapper.componentId | default "") "control-plane") (gt (len $webhookKey) 0) -}}
+{{- $webhookKeyId := "" -}}
+{{- $webhookMode := "canonical-v1" -}}
+{{- $webhookAction := "none" -}}
+{{- $webhookRequestId := "" -}}
+{{- $webhookRotationId := "" -}}
+{{- if $isControlPlane -}}
+  {{- $webhookKeyId = printf "wk1:%s" (sha256sum (printf "%s/%s/%s" .Release.Namespace $webhookKey.secretName $webhookKey.secretKey)) -}}
+  {{- $webhookAction = $webhookKey.rotation.action | default "none" -}}
+  {{- $webhookRequestId = $webhookKey.rotation.requestId | default $webhookKey.adoption.requestId | default "" -}}
+  {{- $webhookRotationId = $webhookKey.rotation.rotationId | default "" -}}
+  {{- if and (eq ($webhookKey.adoption.mode | default "none") "legacy") (ne $webhookAction "rotate") -}}
+    {{- $webhookMode = "legacy" -}}
+  {{- end -}}
+{{- end -}}
+{{- $podAnnotations := deepCopy (default (dict) .Values.podAnnotations) -}}
+{{- if $isControlPlane -}}
+  {{- $_ := set $podAnnotations "in-falcone.io/release-revision" (printf "%d" (.Release.Revision | int)) -}}
+  {{- $_ := set $podAnnotations "in-falcone.io/webhook-key-id" $webhookKeyId -}}
+  {{- $_ := set $podAnnotations "in-falcone.io/webhook-key-mode" $webhookMode -}}
+  {{- $_ := set $podAnnotations "in-falcone.io/webhook-key-action" $webhookAction -}}
+  {{- if $webhookRequestId }}{{- $_ := set $podAnnotations "in-falcone.io/webhook-key-request-id" $webhookRequestId -}}{{- end -}}
+  {{- if $webhookRotationId }}{{- $_ := set $podAnnotations "in-falcone.io/webhook-key-rotation-id" $webhookRotationId -}}{{- end -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: {{ $workloadKind }}
 metadata:
@@ -48,7 +76,7 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
+      {{- with $podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -100,8 +128,22 @@ spec:
           ports:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.env (gt (len $tsEnv) 0) }}
+          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane }}
           env:
+            {{- if $isControlPlane }}
+            - name: WEBHOOK_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $webhookKey.secretName | quote }}
+                  key: {{ $webhookKey.secretKey | quote }}
+                  optional: false
+            - name: WEBHOOK_SIGNING_KEY_MODE
+              value: {{ $webhookMode | quote }}
+            - name: WEBHOOK_SIGNING_KEY_ID
+              value: {{ $webhookKeyId | quote }}
+            - name: WEBHOOK_SIGNING_KEY_MANAGED
+              value: {{ ternary "true" "false" $webhookKey.create | quote }}
+            {{- end }}
             {{- with .Values.env }}
             {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}

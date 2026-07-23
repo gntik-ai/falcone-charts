@@ -135,7 +135,7 @@ keycloak:
 controlPlane:
   image:
     repository: ghcr.io/gntik-ai/in-falcone-control-plane   # global.imageRegistry => harbor.example.com/falcone/gntik-ai/in-falcone-control-plane
-    tag: "0.3.0"
+    tag: "0.3.1"
   serviceAccount:
     # Function executor calls the k8s API (create/patch Knative Services), so the SA
     # token MUST be mounted here. The chart default is false (least-privilege baseline,

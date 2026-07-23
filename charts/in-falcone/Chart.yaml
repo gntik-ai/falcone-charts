@@ -2,33 +2,36 @@ apiVersion: v2
 name: in-falcone
 description: Umbrella Helm chart for modular In Falcone platform deployments
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.3.1
+appVersion: "0.3.1"
+annotations:
+  falcone.io/min-control-plane-version: "0.3.1"
+  falcone.io/webhook-key-lifecycle: "v1"
 dependencies:
   - name: component-wrapper
     alias: apisix
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: keycloak
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: postgresql
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   # Dedicated pgvector Postgres (add-pgvector-image-for-vector-search, #602) — core dedicated
   # Postgres StatefulSet on the pgvector/pgvector image.
   - name: component-wrapper
     alias: postgresqlVector
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   # DocumentDB engine (FerretDB document-store backend) — dedicated Postgres 17
   # StatefulSet rendered by the generic component-wrapper.
   # See add-ferretdb-documentdb-engine. The document store; the legacy MongoDB server was removed.
   - name: component-wrapper
     alias: documentdb
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   # FerretDB gateway — stateless MongoDB-wire-protocol proxy in front of the
   # documentdb engine, rendered by the generic component-wrapper (Deployment),
@@ -36,31 +39,31 @@ dependencies:
   # DEPENDS ON documentdb (engine must be initialised before the gateway connects).
   - name: component-wrapper
     alias: ferretdb
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: kafka
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: observability
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: controlPlane
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: controlPlaneExecutor
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: webConsole
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: component-wrapper
     alias: workflowWorker
-    version: 0.2.0
+    version: 0.2.1
     repository: file://./charts/component-wrapper
   - name: eso
     version: 0.1.0

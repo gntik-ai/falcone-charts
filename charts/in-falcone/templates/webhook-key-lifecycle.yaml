@@ -1,0 +1,331 @@
+{{- $key := .Values.global.webhookSigningKey -}}
+{{- $rotation := $key.rotation -}}
+{{- $action := $rotation.action | default "none" -}}
+{{- $credentialCanCreate := and $key.create (or (and .Release.IsInstall (eq $action "none")) (and .Release.IsUpgrade (eq $action "rotate"))) -}}
+{{- $mode := "canonical-v1" -}}
+{{- if and (eq ($key.adoption.mode | default "none") "legacy") (ne $action "rotate") -}}
+  {{- $mode = "legacy" -}}
+{{- end -}}
+{{- $keyId := printf "wk1:%s" (sha256sum (printf "%s/%s/%s" .Release.Namespace $key.secretName $key.secretKey)) -}}
+{{- $sourceKeyId := "" -}}
+{{- if and $rotation.sourceSecretName $rotation.sourceSecretKey -}}
+  {{- $sourceKeyId = printf "wk1:%s" (sha256sum (printf "%s/%s/%s" .Release.Namespace $rotation.sourceSecretName $rotation.sourceSecretKey)) -}}
+{{- end -}}
+{{- $image := include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.controlPlane.image "name" "webhook key lifecycle") -}}
+{{- $credentialName := printf "%s-webhook-key-credential" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $lifecycleName := printf "%s-webhook-key-lifecycle" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $controlPlaneName := include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "controlPlane" "serviceName" "") -}}
+{{- $containerSecurityContext := deepCopy (default (dict) .Values.controlPlane.securityContext) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $containerSecurityContext "runAsUser" -}}
+  {{- $_ := unset $containerSecurityContext "runAsGroup" -}}
+{{- end -}}
+{{- $podSecurityContext := deepCopy (default (dict) .Values.global.podSecurity) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $podSecurityContext "runAsUser" -}}
+  {{- $_ := unset $podSecurityContext "runAsGroup" -}}
+  {{- $_ := unset $podSecurityContext "fsGroup" -}}
+  {{- $_ := unset $podSecurityContext "fsGroupChangePolicy" -}}
+  {{- $_ := unset $podSecurityContext "openshiftRestricted" -}}
+{{- end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $credentialName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-credential
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-46"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $credentialName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-credential
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-46"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $key.secretName | quote }}]
+    verbs: ["get"]
+  {{- if $credentialCanCreate }}
+  # Kubernetes authorization cannot restrict create by resourceName because the
+  # target object does not exist yet. Grant collection-wide create only when the
+  # credential process can create: fresh managed install or managed rotation.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $credentialName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-credential
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-46"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $credentialName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $credentialName }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $credentialName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-credential
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-45"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook-key-credential
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ $credentialName }}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $podSecurityContext | nindent 8 }}
+      containers:
+        - name: credential
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          command: ["node", "/app/webhook-key-credential-cli.mjs"]
+          env:
+            - name: WEBHOOK_KEY_CREDENTIAL_ACTION
+              value: ensure
+            - name: WEBHOOK_SECRET_NAME
+              value: {{ $key.secretName | quote }}
+            - name: WEBHOOK_SECRET_KEY
+              value: {{ $key.secretKey | quote }}
+            - name: WEBHOOK_KEY_CREATE
+              value: {{ ternary "true" "false" $key.create | quote }}
+            - name: WEBHOOK_KEY_IS_UPGRADE
+              value: {{ ternary "true" "false" .Release.IsUpgrade | quote }}
+            - name: WEBHOOK_KEY_LIFECYCLE_ACTION
+              value: {{ $action | quote }}
+            - name: WEBHOOK_SIGNING_KEY_MODE
+              value: {{ $mode | quote }}
+            - name: WEBHOOK_SIGNING_KEY_ID
+              value: {{ $keyId | quote }}
+            - name: RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: RELEASE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: APP_NAME
+              value: {{ include "in-falcone.name" . | quote }}
+          securityContext:
+            {{- toYaml $containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+{{- $runAdoption := and (eq $action "none") (eq $key.adoption.mode "legacy") -}}
+{{- $runLifecycle := or $runAdoption (ne $action "none") -}}
+{{- if $runLifecycle }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $lifecycleName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-lifecycle
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-37"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $lifecycleName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-lifecycle
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-37"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ $controlPlaneName | quote }}]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: [{{ $controlPlaneName | quote }}]
+    verbs: ["patch"]
+  {{- if eq $action "finalize" }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $rotation.sourceSecretName | quote }}]
+    verbs: ["get", "delete"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $lifecycleName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-lifecycle
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-37"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $lifecycleName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $lifecycleName }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $lifecycleName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-key-lifecycle
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-35"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook-key-lifecycle
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $lifecycleName }}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $podSecurityContext | nindent 8 }}
+      containers:
+        - name: lifecycle
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - node /app/webhook-key-lifecycle-cli.mjs
+          env:
+            - name: WEBHOOK_KEY_LIFECYCLE_ACTION
+              value: {{ ternary "adopt" $action $runAdoption | quote }}
+            - name: WEBHOOK_LIFECYCLE_REQUEST_ID
+              value: {{ ternary $key.adoption.requestId $rotation.requestId $runAdoption | quote }}
+            - name: WEBHOOK_LIFECYCLE_ROTATION_ID
+              value: {{ $rotation.rotationId | default "" | quote }}
+            - name: WEBHOOK_RECOVERY_WINDOW_SECONDS
+              value: {{ $rotation.recoveryWindowSeconds | quote }}
+            - name: WEBHOOK_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $key.secretName | quote }}
+                  key: {{ $key.secretKey | quote }}
+                  optional: false
+            - name: WEBHOOK_SIGNING_KEY_ID
+              value: {{ $keyId | quote }}
+            - name: WEBHOOK_SIGNING_KEY_MODE
+              value: {{ $mode | quote }}
+            - name: WEBHOOK_SIGNING_KEY_MANAGED
+              value: {{ ternary "true" "false" $key.create | quote }}
+            {{- if or (eq $action "rotate") (eq $action "recover") }}
+            - name: WEBHOOK_SOURCE_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $rotation.sourceSecretName | quote }}
+                  key: {{ $rotation.sourceSecretKey | quote }}
+                  optional: false
+            - name: WEBHOOK_SOURCE_SIGNING_KEY_ID
+              value: {{ $sourceKeyId | quote }}
+            - name: WEBHOOK_SOURCE_SIGNING_KEY_MODE
+              value: {{ ternary "legacy" "canonical-v1" (eq $key.adoption.mode "legacy") | quote }}
+            {{- end }}
+            {{- if eq $action "finalize" }}
+            - name: WEBHOOK_SOURCE_SIGNING_KEY_ID
+              value: {{ $sourceKeyId | quote }}
+            {{- end }}
+            - name: WEBHOOK_CONTROL_PLANE_DEPLOYMENT
+              value: {{ $controlPlaneName | quote }}
+            - name: WEBHOOK_CONTROL_PLANE_REPLICAS
+              value: {{ .Values.controlPlane.replicas | quote }}
+            - name: PGHOST
+              value: {{ printf "%s-postgresql" .Release.Name | quote }}
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: in_falcone
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
+                  key: POSTGRESQL_USERNAME
+                  optional: false
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
+                  key: POSTGRESQL_PASSWORD
+                  optional: false
+            {{- if eq $action "finalize" }}
+            - name: WEBHOOK_SECRET_NAME
+              value: {{ $key.secretName | quote }}
+            - name: WEBHOOK_SECRET_KEY
+              value: {{ $key.secretKey | quote }}
+            - name: WEBHOOK_SOURCE_SECRET_NAME
+              value: {{ $rotation.sourceSecretName | quote }}
+            - name: WEBHOOK_SOURCE_SECRET_KEY
+              value: {{ $rotation.sourceSecretKey | quote }}
+            - name: RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: RELEASE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: APP_NAME
+              value: {{ include "in-falcone.name" . | quote }}
+            {{- end }}
+          securityContext:
+            {{- toYaml $containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+{{- end }}
