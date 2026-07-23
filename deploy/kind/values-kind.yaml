@@ -109,7 +109,7 @@ controlPlane:
     automountToken: true
   image:
     repository: localhost:30500/in-falcone-control-plane
-    tag: "0.6.2"
+    tag: "0.3.1"
   env:
     # Postgres via PG* vars; password from the postgres Secret (no plaintext).
     - name: PGHOST
@@ -239,12 +239,8 @@ controlPlane:
     # (Harbor path in prod). Each function = a ksvc; invoke = HTTP, scale-to-zero.
     - name: FN_RUNTIME_IMAGE
       value: localhost:30500/in-falcone-fn-runtime:0.1.0
-    # Webhooks (#643): the management plane (/v1/webhooks/*) encrypts each subscription's
-    # HMAC signing secret at rest with WEBHOOK_SIGNING_KEY (AES-256-GCM). This is a dev value
-    # for the kind profile ONLY — in production source it from a Secret via secretKeyRef and
-    # rotate it. WEBHOOK_MAX_SUBSCRIPTIONS_PER_WORKSPACE caps subscriptions per workspace (409).
-    - name: WEBHOOK_SIGNING_KEY
-      value: kind-dev-webhook-signing-key-do-not-use-in-prod
+    # Webhook key custody is owned by global.webhookSigningKey. The component
+    # wrapper injects its required Secret reference; do not duplicate it here.
     - name: WEBHOOK_MAX_SUBSCRIPTIONS_PER_WORKSPACE
       value: "25"
 controlPlaneExecutor:
@@ -263,10 +259,6 @@ webConsole:
   image:
     repository: localhost:30500/in-falcone-web-console
     tag: "0.2.11"
-deployment:
-  upgrade:
-    # required by the chart's validate.yaml on every in-place upgrade
-    currentVersion: "0.2.0"
 keycloak:
   # KC 26 re-augments the server on every start; 1Gi gets OOM-killed (exit 137).
   # NOTE: the root cause of the exit-137 OOM was the in-memory H2 store growing with
