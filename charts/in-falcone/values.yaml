@@ -3331,6 +3331,19 @@ controlPlane:
     limits:
       cpu: 1
       memory: 1Gi
+  # C-25 startup is fail closed: /readyz is not served until schema, database
+  # principals, key material, durable key identity, and lifecycle state have all
+  # been verified. Make that application gate authoritative for Kubernetes
+  # endpoint readiness instead of relying on the default container-ready state.
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 2
+    successThreshold: 1
+    failureThreshold: 3
   env:
     - name: NODE_ENV
       value: production

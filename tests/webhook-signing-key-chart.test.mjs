@@ -223,7 +223,7 @@ function check(name, fn) {
 
 const base = render();
 
-check('base control plane has exactly one required Secret reference and non-secret identity', () => {
+check('base control plane has one required Secret reference and a Kubernetes-enforced readiness gate', () => {
   assert.equal((base.match(/^\s*- name: WEBHOOK_SIGNING_KEY$/gm) ?? []).length, 1);
   const controlPlane = documentWith(base, 'kind: Deployment', 'name: falcone-control-plane');
   assert.ok(controlPlane);
@@ -231,6 +231,11 @@ check('base control plane has exactly one required Secret reference and non-secr
   assert.match(controlPlane, /- name: WEBHOOK_SIGNING_KEY_MODE\s+value: "canonical-v1"/);
   assert.match(controlPlane, /- name: WEBHOOK_SIGNING_KEY_ID\s+value: "wk1:[a-f0-9]{64}"/);
   assert.match(controlPlane, /in-falcone.io\/release-revision: "1"/);
+  assert.match(
+    controlPlane,
+    /readinessProbe:\s+failureThreshold: 3\s+httpGet:\s+path: \/readyz\s+port: http\s+initialDelaySeconds: 0\s+periodSeconds: 5\s+successThreshold: 1\s+timeoutSeconds: 2/,
+    'Kubernetes must not mark the control plane Ready before its C-25 startup verification succeeds',
+  );
   for (const doc of documents(base).filter((item) => /kind: (Deployment|StatefulSet)/.test(item) && !item.includes('name: falcone-control-plane'))) {
     assert.doesNotMatch(doc, /WEBHOOK_SIGNING_KEY/);
   }
