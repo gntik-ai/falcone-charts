@@ -329,6 +329,25 @@ check('operator runbook covers every stable script-emitted or classified failure
   }
 });
 
+check('operator runbook separates P4/P10 posture reads from privileged Secret inspection', () => {
+  const verification = authorityRunbook.match(
+    /## Secret-safe verification([\s\S]*?)## Failure handling/,
+  )?.[1] ?? '';
+  const [constrained, privileged = ''] = verification.split(
+    'An authorized P18 operator may separately verify',
+  );
+
+  assert.match(constrained, /P4\/P10 reviewers/);
+  assert.match(constrained, /webhookDatabaseReferences/);
+  assert.match(constrained, /in-falcone-webhook-database-credentials-initialized/);
+  assert.doesNotMatch(constrained, /^[ \t]*kubectl[^\n]*get secret/m);
+  assert.doesNotMatch(constrained, /\.data\s*\|\s*keys/);
+  assert.match(privileged, /necessarily\s+retrieves the Secret/);
+  assert.match(privileged, /^[ \t]*kubectl[^\n]*get secret/m);
+  assert.match(privileged, /dataKeys: \(\.data \| keys \| sort\)/);
+  assert.match(authorityRunbook, /migration\.firstHandoff=false/);
+});
+
 check('ordinary upgrade cannot recreate the retained managed credential Secret', () => {
   const role = documentWith(
     ordinaryUpgrade,

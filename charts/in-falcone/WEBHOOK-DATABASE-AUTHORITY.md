@@ -234,6 +234,7 @@ current version and a current backup evidence identifier:
 helm upgrade falcone charts/in-falcone \
   --namespace falcone \
   --set deployment.upgrade.currentVersion=0.3.1 \
+  --set global.webhookDatabase.migration.firstHandoff=false \
   --set global.webhookDatabase.migration.backupVerified=true \
   --set global.webhookDatabase.migration.parityVerified=true \
   --set global.webhookDatabase.migration.backupReference=BACKUP-EVIDENCE-ID
@@ -272,27 +273,66 @@ transaction; it never broadens the allowlist or transfers the drifting object.
 
 ## Secret-safe verification
 
-P4/P10 reviewers can verify references and metadata without Secret-data access:
+P4/P10 reviewers can verify only workload references, the non-secret retained marker, readiness,
+and a P18-produced bounded evidence bundle. They must not receive `get` permission on either
+credential or signing-key Secrets. Kubernetes authorization applies to the object returned by the
+API, not merely to the formatter: `kubectl get secret ... -o jsonpath` or `-o go-template` still
+retrieves the complete Secret object into the client.
 
 ```bash
-kubectl -n falcone get deployment falcone-control-plane \
-  -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}{"\n"}{end}'
-
-kubectl -n falcone get secret in-falcone-webhook-database-credentials \
-  -o go-template='immutable={{.immutable}}{{"\n"}}policy={{index .metadata.annotations "helm.sh/resource-policy"}}{{"\n"}}{{range $k,$v := .data}}{{$k}}{{"\n"}}{{end}}'
+kubectl -n falcone get deployment falcone-control-plane -o json |
+  jq -c '{
+    workload: .metadata.name,
+    ready: (.status.readyReplicas // 0),
+    webhookDatabaseReferences: [
+      .spec.template.spec.containers[]
+      | select(.name == "control-plane")
+      | .env[]
+      | select(
+          .name == "WEBHOOK_SCHEMA_DATABASE_URL"
+          or .name == "WEBHOOK_RUNTIME_DATABASE_URL"
+          or .name == "WEBHOOK_KEY_WRITE_DATABASE_URL"
+          or .name == "WEBHOOK_KEY_LIFECYCLE_DATABASE_URL"
+        )
+      | {name, secretKeyRef: .valueFrom.secretKeyRef}
+    ],
+    readinessPath: [
+      .spec.template.spec.containers[]
+      | select(.name == "control-plane")
+      | .readinessProbe.httpGet.path
+    ][0]
+  }'
 
 kubectl -n falcone get configmap \
   in-falcone-webhook-database-credentials-initialized \
   -o go-template='immutable={{.immutable}}{{"\n"}}state={{index .data "state"}}{{"\n"}}policy={{index .metadata.annotations "helm.sh/resource-policy"}}{{"\n"}}'
 ```
 
-Expected posture is four bounded DSN environment names, five role-name
-environment names, `immutable=true`, `policy=keep`, and exactly the eight key
-names above. The ConfigMap reports only `state=initialized`; it contains no
-credential hash, digest, DSN, password, or key identity. Do not request Secret
-`.data` values or use broad `describe`, environment dumps, shell tracing,
-rendered Secret manifests, or Job argument inspection that serializes process
-environments.
+Expected P4/P10 posture is four distinct required `secretKeyRef` entries, `/readyz`, a Ready
+Deployment, and an immutable retained ConfigMap with `state=initialized` and `policy=keep`. The
+ConfigMap contains no credential hash, digest, DSN, password, or key identity. P4/P10 consume the
+sanitized lifecycle/ledger/audit evidence produced through the application runbook; they do not
+invoke pod `exec` or query the database directly.
+
+An authorized P18 operator may separately verify the credential Secret's immutability, retention
+annotation, and exact eight data-key names in a restricted terminal. This command necessarily
+retrieves the Secret and therefore must never be delegated to P4/P10 or attached with shell tracing,
+debug output, or the raw pipeline input:
+
+```bash
+kubectl -n falcone get secret in-falcone-webhook-database-credentials -o json |
+  jq -c '{
+    name: .metadata.name,
+    immutable,
+    policy: .metadata.annotations["helm.sh/resource-policy"],
+    dataKeys: (.data | keys | sort)
+  }'
+```
+
+P18 reviews that bounded output and hands only the approved result to P4/P10. Expected posture is
+`immutable=true`, `policy=keep`, and exactly the eight key names documented above. Do not request or
+print Secret `.data` values, use broad `describe`, environment dumps, shell tracing, rendered Secret
+manifests, or Job argument inspection that serializes process environments.
 
 After a successful credential hook, its temporary ServiceAccount, Role,
 RoleBinding, support ConfigMap, and Job should be absent. If the credential Job

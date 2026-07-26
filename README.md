@@ -121,6 +121,7 @@ the database graph is expected to be unchanged:
 helm upgrade falcone charts/in-falcone \
   --namespace falcone \
   --set deployment.upgrade.currentVersion=0.3.1 \
+  --set global.webhookDatabase.migration.firstHandoff=false \
   --set global.webhookDatabase.migration.backupVerified=true \
   --set global.webhookDatabase.migration.parityVerified=true \
   --set global.webhookDatabase.migration.backupReference=BACKUP-EVIDENCE-ID
