@@ -409,9 +409,38 @@ ok 'fresh exact object graph and automatic dependent ownership replay'
 # unrelated control objects.
 admin_sql postgres 'CREATE DATABASE c25_legacy OWNER falcone'
 docker exec "$container" psql -X -q -U falcone -d c25_legacy -v ON_ERROR_STOP=1 \
-  -c 'CREATE TABLE webhook_subscriptions (id integer); CREATE TABLE webhook_signing_secrets (id integer); CREATE TABLE webhook_deliveries (id integer); CREATE TABLE webhook_delivery_attempts (id integer); CREATE SEQUENCE webhook_subscriptions_id_seq; CREATE TABLE unrelated_control (id integer); CREATE SEQUENCE unrelated_control_seq; CREATE FUNCTION falcone_webhook_key_write_current_id() RETURNS text LANGUAGE sql AS $$ SELECT NULL::text $$; CREATE FUNCTION falcone_webhook_signing_secret_write_statement_fence() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$; CREATE FUNCTION falcone_webhook_signing_secret_write_fence() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$'
+  -c 'CREATE TABLE webhook_subscriptions (id integer); CREATE TABLE webhook_signing_secrets (id integer); CREATE TABLE webhook_deliveries (id integer); CREATE TABLE webhook_delivery_attempts (id integer); CREATE TABLE plan_audit_events (id text, action_type text); CREATE SEQUENCE webhook_subscriptions_id_seq; CREATE TABLE unrelated_control (id integer); CREATE SEQUENCE unrelated_control_seq; CREATE FUNCTION falcone_webhook_key_write_current_id() RETURNS text LANGUAGE sql AS $$ SELECT NULL::text $$; CREATE FUNCTION falcone_webhook_signing_secret_write_statement_fence() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$; CREATE FUNCTION falcone_webhook_signing_secret_write_fence() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$'
 export PGDATABASE=c25_legacy
 run_bootstrap || fail 'legacy enumerated ownership handoff'
+
+audit_acl="$(
+  query c25_legacy "
+    SELECT string_agg(
+      grantee.rolname || ':' || privilege.privilege_type || ':' ||
+      grantor.rolname || ':' || privilege.is_grantable,
+      ',' ORDER BY privilege.privilege_type
+    )
+    FROM pg_class class
+    CROSS JOIN LATERAL aclexplode(
+      COALESCE(class.relacl, acldefault('r', class.relowner))
+    ) privilege
+    JOIN pg_roles grantee ON grantee.oid=privilege.grantee
+    JOIN pg_roles grantor ON grantor.oid=privilege.grantor
+    WHERE class.oid='public.plan_audit_events'::regclass
+      AND grantee.rolname='falcone_webhook_key_lifecycle'"
+)"
+[ "$audit_acl" = 'falcone_webhook_key_lifecycle:INSERT:falcone:false,falcone_webhook_key_lifecycle:SELECT:falcone:false' ] \
+  || fail 'pre-deployment lifecycle audit ACL bootstrap'
+[ "$(query c25_legacy "
+    SELECT pg_get_userbyid(relowner) || ':' ||
+      has_table_privilege('falcone_webhook_lifecycle_login',
+        'public.plan_audit_events','SELECT') || ':' ||
+      has_table_privilege('falcone_webhook_lifecycle_login',
+        'public.plan_audit_events','INSERT')
+      FROM pg_class
+     WHERE oid='public.plan_audit_events'::regclass")" = 'falcone:false:false' ] \
+  || fail 'lifecycle audit access is available only after bounded SET ROLE'
+ok 'first-handoff bootstrap grants exact lifecycle audit access before Deployment'
 
 enumerated_owner_count="$(
   query c25_legacy "
@@ -453,6 +482,15 @@ ok 'legacy handoff preserves old assumed and unrelated sequences'
 
 run_bootstrap || fail 'ordinary no-op replay'
 ok 'ordinary no-op replay reuses the existing graph'
+
+admin_sql c25_legacy \
+  'GRANT UPDATE (action_type) ON plan_audit_events TO falcone_webhook_lifecycle_login'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'direct lifecycle audit column grant rejection'
+admin_sql c25_legacy \
+  'REVOKE UPDATE (action_type) ON plan_audit_events FROM falcone_webhook_lifecycle_login'
+run_bootstrap || fail 'lifecycle audit column grant recovery'
+ok 'direct lifecycle audit column privilege drift fails closed'
 
 bounded_sql \
   "$WEBHOOK_SCHEMA_DATABASE_ROLE" \

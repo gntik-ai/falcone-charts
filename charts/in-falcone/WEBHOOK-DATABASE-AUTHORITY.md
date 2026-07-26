@@ -214,6 +214,19 @@ After the first successful handoff, set `firstHandoff=false`; retained-marker
 validation still prevents regeneration if old initialization values are
 accidentally replayed.
 
+The authority phase also closes the first-handoff audit-ordering boundary before
+the lifecycle hook runs. If the separately owned
+`public.plan_audit_events` table already exists, its owner must be the proven
+global role. The bootstrap grants the fixed
+`falcone_webhook_key_lifecycle` authority exactly table-level `SELECT` and
+`INSERT`, issued by that owner. It accepts no direct privilege for a bounded
+LOGIN, no PUBLIC or other C-25 group access, no column privilege, no grant
+option, and no alternate grantor. On a fresh database where the application has
+not created the table yet, this phase does nothing; control-plane startup creates
+the table and establishes the same fixed-authority grant. This ordering lets the
+pre-Deployment lifecycle transaction append its correlated audit row without
+giving the hook a global database credential.
+
 For every later applying upgrade, retain the same proof gate with a truthful
 current version and a current backup evidence identifier:
 
@@ -337,6 +350,13 @@ Stable failure families are:
   non-enumerated owner-bearing object, including a database, schema, relation,
   sequence, view, function, enum/domain/range/composite type, or statistics
   object;
+- `WEBHOOK_DATABASE_AUDIT_OWNER_DRIFT`: the separately owned
+  `plan_audit_events` table is not owned by the proven global role;
+- `WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT`: the exact owner-issued lifecycle
+  `SELECT`/`INSERT` pair is partial, widened, grantable, column-scoped, directly
+  assigned to a bounded LOGIN, assigned to another C-25 authority/PUBLIC, or
+  has alternate provenance. The bootstrap rolls the whole authority
+  transaction back; restore the audited ACL rather than broadening the hook;
 - `WEBHOOK_DATABASE_BOUNDED_CREDENTIAL_INVALID`: a bounded login/password does
   not authenticate as itself. For a pre-existing role this is a pre-mutation
   failure; correct custody deliberately rather than changing the role password

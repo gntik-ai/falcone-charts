@@ -177,6 +177,9 @@ SELECT pg_advisory_xact_lock(723661, 16);
 SELECT set_config('falcone.bootstrap.admin_role', :'admin_role', true);
 SELECT set_config('falcone.bootstrap.global_role', :'global_role', true);
 SELECT set_config('falcone.bootstrap.schema_role', :'schema_role', true);
+SELECT set_config('falcone.bootstrap.runtime_role', :'runtime_role', true);
+SELECT set_config('falcone.bootstrap.writer_role', :'writer_role', true);
+SELECT set_config('falcone.bootstrap.lifecycle_role', :'lifecycle_role', true);
 SELECT set_config('falcone.bootstrap.grantor_role', :'grantor_role', true);
 
 DO $bootstrap$
@@ -472,6 +475,151 @@ SELECT format(
        )
 \gexec
 
+-- The lifecycle hook runs before the new control-plane Deployment. On an
+-- upgrade, the separately owned platform audit table therefore has to be
+-- reachable before application startup can reconcile the same grant. Keep the
+-- boundary exact: the global role must remain the owner, the lifecycle
+-- NOLOGIN receives only SELECT/INSERT, and no C-25 login/group or PUBLIC may
+-- carry a column grant or an alternate table privilege.
+DO $bootstrap$
+DECLARE
+  audit_table oid := to_regclass('public.plan_audit_events');
+  allowed_count integer;
+BEGIN
+  IF audit_table IS NULL THEN
+    RETURN;
+  END IF;
+
+  IF (
+    SELECT pg_get_userbyid(class.relowner)
+      FROM pg_class class
+     WHERE class.oid = audit_table
+       AND class.relkind = 'r'
+  ) IS DISTINCT FROM current_setting('falcone.bootstrap.global_role')::name THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'F2510',
+      MESSAGE = 'WEBHOOK_DATABASE_AUDIT_OWNER_DRIFT';
+  END IF;
+
+  SELECT count(*)
+    INTO allowed_count
+    FROM pg_class class
+    CROSS JOIN LATERAL aclexplode(
+      COALESCE(class.relacl, acldefault('r', class.relowner))
+    ) privilege
+    JOIN pg_roles grantor ON grantor.oid = privilege.grantor
+   WHERE class.oid = audit_table
+     AND privilege.grantee = (
+       SELECT oid FROM pg_roles
+        WHERE rolname = 'falcone_webhook_key_lifecycle'
+     )
+     AND grantor.rolname
+           = current_setting('falcone.bootstrap.global_role')::name
+     AND privilege.privilege_type IN ('SELECT', 'INSERT')
+     AND NOT privilege.is_grantable;
+
+  IF allowed_count NOT IN (0, 2)
+     OR EXISTS (
+       SELECT 1
+         FROM pg_class class
+         CROSS JOIN LATERAL aclexplode(
+           COALESCE(class.relacl, acldefault('r', class.relowner))
+         ) privilege
+         LEFT JOIN pg_roles grantee ON grantee.oid = privilege.grantee
+         JOIN pg_roles grantor ON grantor.oid = privilege.grantor
+        WHERE class.oid = audit_table
+          AND (
+            privilege.grantee = 0
+            OR grantee.rolname IN (
+              current_setting('falcone.bootstrap.schema_role')::name,
+              current_setting('falcone.bootstrap.runtime_role')::name,
+              current_setting('falcone.bootstrap.writer_role')::name,
+              current_setting('falcone.bootstrap.lifecycle_role')::name,
+              'falcone_app',
+              'falcone_webhook_key_writer',
+              'falcone_webhook_key_lifecycle'
+            )
+          )
+          AND NOT (
+            grantee.rolname = 'falcone_webhook_key_lifecycle'
+            AND grantor.rolname
+                  = current_setting('falcone.bootstrap.global_role')::name
+            AND privilege.privilege_type IN ('SELECT', 'INSERT')
+            AND NOT privilege.is_grantable
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_attribute attribute
+         CROSS JOIN LATERAL aclexplode(attribute.attacl) privilege
+         LEFT JOIN pg_roles grantee ON grantee.oid = privilege.grantee
+        WHERE attribute.attrelid = audit_table
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+          AND (
+            privilege.grantee = 0
+            OR grantee.rolname IN (
+              current_setting('falcone.bootstrap.schema_role')::name,
+              current_setting('falcone.bootstrap.runtime_role')::name,
+              current_setting('falcone.bootstrap.writer_role')::name,
+              current_setting('falcone.bootstrap.lifecycle_role')::name,
+              'falcone_app',
+              'falcone_webhook_key_writer',
+              'falcone_webhook_key_lifecycle'
+            )
+          )
+     ) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'F2511',
+      MESSAGE = 'WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT';
+  END IF;
+END
+$bootstrap$;
+
+SELECT format(
+         'SET LOCAL ROLE %I',
+         :'global_role'
+       )
+ WHERE to_regclass('public.plan_audit_events') IS NOT NULL
+   AND NOT has_table_privilege(
+     'falcone_webhook_key_lifecycle',
+     to_regclass('public.plan_audit_events'),
+     'SELECT,INSERT'
+   )
+\gexec
+SELECT
+  'GRANT SELECT, INSERT ON TABLE public.plan_audit_events'
+  ' TO falcone_webhook_key_lifecycle'
+ WHERE to_regclass('public.plan_audit_events') IS NOT NULL
+   AND current_user = :'global_role'
+\gexec
+RESET ROLE;
+
+DO $bootstrap$
+BEGIN
+  IF to_regclass('public.plan_audit_events') IS NOT NULL
+     AND (
+       SELECT count(*)
+         FROM pg_class class
+         CROSS JOIN LATERAL aclexplode(
+           COALESCE(class.relacl, acldefault('r', class.relowner))
+         ) privilege
+         JOIN pg_roles grantee ON grantee.oid = privilege.grantee
+         JOIN pg_roles grantor ON grantor.oid = privilege.grantor
+        WHERE class.oid = to_regclass('public.plan_audit_events')
+          AND grantee.rolname = 'falcone_webhook_key_lifecycle'
+          AND grantor.rolname
+                = current_setting('falcone.bootstrap.global_role')::name
+          AND privilege.privilege_type IN ('SELECT', 'INSERT')
+          AND NOT privilege.is_grantable
+     ) <> 2 THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'F2511',
+      MESSAGE = 'WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT';
+  END IF;
+END
+$bootstrap$;
+
 CREATE TEMP TABLE bootstrap_objects (
   object_kind text NOT NULL,
   object_name name NOT NULL,
@@ -753,6 +901,10 @@ then
         bootstrap_failure=WEBHOOK_DATABASE_OBJECT_OWNER_DRIFT ;;
       'ERROR:  F2509: WEBHOOK_DATABASE_SCHEMA_OWNER_SCOPE_DRIFT')
         bootstrap_failure=WEBHOOK_DATABASE_SCHEMA_OWNER_SCOPE_DRIFT ;;
+      'ERROR:  F2510: WEBHOOK_DATABASE_AUDIT_OWNER_DRIFT')
+        bootstrap_failure=WEBHOOK_DATABASE_AUDIT_OWNER_DRIFT ;;
+      'ERROR:  F2511: WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT')
+        bootstrap_failure=WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT ;;
       *) continue ;;
     esac
     break
