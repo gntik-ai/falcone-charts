@@ -445,6 +445,18 @@ function runRuntimePosture({ upgrade, firstHandoff }) {
 }
 
 try {
+  // Pull outside the posture probe so a clean runner's Docker progress on
+  // stderr cannot be confused with output from the hardened workload itself.
+  // The finally block removes only an image that was absent before this test.
+  if (!runtimeImageWasPresent) {
+    const pull = spawnSync('docker', ['image', 'pull', runtimeImage], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    if (pull.status !== 0 && pull.stderr) process.stderr.write(pull.stderr);
+    ensure(pull.status === 0, 'credential runtime image pull failed');
+  }
+
   check('external credential Secret is validated without mutation', () => {
     save(buildSecret({ managed: false }));
     const before = digest(statePath);
