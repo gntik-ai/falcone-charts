@@ -33,7 +33,10 @@ const runtimeImageWasPresent = spawnSync(
 ).status === 0;
 let passed = 0;
 mkdirSync(bin, { mode: 0o700 });
-mkdirSync(runtimeBin, { mode: 0o700 });
+// GitHub-hosted runners own the checkout as uid 1001 while this posture probe
+// deliberately runs the container as uid 1000. These synthetic, secret-free
+// stubs are mounted read-only and must therefore be world-readable/traversable.
+mkdirSync(runtimeBin, { mode: 0o755 });
 
 function ensure(condition, label) {
   if (!condition) throw new Error(label);
@@ -362,12 +365,12 @@ writeFileSync(
     'exit 2',
     '',
   ].join('\n'),
-  { mode: 0o700 },
+  { mode: 0o755 },
 );
 writeFileSync(
   resolve(runtimeBin, 'jq'),
   '#!/bin/sh\ncat\n',
-  { mode: 0o700 },
+  { mode: 0o755 },
 );
 writeFileSync(
   resolve(runtimeBin, 'runtime.sh'),
@@ -388,7 +391,7 @@ writeFileSync(
     'printf "%s\\n" WEBHOOK_DATABASE_CREDENTIAL_FILESYSTEM_POSTURE_OK',
     '',
   ].join('\n'),
-  { mode: 0o700 },
+  { mode: 0o755 },
 );
 
 function runRuntimePosture({ upgrade, firstHandoff }) {

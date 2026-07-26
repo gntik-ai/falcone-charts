@@ -10,6 +10,11 @@ const upgradeProof = [
   '--set', 'global.webhookDatabase.migration.parityVerified=true',
   '--set', 'global.webhookDatabase.migration.backupReference=c25-test-backup',
 ];
+const controlPlaneDigest =
+  'sha256:27aedbfabdc8b72baae844b14dbdf72820c0f4d548a49013118d9ba7e0588d40';
+const pinnedControlPlaneImagePattern = new RegExp(
+  `image: "[^"]*in-falcone-control-plane@${controlPlaneDigest}"`,
+);
 let passed = 0;
 
 function helm(args, { fail = false } = {}) {
@@ -750,13 +755,12 @@ check('kind and OpenShift profiles render with restricted key lifecycle security
   const local = render(['-f', 'charts/in-falcone/values/local.example.yaml']);
   for (const rendered of [kind, openshift, local]) {
     const job = documentWith(rendered, 'kind: Job', 'app.kubernetes.io/component: webhook-key-credential');
-    const lifecycleImage = job.match(/\n\s+image: "([^"]+in-falcone-control-plane:0\.3\.1)"/)?.[1];
     const controlPlane = documentWith(rendered, 'kind: Deployment', 'name: falcone-control-plane');
     assert.match(job, /allowPrivilegeEscalation: false/);
     assert.match(job, /capabilities:\s+drop:\s+- ALL/);
     assert.match(job, /seccompProfile:\s+type: RuntimeDefault/);
-    assert.ok(lifecycleImage, 'credential hook must select the compatible 0.3.1 control-plane image');
-    assert.match(controlPlane, /image: "[^"]*in-falcone-control-plane:0\.3\.1"/);
+    assert.match(job, pinnedControlPlaneImagePattern);
+    assert.match(controlPlane, pinnedControlPlaneImagePattern);
   }
   assert.doesNotMatch(documentWith(openshift, 'kind: Job', 'app.kubernetes.io/component: webhook-key-credential'), /runAsUser:/);
 });
@@ -779,7 +783,9 @@ check('OpenShift Harbor fresh and lifecycle hook Pods use the rewritten image an
   );
   assert.match(
     freshCredential,
-    /image: "harbor\.example\.com\/falcone\/gntik-ai\/in-falcone-control-plane:0\.3\.1"/,
+    new RegExp(
+      `image: "harbor\\.example\\.com/falcone/gntik-ai/in-falcone-control-plane@${controlPlaneDigest}"`,
+    ),
   );
   assert.deepEqual(podImagePullSecretNames(freshCredential), ['harbor-pull']);
 
@@ -791,7 +797,9 @@ check('OpenShift Harbor fresh and lifecycle hook Pods use the rewritten image an
     );
     assert.match(
       job,
-      /image: "harbor\.example\.com\/falcone\/gntik-ai\/in-falcone-control-plane:0\.3\.1"/,
+      new RegExp(
+        `image: "harbor\\.example\\.com/falcone/gntik-ai/in-falcone-control-plane@${controlPlaneDigest}"`,
+      ),
     );
     assert.deepEqual(podImagePullSecretNames(job), ['harbor-pull']);
   }
@@ -816,7 +824,7 @@ check('base, kind, OpenShift, and local lifecycle hooks all use the compatible c
     ]);
     for (const component of ['webhook-key-credential', 'webhook-key-lifecycle']) {
       const job = documentWith(rendered, 'kind: Job', `app.kubernetes.io/component: ${component}`);
-      assert.match(job, /image: "[^"]*in-falcone-control-plane:0\.3\.1"/);
+      assert.match(job, pinnedControlPlaneImagePattern);
     }
   }
 });

@@ -3293,6 +3293,7 @@ controlPlane:
   image:
     repository: ghcr.io/gntik-ai/in-falcone-control-plane
     tag: 0.3.1
+    digest: sha256:27aedbfabdc8b72baae844b14dbdf72820c0f4d548a49013118d9ba7e0588d40
     pullPolicy: IfNotPresent
   replicas: 2
   serviceAccount:
