@@ -484,6 +484,33 @@ run_bootstrap || fail 'ordinary no-op replay'
 ok 'ordinary no-op replay reuses the existing graph'
 
 admin_sql c25_legacy \
+  'CREATE ROLE c25_audit_foreign_owner NOLOGIN; ALTER TABLE plan_audit_events OWNER TO c25_audit_foreign_owner'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_OWNER_DRIFT \
+  || fail 'lifecycle audit owner drift rejection'
+admin_sql c25_legacy \
+  'ALTER TABLE plan_audit_events OWNER TO falcone; DROP ROLE c25_audit_foreign_owner'
+run_bootstrap || fail 'lifecycle audit owner drift recovery'
+ok 'lifecycle audit owner drift fails closed'
+
+admin_sql c25_legacy \
+  'SET ROLE falcone; REVOKE INSERT ON plan_audit_events FROM falcone_webhook_key_lifecycle; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'partial lifecycle audit ACL rejection'
+admin_sql c25_legacy \
+  'SET ROLE falcone; GRANT INSERT ON plan_audit_events TO falcone_webhook_key_lifecycle; RESET ROLE'
+run_bootstrap || fail 'partial lifecycle audit ACL recovery'
+ok 'partial lifecycle audit ACL fails closed'
+
+admin_sql c25_legacy \
+  'SET ROLE falcone; GRANT DELETE ON plan_audit_events TO falcone_webhook_lifecycle_login; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'direct lifecycle LOGIN table grant rejection'
+admin_sql c25_legacy \
+  'SET ROLE falcone; REVOKE DELETE ON plan_audit_events FROM falcone_webhook_lifecycle_login; RESET ROLE'
+run_bootstrap || fail 'direct lifecycle LOGIN table grant recovery'
+ok 'direct lifecycle LOGIN table privilege drift fails closed'
+
+admin_sql c25_legacy \
   'GRANT UPDATE (action_type) ON plan_audit_events TO falcone_webhook_lifecycle_login'
 reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
   || fail 'direct lifecycle audit column grant rejection'
@@ -491,6 +518,60 @@ admin_sql c25_legacy \
   'REVOKE UPDATE (action_type) ON plan_audit_events FROM falcone_webhook_lifecycle_login'
 run_bootstrap || fail 'lifecycle audit column grant recovery'
 ok 'direct lifecycle audit column privilege drift fails closed'
+
+admin_sql c25_legacy \
+  'SET ROLE falcone; GRANT DELETE ON plan_audit_events TO PUBLIC; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'PUBLIC lifecycle audit table grant rejection'
+admin_sql c25_legacy \
+  'SET ROLE falcone; REVOKE DELETE ON plan_audit_events FROM PUBLIC; RESET ROLE'
+run_bootstrap || fail 'PUBLIC lifecycle audit table grant recovery'
+ok 'PUBLIC lifecycle audit table privilege drift fails closed'
+
+admin_sql c25_legacy \
+  'SET ROLE falcone; GRANT UPDATE (action_type) ON plan_audit_events TO PUBLIC; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'PUBLIC lifecycle audit column grant rejection'
+admin_sql c25_legacy \
+  'SET ROLE falcone; REVOKE UPDATE (action_type) ON plan_audit_events FROM PUBLIC; RESET ROLE'
+run_bootstrap || fail 'PUBLIC lifecycle audit column grant recovery'
+ok 'PUBLIC lifecycle audit column privilege drift fails closed'
+
+admin_sql c25_legacy \
+  'SET ROLE falcone; GRANT DELETE ON plan_audit_events TO falcone_app; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'other C-25 group lifecycle audit table grant rejection'
+admin_sql c25_legacy \
+  'SET ROLE falcone; REVOKE DELETE ON plan_audit_events FROM falcone_app; RESET ROLE'
+run_bootstrap || fail 'other C-25 group lifecycle audit table grant recovery'
+ok 'other C-25 group lifecycle audit table privilege drift fails closed'
+
+admin_sql c25_legacy \
+  'SET ROLE falcone; GRANT UPDATE (action_type) ON plan_audit_events TO falcone_webhook_key_writer; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'other C-25 group lifecycle audit column grant rejection'
+admin_sql c25_legacy \
+  'SET ROLE falcone; REVOKE UPDATE (action_type) ON plan_audit_events FROM falcone_webhook_key_writer; RESET ROLE'
+run_bootstrap || fail 'other C-25 group lifecycle audit column grant recovery'
+ok 'other C-25 group lifecycle audit column privilege drift fails closed'
+
+admin_sql c25_legacy \
+  'SET ROLE falcone; GRANT SELECT ON plan_audit_events TO falcone_webhook_key_lifecycle WITH GRANT OPTION; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'lifecycle audit grant option rejection'
+admin_sql c25_legacy \
+  'SET ROLE falcone; REVOKE GRANT OPTION FOR SELECT ON plan_audit_events FROM falcone_webhook_key_lifecycle; RESET ROLE'
+run_bootstrap || fail 'lifecycle audit grant option recovery'
+ok 'lifecycle audit WITH GRANT OPTION drift fails closed'
+
+admin_sql c25_legacy \
+  'CREATE ROLE c25_audit_alternate_grantor NOLOGIN; SET ROLE falcone; GRANT SELECT ON plan_audit_events TO c25_audit_alternate_grantor WITH GRANT OPTION; RESET ROLE; SET ROLE c25_audit_alternate_grantor; GRANT SELECT ON plan_audit_events TO falcone_webhook_key_lifecycle; RESET ROLE'
+reject_bootstrap_code WEBHOOK_DATABASE_AUDIT_PRIVILEGE_DRIFT \
+  || fail 'lifecycle audit alternate grantor rejection'
+admin_sql c25_legacy \
+  'SET ROLE c25_audit_alternate_grantor; REVOKE SELECT ON plan_audit_events FROM falcone_webhook_key_lifecycle; RESET ROLE; SET ROLE falcone; REVOKE SELECT ON plan_audit_events FROM c25_audit_alternate_grantor; RESET ROLE; DROP ROLE c25_audit_alternate_grantor'
+run_bootstrap || fail 'lifecycle audit alternate grantor recovery'
+ok 'lifecycle audit alternate-grantor provenance drift fails closed'
 
 bounded_sql \
   "$WEBHOOK_SCHEMA_DATABASE_ROLE" \
