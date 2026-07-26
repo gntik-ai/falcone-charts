@@ -1,0 +1,217 @@
+{{- $database := .Values.global.webhookDatabase -}}
+{{- $credentials := $database.credentials -}}
+{{- $principals := $database.principals -}}
+{{- $supportName := printf "%s-webhook-db-authority" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $jobName := printf "%s-r%d" $supportName (.Release.Revision | int) | trunc 63 | trimSuffix "-" -}}
+{{- $transportSecurity := default (dict) .Values.global.transportSecurity -}}
+{{- $postgresTlsOn := $transportSecurity.enabled | default false -}}
+{{- $postgresTlsEnv := list -}}
+{{- if $postgresTlsOn -}}
+  {{- range ($transportSecurity.env | default (list)) -}}
+    {{- if has (.name | default "") (list "PGSSLMODE" "PGSSLROOTCERT") -}}
+      {{- $postgresTlsEnv = append $postgresTlsEnv . -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $postgresTlsCa := and $postgresTlsOn (ne ($transportSecurity.caSecretName | default "") "") -}}
+{{- $containerSecurityContext := deepCopy (default (dict) $database.securityContext) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $containerSecurityContext "runAsUser" -}}
+  {{- $_ := unset $containerSecurityContext "runAsGroup" -}}
+{{- end -}}
+{{- $podSecurityContext := deepCopy (default (dict) .Values.global.podSecurity) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $podSecurityContext "runAsUser" -}}
+  {{- $_ := unset $podSecurityContext "runAsGroup" -}}
+  {{- $_ := unset $podSecurityContext "fsGroup" -}}
+  {{- $_ := unset $podSecurityContext "fsGroupChangePolicy" -}}
+  {{- $_ := unset $podSecurityContext "openshiftRestricted" -}}
+{{- end -}}
+{{- $supportHookAnnotations := dict -}}
+{{- $jobHookAnnotations := dict -}}
+{{- if .Release.IsUpgrade -}}
+  {{- $_ := set $supportHookAnnotations "helm.sh/hook" "pre-upgrade" -}}
+  {{- $_ := set $supportHookAnnotations "helm.sh/hook-weight" "-41" -}}
+  {{- $_ := set $supportHookAnnotations "helm.sh/hook-delete-policy" "before-hook-creation" -}}
+  {{- $_ := set $jobHookAnnotations "helm.sh/hook" "pre-upgrade" -}}
+  {{- $_ := set $jobHookAnnotations "helm.sh/hook-weight" "-40" -}}
+  {{- $_ := set $jobHookAnnotations "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" -}}
+{{- end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $supportName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-database-authority-bootstrap
+  {{- with $supportHookAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $supportName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-database-authority-bootstrap
+  {{- with $supportHookAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  authority-bootstrap.sh: |
+{{ .Files.Get "files/webhook-database-authority-bootstrap.sh" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $jobName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-database-authority-bootstrap
+  {{- with $jobHookAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook-database-authority-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ $supportName }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $podSecurityContext | nindent 8 }}
+      containers:
+        - name: authority-bootstrap
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" $database.bootstrapImage "name" "webhook database authority bootstrap") | quote }}
+          imagePullPolicy: {{ $database.bootstrapImage.pullPolicy }}
+          command: ["/bin/sh", "/scripts/authority-bootstrap.sh"]
+          env:
+            # The reusable script defaults to rollback-only verification.
+            # This gated one-shot Job is the explicit applying caller.
+            - name: WEBHOOK_DATABASE_BOOTSTRAP_MODE
+              value: apply
+            - name: PGHOST
+              value: {{ tpl $database.connection.host . | quote }}
+            - name: PGPORT
+              value: {{ $database.connection.port | quote }}
+            - name: PGDATABASE
+              value: {{ $database.connection.database | quote }}
+            - name: PGUSER
+              value: {{ $database.administrator.role | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
+                  key: POSTGRESQL_POSTGRES_PASSWORD
+                  optional: false
+            - name: GLOBAL_DATABASE_ROLE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
+                  key: POSTGRESQL_USERNAME
+                  optional: false
+            - name: WEBHOOK_SCHEMA_DATABASE_ROLE
+              value: {{ $principals.schema | quote }}
+            - name: WEBHOOK_RUNTIME_DATABASE_ROLE
+              value: {{ $principals.runtime | quote }}
+            - name: WEBHOOK_KEY_WRITE_DATABASE_ROLE
+              value: {{ $principals.writer | quote }}
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_ROLE
+              value: {{ $principals.lifecycle | quote }}
+            - name: WEBHOOK_DATABASE_AUTHORITY_GRANTOR_ROLE
+              value: {{ $principals.grantor | quote }}
+            - name: WEBHOOK_SCHEMA_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_SCHEMA_DATABASE_PASSWORD
+                  optional: false
+            - name: WEBHOOK_RUNTIME_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_RUNTIME_DATABASE_PASSWORD
+                  optional: false
+            - name: WEBHOOK_KEY_WRITE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_KEY_WRITE_DATABASE_PASSWORD
+                  optional: false
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_KEY_LIFECYCLE_DATABASE_PASSWORD
+                  optional: false
+            - name: WEBHOOK_SCHEMA_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_SCHEMA_DATABASE_URL
+                  optional: false
+            - name: WEBHOOK_RUNTIME_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_RUNTIME_DATABASE_URL
+                  optional: false
+            - name: WEBHOOK_KEY_WRITE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_KEY_WRITE_DATABASE_URL
+                  optional: false
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials.secretName | quote }}
+                  key: WEBHOOK_KEY_LIFECYCLE_DATABASE_URL
+                  optional: false
+            {{- with $postgresTlsEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+            {{- if $postgresTlsCa }}
+            - name: falcone-transport-ca
+              mountPath: {{ $transportSecurity.caMountPath | default "/etc/falcone/tls" }}
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            {{- toYaml $containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml $database.resources | nindent 12 }}
+      volumes:
+        - name: script
+          configMap:
+            name: {{ $supportName }}
+            defaultMode: 0555
+        {{- if $postgresTlsCa }}
+        - name: falcone-transport-ca
+          secret:
+            secretName: {{ $transportSecurity.caSecretName }}
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Mi

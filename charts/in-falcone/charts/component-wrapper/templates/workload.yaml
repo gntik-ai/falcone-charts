@@ -27,11 +27,27 @@
 {{- $tsOn := and .Values.transportSecurityClient ($ts.enabled | default false) -}}
 {{- $tsEnv := ternary (default (list) $ts.env) (list) $tsOn -}}
 {{- $tsCa := and $tsOn (ne (default "" $ts.caSecretName) "") -}}
+{{- $postgresTsEnv := list -}}
+{{- if $tsOn -}}
+  {{- range $tsEnv -}}
+    {{- if has (.name | default "") (list "PGSSLMODE" "PGSSLROOTCERT") -}}
+      {{- $postgresTsEnv = append $postgresTsEnv . -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- /* C-25 webhook master-key injection is deliberately alias-specific. Globals
        are visible to this dependency, while no generic component value accepts
        key material or an override env entry. */ -}}
 {{- $webhookKey := default (dict) .Values.global.webhookSigningKey -}}
+{{- $webhookDatabase := default (dict) .Values.global.webhookDatabase -}}
+{{- $webhookDatabaseCredentials := default (dict) $webhookDatabase.credentials -}}
+{{- $webhookDatabasePrincipals := default (dict) $webhookDatabase.principals -}}
 {{- $isControlPlane := and (eq (.Values.wrapper.componentId | default "") "control-plane") (gt (len $webhookKey) 0) -}}
+{{- $databaseGateSecurityContext := deepCopy (default (dict) $webhookDatabase.securityContext) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $databaseGateSecurityContext "runAsUser" -}}
+  {{- $_ := unset $databaseGateSecurityContext "runAsGroup" -}}
+{{- end -}}
 {{- $webhookKeyId := "" -}}
 {{- $webhookMode := "canonical-v1" -}}
 {{- $webhookAction := "none" -}}
@@ -94,8 +110,59 @@ spec:
       securityContext:
         {{- toYaml $podSecurityContext | nindent 8 }}
       {{- end }}
-      {{- if or (and .Values.persistence.enabled .Values.volumePermissions.enabled) (gt (len .Values.initContainers) 0) }}
+      {{- if or $isControlPlane (and .Values.persistence.enabled .Values.volumePermissions.enabled) (gt (len .Values.initContainers) 0) }}
       initContainers:
+        {{- if $isControlPlane }}
+        # Fresh installs render the authority bootstrap as a normal Job because
+        # bundled PostgreSQL does not exist during pre-install hooks. This
+        # bounded-schema gate prevents application DDL/listen until that Job has
+        # established and verified the exact PostgreSQL 16 role graph.
+        - name: webhook-database-principal-gate
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" $webhookDatabase.bootstrapImage "name" "webhook database principal gate") | quote }}
+          imagePullPolicy: {{ $webhookDatabase.bootstrapImage.pullPolicy | default "IfNotPresent" }}
+          command: ["/bin/sh", "/scripts/principal-gate.sh"]
+          env:
+            - name: PGHOST
+              value: {{ tpl $webhookDatabase.connection.host . | quote }}
+            - name: PGPORT
+              value: {{ $webhookDatabase.connection.port | quote }}
+            - name: PGDATABASE
+              value: {{ $webhookDatabase.connection.database | quote }}
+            - name: PGUSER
+              value: {{ $webhookDatabasePrincipals.schema | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $webhookDatabaseCredentials.secretName | quote }}
+                  key: WEBHOOK_SCHEMA_DATABASE_PASSWORD
+                  optional: false
+            - name: WEBHOOK_SCHEMA_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.schema | quote }}
+            - name: WEBHOOK_RUNTIME_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.runtime | quote }}
+            - name: WEBHOOK_KEY_WRITE_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.writer | quote }}
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.lifecycle | quote }}
+            - name: WEBHOOK_DATABASE_AUTHORITY_GRANTOR_ROLE
+              value: {{ $webhookDatabasePrincipals.grantor | quote }}
+            {{- with $postgresTsEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: webhook-database-principal-gate
+              mountPath: /scripts
+              readOnly: true
+            {{- if $tsCa }}
+            - name: falcone-transport-ca
+              mountPath: {{ $ts.caMountPath | default "/etc/falcone/tls" }}
+              readOnly: true
+            {{- end }}
+          securityContext:
+            {{- toYaml $databaseGateSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml $webhookDatabase.resources | nindent 12 }}
+        {{- end }}
         {{- if and .Values.persistence.enabled .Values.volumePermissions.enabled }}
         - name: volume-permissions
           image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.volumePermissions.image "name" (printf "%s volumePermissions" (include "component-wrapper.name" .))) | quote }}
@@ -143,6 +210,40 @@ spec:
               value: {{ $webhookKeyId | quote }}
             - name: WEBHOOK_SIGNING_KEY_MANAGED
               value: {{ ternary "true" "false" $webhookKey.create | quote }}
+            - name: WEBHOOK_SCHEMA_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $webhookDatabaseCredentials.secretName | quote }}
+                  key: WEBHOOK_SCHEMA_DATABASE_URL
+                  optional: false
+            - name: WEBHOOK_RUNTIME_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $webhookDatabaseCredentials.secretName | quote }}
+                  key: WEBHOOK_RUNTIME_DATABASE_URL
+                  optional: false
+            - name: WEBHOOK_KEY_WRITE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $webhookDatabaseCredentials.secretName | quote }}
+                  key: WEBHOOK_KEY_WRITE_DATABASE_URL
+                  optional: false
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $webhookDatabaseCredentials.secretName | quote }}
+                  key: WEBHOOK_KEY_LIFECYCLE_DATABASE_URL
+                  optional: false
+            - name: WEBHOOK_SCHEMA_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.schema | quote }}
+            - name: WEBHOOK_RUNTIME_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.runtime | quote }}
+            - name: WEBHOOK_KEY_WRITE_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.writer | quote }}
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_ROLE
+              value: {{ $webhookDatabasePrincipals.lifecycle | quote }}
+            - name: WEBHOOK_DATABASE_AUTHORITY_GRANTOR_ROLE
+              value: {{ $webhookDatabasePrincipals.grantor | quote }}
             {{- end }}
             {{- with .Values.env }}
             {{- tpl (toYaml .) $ | nindent 12 }}
@@ -204,8 +305,14 @@ spec:
       {{- with .Values.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
-      {{- if or .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa }}
+      {{- if or $isControlPlane .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa }}
       volumes:
+        {{- if $isControlPlane }}
+        - name: webhook-database-principal-gate
+          configMap:
+            name: {{ printf "%s-webhook-db-principal-gate" .Release.Name | trunc 63 | trimSuffix "-" }}
+            defaultMode: 0555
+        {{- end }}
         {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:

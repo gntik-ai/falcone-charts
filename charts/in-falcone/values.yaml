@@ -30,6 +30,61 @@ global:
       sourceSecretKey: ""
       rotationId: ""
       recoveryWindowSeconds: 604800
+  # C-25 PostgreSQL authority boundary for webhook schema, ordinary runtime,
+  # encrypted writes, and key lifecycle maintenance. Passwords and DSNs are
+  # generated inside the credential hook and persist only in the retained
+  # Secret; values contain names/references only.
+  webhookDatabase:
+    credentials:
+      create: true
+      secretName: in-falcone-webhook-database-credentials
+    principals:
+      schema: falcone_webhook_schema
+      runtime: falcone_webhook_runtime
+      writer: falcone_webhook_writer
+      lifecycle: falcone_webhook_lifecycle_login
+      grantor: postgres
+    administrator:
+      # The password comes from config.secretRefs.postgresCredentials key
+      # POSTGRESQL_POSTGRES_PASSWORD and is mounted only by the bootstrap Job.
+      role: postgres
+    connection:
+      host: "{{ .Release.Name }}-postgresql"
+      port: 5432
+      database: in_falcone
+    migration:
+      # Every Helm upgrade runs the applying authority Job and therefore
+      # requires all three backup/parity gates, including a no-op 0.3.1 replay.
+      # Fresh installation does not require a pre-existing database backup.
+      # References are non-secret evidence IDs, never backup contents or
+      # credentials.
+      firstHandoff: false
+      backupVerified: false
+      parityVerified: false
+      backupReference: ""
+    # PostgreSQL 16 client used by the one-shot authority bootstrap and the
+    # control-plane init gate. Registry rewriting applies in Harbor/air-gap
+    # profiles; the application image contract remains independently pinned.
+    bootstrapImage:
+      repository: docker.io/library/postgres
+      tag: 16.14-alpine
+      pullPolicy: IfNotPresent
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      runAsNonRoot: true
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
   defaultStorageClass: ""
   podSecurity:
     runAsNonRoot: true

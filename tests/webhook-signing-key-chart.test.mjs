@@ -5,6 +5,11 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const chart = resolve(root, 'charts/in-falcone');
+const upgradeProof = [
+  '--set', 'global.webhookDatabase.migration.backupVerified=true',
+  '--set', 'global.webhookDatabase.migration.parityVerified=true',
+  '--set', 'global.webhookDatabase.migration.backupReference=c25-test-backup',
+];
 let passed = 0;
 
 function helm(args, { fail = false } = {}) {
@@ -40,7 +45,12 @@ function render(extra = []) {
 }
 
 function upgradeFrom(currentVersion, extra = []) {
-  return render(['--is-upgrade', '--set', `deployment.upgrade.currentVersion=${currentVersion}`, ...extra]);
+  return render([
+    '--is-upgrade',
+    '--set', `deployment.upgrade.currentVersion=${currentVersion}`,
+    ...upgradeProof,
+    ...extra,
+  ]);
 }
 
 function upgrade(extra = []) {
@@ -411,11 +421,13 @@ check('installed 0.3.1 can render a truthful later finalization upgrade while ve
 
   helm(['template', 'falcone', chart, '--namespace', 'falcone-test', '--is-upgrade',
     '--set', 'deployment.upgrade.currentVersion=0.1.9',
-    '--set', 'deployment.upgrade.targetVersion=0.3.1'], { fail: true });
+    '--set', 'deployment.upgrade.targetVersion=0.3.1',
+    ...upgradeProof], { fail: true });
   helm(['template', 'falcone', chart, '--namespace', 'falcone-test', '--is-upgrade',
     '--set', 'deployment.upgrade.currentVersion=0.3.2',
     '--set', 'deployment.upgrade.targetVersion=0.3.1',
-    '--set-json', 'deployment.upgrade.supportedPreviousVersions=["0.3.2"]'], { fail: true });
+    '--set-json', 'deployment.upgrade.supportedPreviousVersions=["0.3.2"]',
+    ...upgradeProof], { fail: true });
 });
 
 check('kind profile makes no installed-version claim and still renders a fresh install', () => {
@@ -438,6 +450,7 @@ check('kind profile upgrade without an explicit installed version fails closed',
       '--namespace', 'falcone-test',
       '--is-upgrade',
       '-f', 'deploy/kind/values-kind.yaml',
+      ...upgradeProof,
     ],
     { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
   );
@@ -469,6 +482,7 @@ check('kind profile rejects an explicitly unsupported installed version', () => 
       '-f', 'deploy/kind/values-kind.yaml',
       '--set', 'deployment.upgrade.currentVersion=0.1.9',
       '--set', 'deployment.upgrade.targetVersion=0.3.1',
+      ...upgradeProof,
     ],
     { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
   );
@@ -562,6 +576,53 @@ check('rotate uses a distinct target and two required Secret references', () => 
   assert.match(lifecycle, /name: "webhook-key-v2"/);
   assert.match(lifecycle, /name: "in-falcone-webhook-signing-key"/);
   assert.equal((lifecycle.match(/optional: false/g) ?? []).length >= 4, true);
+  assert.doesNotMatch(lifecycle, /PGSSLMODE|PGSSLROOTCERT|falcone-transport-ca/);
+});
+
+check('hardened production rotate gives the lifecycle Job PostgreSQL TLS and the read-only CA mount', () => {
+  const rendered = upgrade([
+    '-f', 'deploy/kind/values-kind.yaml',
+    '-f', 'deploy/kind/values-production.yaml',
+    '--set', 'global.webhookSigningKey.secretName=webhook-key-v2-hardened',
+    '--set', 'global.webhookSigningKey.rotation.action=rotate',
+    '--set', 'global.webhookSigningKey.rotation.requestId=rotate-hardened-001',
+    '--set', 'global.webhookSigningKey.rotation.rotationId=rotation-hardened-001',
+    '--set', 'global.webhookSigningKey.rotation.sourceSecretName=in-falcone-webhook-signing-key',
+    '--set', 'global.webhookSigningKey.rotation.sourceSecretKey=key',
+  ]);
+  const lifecycle = documentWith(
+    rendered,
+    'kind: Job',
+    'app.kubernetes.io/component: webhook-key-lifecycle',
+  );
+  const credential = documentWith(
+    rendered,
+    'kind: Job',
+    'app.kubernetes.io/component: webhook-key-credential',
+  );
+  const controlPlane = documentWith(
+    rendered,
+    'kind: Deployment',
+    'name: falcone-control-plane',
+  );
+
+  for (const workload of [controlPlane, lifecycle]) {
+    assert.match(workload, /name: PGSSLMODE\s+value: verify-full/);
+    assert.match(workload, /name: PGSSLROOTCERT\s+value: \/etc\/falcone\/tls\/ca\.crt/);
+    assert.match(
+      workload,
+      /name: falcone-transport-ca\s+mountPath: \/etc\/falcone\/tls\s+readOnly: true/,
+    );
+    assert.match(
+      workload,
+      /name: falcone-transport-ca\s+secret:\s+secretName: falcone-transport-ca/,
+    );
+  }
+  assert.equal((lifecycle.match(/name: PGSSLMODE/g) ?? []).length, 1);
+  assert.equal((lifecycle.match(/name: PGSSLROOTCERT/g) ?? []).length, 1);
+  assert.doesNotMatch(credential, /PGSSLMODE|PGSSLROOTCERT|falcone-transport-ca/);
+  assert.doesNotMatch(lifecycle, /name: (MONGO_TLS|KAFKA_SSL|NODE_EXTRA_CA_CERTS)/);
+  assertLifecycleDeploymentRbac(rendered, 'hardened production rotate');
 });
 
 check('recover and finalize render forward lifecycle actions; finalize alone gets bounded delete RBAC', () => {

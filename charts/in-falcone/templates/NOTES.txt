@@ -25,3 +25,16 @@ Bootstrap:
 - Hook job: {{ include "in-falcone.fullname" . }}-bootstrap
 - Lock ConfigMap: {{ .Values.bootstrap.lock.name }}
 - Marker ConfigMap: {{ .Values.bootstrap.markers.name }}
+
+Webhook PostgreSQL authority:
+- Credential Secret reference: {{ .Values.global.webhookDatabase.credentials.secretName }}
+- Managed initialization marker: {{ printf "%s-initialized" .Values.global.webhookDatabase.credentials.secretName | trunc 253 | trimSuffix "-" }}
+- Credential custody: {{ ternary "managed, immutable, retained" "external, read-only" .Values.global.webhookDatabase.credentials.create }}
+- Explicit first-handoff mode: {{ .Values.global.webhookDatabase.migration.firstHandoff }}
+- Schema/runtime/writer/lifecycle roles: {{ .Values.global.webhookDatabase.principals.schema }}, {{ .Values.global.webhookDatabase.principals.runtime }}, {{ .Values.global.webhookDatabase.principals.writer }}, {{ .Values.global.webhookDatabase.principals.lifecycle }}
+- Durable administrator grantor: {{ .Values.global.webhookDatabase.principals.grantor }}
+- PostgreSQL minimum: 16
+- Upgrade safety: every helm upgrade runs authority mode=apply and requires backupVerified=true, parityVerified=true, and a non-secret backupReference, including no-op 0.3.1 replay. Fresh install is exempt.
+- Credential hook cleanup (Helm 4.1.4): support hooks are deleted after success, including when the later credential Job fails; the failed Job and owned Pod remain as bounded evidence, and before-hook-creation recreates support on retry.
+- Runbook: charts/in-falcone/WEBHOOK-DATABASE-AUTHORITY.md
+- Rollback boundary: use forward key recovery or a compatible database-and-Secret restore; Helm rollback alone cannot reverse authority/ownership state.

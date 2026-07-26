@@ -1,4 +1,7 @@
 {{- $key := .Values.global.webhookSigningKey -}}
+{{- $database := .Values.global.webhookDatabase -}}
+{{- $databaseCredentials := $database.credentials -}}
+{{- $databasePrincipals := $database.principals -}}
 {{- $rotation := $key.rotation -}}
 {{- $action := $rotation.action | default "none" -}}
 {{- $credentialCanCreate := and $key.create (or (and .Release.IsInstall (eq $action "none")) (and .Release.IsUpgrade (eq $action "rotate"))) -}}
@@ -15,6 +18,17 @@
 {{- $credentialName := printf "%s-webhook-key-credential" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- $lifecycleName := printf "%s-webhook-key-lifecycle" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- $controlPlaneName := include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "controlPlane" "serviceName" "") -}}
+{{- $transportSecurity := default (dict) .Values.global.transportSecurity -}}
+{{- $lifecycleTransportOn := $transportSecurity.enabled | default false -}}
+{{- $lifecyclePostgresTlsEnv := list -}}
+{{- if $lifecycleTransportOn -}}
+  {{- range ($transportSecurity.env | default (list)) -}}
+    {{- if has (.name | default "") (list "PGSSLMODE" "PGSSLROOTCERT") -}}
+      {{- $lifecyclePostgresTlsEnv = append $lifecyclePostgresTlsEnv . -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $lifecycleTransportCa := and $lifecycleTransportOn (ne ($transportSecurity.caSecretName | default "") "") -}}
 {{- $containerSecurityContext := deepCopy (default (dict) .Values.controlPlane.securityContext) -}}
 {{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
   {{- $_ := unset $containerSecurityContext "runAsUser" -}}
@@ -290,24 +304,31 @@ spec:
               value: {{ $controlPlaneName | quote }}
             - name: WEBHOOK_CONTROL_PLANE_REPLICAS
               value: {{ .Values.controlPlane.replicas | quote }}
-            - name: PGHOST
-              value: {{ printf "%s-postgresql" .Release.Name | quote }}
-            - name: PGPORT
-              value: "5432"
-            - name: PGDATABASE
-              value: in_falcone
-            - name: PGUSER
+            - name: WEBHOOK_SCHEMA_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
-                  key: POSTGRESQL_USERNAME
+                  name: {{ $databaseCredentials.secretName | quote }}
+                  key: WEBHOOK_SCHEMA_DATABASE_URL
                   optional: false
-            - name: PGPASSWORD
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
-                  key: POSTGRESQL_PASSWORD
+                  name: {{ $databaseCredentials.secretName | quote }}
+                  key: WEBHOOK_KEY_LIFECYCLE_DATABASE_URL
                   optional: false
+            - name: WEBHOOK_SCHEMA_DATABASE_ROLE
+              value: {{ $databasePrincipals.schema | quote }}
+            - name: WEBHOOK_RUNTIME_DATABASE_ROLE
+              value: {{ $databasePrincipals.runtime | quote }}
+            - name: WEBHOOK_KEY_WRITE_DATABASE_ROLE
+              value: {{ $databasePrincipals.writer | quote }}
+            - name: WEBHOOK_KEY_LIFECYCLE_DATABASE_ROLE
+              value: {{ $databasePrincipals.lifecycle | quote }}
+            - name: WEBHOOK_DATABASE_AUTHORITY_GRANTOR_ROLE
+              value: {{ $databasePrincipals.grantor | quote }}
+            {{- with $lifecyclePostgresTlsEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- if eq $action "finalize" }}
             - name: WEBHOOK_SECRET_NAME
               value: {{ $key.secretName | quote }}
@@ -324,8 +345,20 @@ spec:
             - name: APP_NAME
               value: {{ include "in-falcone.name" . | quote }}
             {{- end }}
+          {{- if $lifecycleTransportCa }}
+          volumeMounts:
+            - name: falcone-transport-ca
+              mountPath: {{ $transportSecurity.caMountPath | default "/etc/falcone/tls" }}
+              readOnly: true
+          {{- end }}
           securityContext:
             {{- toYaml $containerSecurityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+      {{- if $lifecycleTransportCa }}
+      volumes:
+        - name: falcone-transport-ca
+          secret:
+            secretName: {{ $transportSecurity.caSecretName }}
+      {{- end }}
 {{- end }}
