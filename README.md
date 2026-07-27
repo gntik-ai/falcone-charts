@@ -60,9 +60,9 @@ rendered YAML, shell arguments, or evidence.
 The base, kind, OpenShift, and local install profiles all select the compatible
 `0.3.1` control-plane image for the runtime and both hook Jobs. The published
 artifact is pinned in `values.yaml` to
-`sha256:27aedbfabdc8b72baae844b14dbdf72820c0f4d548a49013118d9ba7e0588d40`
-from Falcone source commit
-`1dde8d67238c998b285e997f4b8fe7f9bae6c507`; registry rewriting preserves that
+`sha256:a6f90cd0c3e6e5ee5e783bba1d9fbce3c03be10590c85753cde3339fbcd4ad1d`
+(published as `ghcr.io/gntik-ai/in-falcone-control-plane:0.3.1-c25-pr909-r2`
+from the Falcone PR #909 release candidate); registry rewriting preserves that
 digest. Every Helm revision also changes the non-secret control-plane pod-template annotation
 `in-falcone.io/release-revision`, forcing new pods to re-run the database
 sentinel/state check even when an external Secret reference is unchanged. The

@@ -147,13 +147,17 @@ Inject extra environment vars in the format key:value, if populated
 {{- $repositoryName := default .Values.image.repository .Values.global.seaweedfs.image.repository | toString -}}
 {{- $name := .Values.global.seaweedfs.image.name | toString -}}
 {{- $tag := default .Chart.AppVersion .Values.image.tag  | toString -}}
+{{- $digest := .Values.global.seaweedfs.image.digest | default "" | toString -}}
 {{- if .Values.image.repository -}}
 {{-   $name = $repositoryName -}}
 {{- else if $repositoryName -}}
 {{-   $name = printf "%s/%s" (trimSuffix "/" $repositoryName) (base $name) -}}
 {{- end -}}
 {{- if $registryName -}}
-{{-   printf "%s/%s:%s" $registryName $name $tag -}}
+{{-   $name = printf "%s/%s" $registryName $name -}}
+{{- end -}}
+{{- if $digest -}}
+{{-   printf "%s@%s" $name $digest -}}
 {{- else -}}
 {{-   printf "%s:%s" $name $tag -}}
 {{- end -}}
@@ -206,21 +210,32 @@ Inject extra environment vars in the format key:value, if populated
 
 {{/* Return the proper imagePullSecrets */}}
 {{- define "seaweedfs.imagePullSecrets" -}}
-{{- with .Values.global.imagePullSecrets }}
-imagePullSecrets:
-{{- if kindIs "string" . }}
-  - name: {{ . }}
-{{- else }}
-{{- range . }}
-  {{- if kindIs "string" . }}
-  - name: {{ . }}
-  {{- else }}
-  - {{ toYaml . }}
-  {{- end}}
-{{- end }}
-{{- end }}
-{{- end }}
+{{- $secrets := list -}}
+{{- $configured := default (list) .Values.global.imagePullSecrets -}}
+{{- if kindIs "string" $configured -}}
+  {{- if ne $configured "" -}}
+    {{- $secrets = append $secrets $configured -}}
+  {{- end -}}
+{{- else -}}
+  {{- range $configured -}}
+    {{- if kindIs "map" . -}}
+      {{- $secrets = append $secrets .name -}}
+    {{- else -}}
+      {{- $secrets = append $secrets . -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
+{{- range (default (list) .Values.global.privateRegistry.pullSecretNames) -}}
+  {{- $secrets = append $secrets . -}}
+{{- end -}}
+{{- $secrets = $secrets | uniq -}}
+{{- if gt (len $secrets) 0 }}
+imagePullSecrets:
+{{- range $secrets }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}
 
 {{/*
 Renders a value that contains template perhaps with scope if the scope is present.

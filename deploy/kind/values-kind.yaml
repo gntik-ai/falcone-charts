@@ -180,7 +180,7 @@ controlPlane:
     # Secret key names below are a legacy convention retained for the existing secret;
     # repoint to the SeaweedFS credentials Secret when cutting the kind storage backend over.
     - name: STORAGE_S3_ENDPOINT
-      value: http://falcone-seaweedfs-s3:8333
+      value: "http://{{ .Release.Name }}-seaweedfs-s3:8333"
     - name: STORAGE_S3_ACCESS_KEY
       valueFrom:
         secretKeyRef:
@@ -197,8 +197,12 @@ controlPlane:
     # so tenants get a credential that can't cross to another tenant's bucket. The
     # admin/service key (STORAGE_S3_*) stays broad for the backend REST API.
     - { name: STORAGE_TENANT_IDENTITIES, value: "1" }
-    - { name: SEAWEEDFS_MASTER, value: "falcone-seaweedfs-master:9333" }
-    - { name: SEAWEEDFS_IMAGE, value: "chrislusf/seaweedfs:4.33" }
+    - { name: SEAWEEDFS_MASTER, value: "{{ .Release.Name }}-seaweedfs-master.{{ .Release.Namespace }}:9333" }
+    - { name: SEAWEEDFS_FILER, value: "{{ .Release.Name }}-seaweedfs-filer.{{ .Release.Namespace }}:8888" }
+    - { name: SEAWEEDFS_IMAGE, value: '{{ include "in-falcone.seaweedfsImage" . }}' }
+    - { name: SEAWEEDFS_IMAGE_PULL_POLICY, value: "{{ .Values.global.seaweedfs.imagePullPolicy }}" }
+    - { name: SEAWEEDFS_IMAGE_PULL_SECRETS, value: '{{ include "in-falcone.imagePullSecretNamesJson" . }}' }
+    - { name: SEAWEEDFS_OPENSHIFT_RESTRICTED, value: '{{ dig "podSecurity" "openshiftRestricted" false .Values.global | toString }}' }
     # Document store: FerretDB gateway over the DocumentDB engine (MongoDB-wire, no plaintext).
     # The gateway passes the DocumentDB Postgres credentials through to the engine.
     - name: MONGO_HOST

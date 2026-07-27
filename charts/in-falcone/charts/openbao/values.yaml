@@ -13,6 +13,11 @@ openbao:
     runAsUser: 1000
     seccompProfile:
       type: RuntimeDefault
+  jobSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
   securityContext:
     runAsNonRoot: true
     runAsUser: 100
@@ -45,8 +50,15 @@ openbao:
     # server CA here; in cert-manager mode a Certificate creates the Secret in the release namespace.
     clientCaSecretName: in-falcone-openbao-client-ca
     bootstrap:
+      generatorImage:
+        # Dedicated certificate generator. Keep this separate from the Kubernetes client so
+        # neither image is assumed to contain an unverified all-in-one toolchain.
+        repository: docker.io/alpine/openssl
+        tag: "3.5.2"
+        digest: sha256:ef8657028239a006f3de0bd04529e22c073bf0ab6655ece9f25c8dde9adec146
+        pullPolicy: IfNotPresent
       image:
-        # The bootstrap scripts require bash/curl/jq/kubectl/openssl; alpine/k8s carries the full set.
+        # Kubernetes API client; certificate generation runs in generatorImage.
         repository: docker.io/alpine/k8s
         tag: "1.32.2"
         pullPolicy: IfNotPresent

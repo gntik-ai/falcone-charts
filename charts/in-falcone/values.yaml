@@ -12,6 +12,15 @@ global:
     registry: ""
     pullSecretNames: []
     caBundleConfigMap: ""
+  # One immutable SeaweedFS image contract is inherited by the vendored
+  # data-plane workloads and by control-plane-created IAM Jobs.
+  seaweedfs:
+    image:
+      repository: ""
+      name: chrislusf/seaweedfs
+      tag: "4.33"
+      digest: sha256:f0b358973e81f884304737645dd3b278c590c2c9d47d60089729d46324f70495
+    imagePullPolicy: IfNotPresent
   # Platform master key used only to wrap per-subscription webhook signing
   # secrets at rest. Key material is never accepted here; it must live in the
   # referenced Kubernetes Secret. Managed generation occurs inside the
@@ -2385,6 +2394,8 @@ documentdb:
       runAsNonRoot: true
       runAsUser: 999
       fsGroup: 1001
+      seccompProfile:
+        type: RuntimeDefault
     securityContext:
       allowPrivilegeEscalation: false
       readOnlyRootFilesystem: true
@@ -2711,12 +2722,8 @@ seaweedfs:
     imagePullSecrets: ""
     seaweedfs:
       # Pin the SeaweedFS image to the spike-validated 4.33 build. The sub-chart
-      # appVersion is 4.33, so the default tag already matches; the digest pin
-      # from the spike (chrislusf/seaweedfs@sha256:f0b3589...) is applied in the
-      # OpenShift/airgap overlay where reproducibility matters.
-      image:
-        repository: ""
-        name: chrislusf/seaweedfs
+      # inherits global.seaweedfs.image, including its immutable digest, so
+      # runtime IAM Jobs and every storage workload use the same bytes.
       # Replication is driven per-component via master.defaultReplication /
       # filer.defaultReplicaPlacement (see below) so the dev (000) and HA (011)
       # notations are explicit per profile. enableReplication stays false so the
@@ -2996,7 +3003,7 @@ seaweedfs:
 # a DEPLOY-TIME concern that cannot be probed from `helm template`, so the SAFE
 # DEFAULT shipped here is a Helm pre-install hook Job that generates a self-signed
 # CA + leaf certs into the Secrets the sub-chart expects
-# (<release>-seaweedfs-{ca,master,volume,filer,client}-cert) using openssl, and we
+# (<release>-seaweedfs-{ca,master,volume,filer,client}-cert), and we
 # set certificates.externalCertificates.enabled=true so the sub-chart consumes
 # them instead of cert-manager. Toggle `tlsBootstrap.enabled` off where
 # cert-manager is present and let the sub-chart's Issuer path run instead.
@@ -3008,7 +3015,13 @@ seaweedfs:
 seaweedfsTls:
   bootstrap:
     enabled: false
-    # Image used by the pre-install hook to run openssl + kubectl.
+    # Restricted certificate generator, kept separate from the Kubernetes API client.
+    generatorImage:
+      repository: docker.io/alpine/openssl
+      tag: "3.5.2"
+      digest: sha256:ef8657028239a006f3de0bd04529e22c073bf0ab6655ece9f25c8dde9adec146
+      pullPolicy: IfNotPresent
+    # Kubernetes API client; certificate generation runs in generatorImage.
     image:
       repository: docker.io/alpine/k8s
       tag: "1.32.2"
@@ -3179,7 +3192,7 @@ observability:
   extraVolumes:
     - name: prometheus-config
       configMap:
-        name: falcone-prometheus-config
+        name: '{{ .Release.Name }}-prometheus-config'
   extraVolumeMounts:
     - name: prometheus-config
       mountPath: /etc/prometheus
@@ -3293,7 +3306,7 @@ controlPlane:
   image:
     repository: ghcr.io/gntik-ai/in-falcone-control-plane
     tag: 0.3.1
-    digest: sha256:27aedbfabdc8b72baae844b14dbdf72820c0f4d548a49013118d9ba7e0588d40
+    digest: sha256:a6f90cd0c3e6e5ee5e783bba1d9fbce3c03be10590c85753cde3339fbcd4ad1d
     pullPolicy: IfNotPresent
   replicas: 2
   serviceAccount:
@@ -3407,6 +3420,18 @@ controlPlane:
           key: POSTGRES_PASSWORD
     - name: STORAGE_S3_ENDPOINT
       value: "{{ .Values.coreServices.storageS3Scheme }}://{{ .Release.Name }}-seaweedfs-s3:{{ .Values.coreServices.storageS3Port }}"
+    - name: SEAWEEDFS_MASTER
+      value: "{{ .Release.Name }}-seaweedfs-master.{{ .Release.Namespace }}:9333"
+    - name: SEAWEEDFS_FILER
+      value: "{{ .Release.Name }}-seaweedfs-filer.{{ .Release.Namespace }}:8888"
+    - name: SEAWEEDFS_IMAGE
+      value: '{{ include "in-falcone.seaweedfsImage" . }}'
+    - name: SEAWEEDFS_IMAGE_PULL_POLICY
+      value: "{{ .Values.global.seaweedfs.imagePullPolicy }}"
+    - name: SEAWEEDFS_IMAGE_PULL_SECRETS
+      value: '{{ include "in-falcone.imagePullSecretNamesJson" . }}'
+    - name: SEAWEEDFS_OPENSHIFT_RESTRICTED
+      value: '{{ dig "podSecurity" "openshiftRestricted" false .Values.global | toString }}'
     - name: STORAGE_S3_ACCESS_KEY
       valueFrom:
         secretKeyRef:

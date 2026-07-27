@@ -47,10 +47,14 @@ spec:
     spec:
       restartPolicy: OnFailure
       automountServiceAccountToken: false
-      {{- /* normalize imagePullSecrets({name} maps) + privateRegistry.pullSecretNames(strings) */ -}}
+      {{- /* normalize imagePullSecrets(strings or {name} maps) + privateRegistry.pullSecretNames(strings) */ -}}
       {{- $imagePullSecrets := list -}}
       {{- range (default (list) .Values.global.imagePullSecrets) -}}
-        {{- $imagePullSecrets = append $imagePullSecrets (.name | default .) -}}
+        {{- if kindIs "map" . -}}
+          {{- $imagePullSecrets = append $imagePullSecrets .name -}}
+        {{- else -}}
+          {{- $imagePullSecrets = append $imagePullSecrets . -}}
+        {{- end -}}
       {{- end -}}
       {{- range (default (list) .Values.global.privateRegistry.pullSecretNames) -}}
         {{- $imagePullSecrets = append $imagePullSecrets . -}}

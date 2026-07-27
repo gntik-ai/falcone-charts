@@ -11,7 +11,9 @@ const upgradeProof = [
   '--set', 'global.webhookDatabase.migration.backupReference=c25-test-backup',
 ];
 const controlPlaneDigest =
-  'sha256:27aedbfabdc8b72baae844b14dbdf72820c0f4d548a49013118d9ba7e0588d40';
+  'sha256:a6f90cd0c3e6e5ee5e783bba1d9fbce3c03be10590c85753cde3339fbcd4ad1d';
+const seaweedfsDigest =
+  'sha256:f0b358973e81f884304737645dd3b278c590c2c9d47d60089729d46324f70495';
 const pinnedControlPlaneImagePattern = new RegExp(
   `image: "[^"]*in-falcone-control-plane@${controlPlaneDigest}"`,
 );
@@ -223,6 +225,114 @@ function check(name, fn) {
 
 const base = render();
 
+check('pull secrets honor schema string/object forms and share exact deduplicated runtime JSON', () => {
+  const scenarios = [
+    {
+      label: 'string form',
+      values: ['--set', 'global.imagePullSecrets[0]=harbor-pull'],
+      expected: ['harbor-pull'],
+    },
+    {
+      label: 'object form',
+      values: ['--set', 'global.imagePullSecrets[0].name=harbor-pull'],
+      expected: ['harbor-pull'],
+    },
+    {
+      label: 'mixed form with cross-source duplicates',
+      values: [
+        '--set', 'global.imagePullSecrets[0]=harbor-pull',
+        '--set', 'global.imagePullSecrets[1].name=backup-pull',
+        '--set', 'global.privateRegistry.pullSecretNames[0]=harbor-pull',
+        '--set', 'global.privateRegistry.pullSecretNames[1]=registry-pull',
+        '--set', 'eso.external-secrets.imagePullSecrets[0].name=harbor-pull',
+        '--set', 'eso.external-secrets.imagePullSecrets[1].name=operator-local',
+        '--set', 'eso.external-secrets.webhook.imagePullSecrets[0].name=webhook-local',
+        '--set', 'eso.external-secrets.certController.imagePullSecrets[0].name=cert-local',
+      ],
+      expected: ['harbor-pull', 'backup-pull', 'registry-pull'],
+      esoExpected: {
+        operator: ['harbor-pull', 'backup-pull', 'registry-pull', 'operator-local'],
+        webhook: ['harbor-pull', 'backup-pull', 'registry-pull', 'webhook-local'],
+        certController: ['harbor-pull', 'backup-pull', 'registry-pull', 'cert-local'],
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const rendered = helm([
+      'template',
+      'pull-secret',
+      chart,
+      '--namespace',
+      'c25-ns',
+      ...scenario.values,
+    ]);
+    const controlPlane = documentWith(
+      rendered,
+      'kind: Deployment',
+      'name: pull-secret-control-plane',
+    );
+    assert.ok(controlPlane, `${scenario.label} renders the component-wrapper control plane`);
+    assert.match(
+      controlPlane,
+      new RegExp(
+        `- name: SEAWEEDFS_IMAGE_PULL_SECRETS\\s+value: '${JSON.stringify(scenario.expected).replaceAll('[', '\\[').replaceAll(']', '\\]')}'`,
+      ),
+      `${scenario.label} must pass the exact normalized list to runtime IAM Jobs`,
+    );
+
+    const consumers = [
+      ['component wrapper', controlPlane],
+      ['root helper', documentWith(rendered, 'kind: Job', 'name: pull-secret-seaweedfs-admin-seed')],
+      ['Temporal helper', documentWith(rendered, 'kind: Deployment', 'name: pull-secret-temporal-frontend')],
+      ['OpenBao helper', documentWith(rendered, 'kind: StatefulSet', 'name: openbao')],
+      ['ESO helper', documentWith(rendered, 'kind: Job', 'name: eso-preflight')],
+      ['SeaweedFS helper', documentWith(rendered, 'kind: StatefulSet', 'name: pull-secret-seaweedfs-master')],
+      ['bootstrap inline path', documentWith(rendered, 'kind: Job', 'name: pull-secret-in-falcone-bootstrap')],
+      ['DocumentDB inline path', documentWith(rendered, 'kind: Job', 'name: pull-secret-documentdb-init')],
+      ['credential inline path', documentWith(rendered, 'kind: Job', 'name: pull-secret-in-falcone-credential-bootstrap')],
+    ];
+    for (const [consumer, document] of consumers) {
+      assert.ok(document, `${scenario.label} renders the ${consumer} consumer`);
+      assert.deepEqual(
+        podImagePullSecretNames(document),
+        scenario.expected,
+        `${scenario.label} must normalize and deduplicate ${consumer} pull secrets`,
+      );
+    }
+
+    const esoExpected = scenario.esoExpected ?? {
+      operator: scenario.expected,
+      webhook: scenario.expected,
+      certController: scenario.expected,
+    };
+    for (const [consumer, document, expected] of [
+      [
+        'ESO operator Deployment',
+        documentWith(rendered, 'kind: Deployment', 'name: eso-external-secrets\n'),
+        esoExpected.operator,
+      ],
+      [
+        'ESO webhook Deployment',
+        documentWith(rendered, 'kind: Deployment', 'name: eso-external-secrets-webhook\n'),
+        esoExpected.webhook,
+      ],
+      [
+        'ESO certificate-controller Deployment',
+        documentWith(rendered, 'kind: Deployment', 'name: eso-external-secrets-cert-controller\n'),
+        esoExpected.certController,
+      ],
+    ]) {
+      assert.ok(document, `${scenario.label} renders the ${consumer}`);
+      assert.deepEqual(
+        podImagePullSecretNames(document),
+        expected,
+        `${scenario.label} must merge global and local ${consumer} pull secrets`,
+      );
+    }
+  }
+});
+
 check('base control plane has one required Secret reference and a Kubernetes-enforced readiness gate', () => {
   assert.equal((base.match(/^\s*- name: WEBHOOK_SIGNING_KEY$/gm) ?? []).length, 1);
   const controlPlane = documentWith(base, 'kind: Deployment', 'name: falcone-control-plane');
@@ -239,6 +349,84 @@ check('base control plane has one required Secret reference and a Kubernetes-enf
   for (const doc of documents(base).filter((item) => /kind: (Deployment|StatefulSet)/.test(item) && !item.includes('name: falcone-control-plane'))) {
     assert.doesNotMatch(doc, /WEBHOOK_SIGNING_KEY/);
   }
+});
+
+check('base control plane passes release-scoped SeaweedFS endpoints to dynamic IAM Jobs', () => {
+  const controlPlane = documentWith(base, 'kind: Deployment', 'name: falcone-control-plane');
+  assert.ok(controlPlane);
+  assert.match(
+    controlPlane,
+    /- name: SEAWEEDFS_MASTER\s+value: ['"]falcone-seaweedfs-master\.falcone-test:9333['"]/,
+  );
+  assert.match(
+    controlPlane,
+    /- name: SEAWEEDFS_FILER\s+value: ['"]falcone-seaweedfs-filer\.falcone-test:8888['"]/,
+  );
+  assert.match(
+    controlPlane,
+    new RegExp(`- name: SEAWEEDFS_IMAGE\\s+value: ['"]chrislusf/seaweedfs@${seaweedfsDigest}['"]`),
+  );
+  assert.match(controlPlane, /- name: SEAWEEDFS_IMAGE_PULL_POLICY\s+value: ['"]IfNotPresent['"]/);
+  assert.match(controlPlane, /- name: SEAWEEDFS_IMAGE_PULL_SECRETS\s+value: ['"]\[\]['"]/);
+  assert.match(controlPlane, /- name: SEAWEEDFS_OPENSHIFT_RESTRICTED\s+value: ['"]false['"]/);
+
+  for (const [label, rendered] of [
+    ['base', helm(['template', 'c25-arbitrary', chart, '--namespace', 'c25-ns'])],
+    ['kind', helm([
+      'template',
+      'c25-arbitrary',
+      chart,
+      '--namespace',
+      'c25-ns',
+      '-f',
+      'deploy/kind/values-kind.yaml',
+    ])],
+  ]) {
+    const custom = documentWith(rendered, 'kind: Deployment', 'name: c25-arbitrary-control-plane');
+    assert.ok(custom, `${label} custom release renders its control plane`);
+    assert.match(custom, /- name: STORAGE_S3_ENDPOINT\s+value: ['"]?http:\/\/c25-arbitrary-seaweedfs-s3:8333['"]?/);
+    assert.match(custom, /- name: SEAWEEDFS_MASTER\s+value: ['"]c25-arbitrary-seaweedfs-master\.c25-ns:9333['"]/);
+    assert.match(custom, /- name: SEAWEEDFS_FILER\s+value: ['"]c25-arbitrary-seaweedfs-filer\.c25-ns:8888['"]/);
+  }
+
+  const openshift = documentWith(
+    render(['-f', 'deploy/openshift/values-openshift.yaml']),
+    'kind: Deployment',
+    'name: falcone-control-plane',
+  );
+  assert.ok(openshift);
+  assert.match(
+    openshift,
+    new RegExp(`- name: SEAWEEDFS_IMAGE\\s+value: ['"]harbor\\.example\\.com/falcone/chrislusf/seaweedfs@${seaweedfsDigest}['"]`),
+  );
+  assert.match(openshift, /- name: SEAWEEDFS_IMAGE_PULL_SECRETS\s+value: ['"]\["harbor-pull"\]['"]/);
+  assert.match(openshift, /- name: SEAWEEDFS_OPENSHIFT_RESTRICTED\s+value: ['"]true['"]/);
+});
+
+check('base observability workload mounts the release-scoped Prometheus ConfigMap', () => {
+  const observability = documentWith(base, 'kind: Deployment', 'name: falcone-observability');
+  assert.ok(observability);
+  assert.match(
+    observability,
+    /- configMap:\s+name: ['"]falcone-prometheus-config['"]\s+name: prometheus-config/,
+  );
+  const customRelease = helm([
+    'template',
+    'c25-custom-release',
+    chart,
+    '--namespace',
+    'falcone-test',
+  ]);
+  const customObservability = documentWith(
+    customRelease,
+    'kind: Deployment',
+    'name: c25-custom-release-observability',
+  );
+  assert.ok(customObservability);
+  assert.match(
+    customObservability,
+    /- configMap:\s+name: ['"]c25-custom-release-prometheus-config['"]\s+name: prometheus-config/,
+  );
 });
 
 check('fresh managed credential hook has exact-name get plus separate create RBAC and no rendered key bytes', () => {
@@ -520,6 +708,77 @@ check('legacy adoption renders an ordered restricted maintenance hook', () => {
   assert.match(lifecycle, /WEBHOOK_SIGNING_KEY\s+valueFrom:\s+secretKeyRef:[\s\S]*optional: false/);
   assertLifecycleDeploymentRbac(rendered, 'legacy adoption');
   assert.doesNotMatch(role, /resources: \["secrets"\]/);
+});
+
+check('SeaweedFS post-upgrade hooks cannot block a restricted lifecycle upgrade', () => {
+  const rendered = upgrade();
+  const seed = documentWith(
+    rendered,
+    'kind: Job',
+    'app.kubernetes.io/component: seaweedfs-admin-seed',
+  );
+  assert.ok(seed, 'filer-mode renders the SeaweedFS admin seed hook');
+  assert.match(seed, /securityContext:\s+seccompProfile:\s+type: RuntimeDefault/);
+  assert.match(
+    seed,
+    /name: admin-seed[\s\S]*securityContext:\s+allowPrivilegeEscalation: false[\s\S]*capabilities:\s+drop:\s+- ALL/,
+  );
+  assert.match(seed, /readOnlyRootFilesystem: true/);
+  assert.match(seed, /runAsNonRoot: true/);
+  assert.match(seed, /runAsUser: 1000/);
+  assert.match(seed, /runAsGroup: 1000/);
+
+  const bucket = documentWith(rendered, 'kind: Job', 'name: "falcone-bucket-hook"');
+  assert.ok(bucket, 'the default bucket-creation hook renders');
+  assert.match(bucket, /securityContext:\s+seccompProfile:\s+type: RuntimeDefault/);
+  assert.match(
+    bucket,
+    /name: post-install-job[\s\S]*securityContext:\s+allowPrivilegeEscalation: false[\s\S]*capabilities:\s+drop:\s+- ALL/,
+  );
+  assert.match(bucket, /readOnlyRootFilesystem: true/);
+  assert.match(bucket, /runAsNonRoot: true/);
+  assert.match(bucket, /runAsUser: 1000/);
+  assert.match(bucket, /runAsGroup: 1000/);
+
+  const openshift = render(['-f', 'deploy/openshift/values-openshift.yaml']);
+  for (const hook of [
+    documentWith(
+      openshift,
+      'kind: Job',
+      'app.kubernetes.io/component: seaweedfs-admin-seed',
+    ),
+    documentWith(openshift, 'kind: Job', 'name: "falcone-bucket-hook"'),
+  ]) {
+    assert.ok(hook, 'OpenShift renders each SeaweedFS post-upgrade hook');
+    assert.doesNotMatch(hook, /runAsUser:/);
+    assert.doesNotMatch(hook, /runAsGroup:/);
+  }
+
+  const openbaoInit = documentWith(rendered, 'kind: Job', 'name: openbao-init');
+  assert.ok(openbaoInit, 'the OpenBao convergence hook renders');
+  assert.match(
+    openbaoInit,
+    /"helm\.sh\/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed/,
+    'the sensitive hook Pod must be deleted on success or failure',
+  );
+  assert.match(openbaoInit, /ttlSecondsAfterFinished: 300/);
+  assert.match(
+    openbaoInit,
+    /securityContext:\s+runAsNonRoot: true\s+runAsUser: 1000\s+seccompProfile:\s+type: RuntimeDefault/,
+  );
+  for (const container of ['platform-credential-loader', 'openbao-init']) {
+    assert.match(
+      openbaoInit,
+      new RegExp(`name: ${container}[\\s\\S]*?securityContext:\\s+allowPrivilegeEscalation: false[\\s\\S]*?capabilities:\\s+drop:\\s+- ALL[\\s\\S]*?runAsNonRoot: true`),
+    );
+  }
+
+  const documentdbInit = documentWith(rendered, 'kind: Job', 'name: falcone-documentdb-init');
+  assert.ok(documentdbInit, 'the DocumentDB convergence hook renders');
+  assert.match(
+    documentdbInit,
+    /securityContext:\s+fsGroup: 1001\s+runAsNonRoot: true\s+runAsUser: 999\s+seccompProfile:\s+type: RuntimeDefault/,
+  );
 });
 
 check('every lifecycle mode grants named Deployment get and scale-only patch', () => {

@@ -27,6 +27,7 @@ do
 done
 
 for suite in \
+  tests/tls-bootstrap-chart.test.mjs \
   tests/webhook-signing-key-chart.test.mjs \
   tests/webhook-database-credential-script.test.mjs \
   tests/webhook-database-principals-chart.test.mjs
@@ -37,6 +38,7 @@ done
 node -e \
   "JSON.parse(require('node:fs').readFileSync('charts/in-falcone/values.schema.json', 'utf8'))"
 
+node tests/tls-bootstrap-chart.test.mjs
 node tests/webhook-signing-key-chart.test.mjs
 node tests/webhook-database-credential-script.test.mjs
 node tests/webhook-database-principals-chart.test.mjs

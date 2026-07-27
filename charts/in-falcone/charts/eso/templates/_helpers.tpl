@@ -22,7 +22,11 @@
 {{- define "eso.imagePullSecrets" -}}
 {{- $secrets := list -}}
 {{- range (default (list) .Values.global.imagePullSecrets) -}}
-  {{- $secrets = append $secrets (.name | default .) -}}
+  {{- if kindIs "map" . -}}
+    {{- $secrets = append $secrets .name -}}
+  {{- else -}}
+    {{- $secrets = append $secrets . -}}
+  {{- end -}}
 {{- end -}}
 {{- range (default (list) .Values.global.privateRegistry.pullSecretNames) -}}
   {{- $secrets = append $secrets . -}}
