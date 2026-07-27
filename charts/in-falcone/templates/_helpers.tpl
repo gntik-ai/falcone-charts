@@ -176,7 +176,11 @@ temporal.io/role: {{ .role }}
 {{- define "in-falcone.imagePullSecrets" -}}
 {{- $secrets := list -}}
 {{- range (default (list) .Values.global.imagePullSecrets) -}}
-  {{- $secrets = append $secrets (.name | default .) -}}
+  {{- if kindIs "map" . -}}
+    {{- $secrets = append $secrets .name -}}
+  {{- else -}}
+    {{- $secrets = append $secrets . -}}
+  {{- end -}}
 {{- end -}}
 {{- range (default (list) .Values.global.privateRegistry.pullSecretNames) -}}
   {{- $secrets = append $secrets . -}}
@@ -187,6 +191,42 @@ imagePullSecrets:
 {{- range $secrets }}
   - name: {{ . }}
 {{- end }}
+{{- end -}}
+{{- end -}}
+
+{{- /* JSON form consumed by control-plane-created Jobs. Keep normalization
+       identical to in-falcone.imagePullSecrets so runtime Jobs can pull from
+       the same Harbor/private registries as chart-rendered workloads. */ -}}
+{{- define "in-falcone.imagePullSecretNamesJson" -}}
+{{- $secrets := list -}}
+{{- range (default (list) .Values.global.imagePullSecrets) -}}
+  {{- if kindIs "map" . -}}
+    {{- $secrets = append $secrets .name -}}
+  {{- else -}}
+    {{- $secrets = append $secrets . -}}
+  {{- end -}}
+{{- end -}}
+{{- range (default (list) .Values.global.privateRegistry.pullSecretNames) -}}
+  {{- $secrets = append $secrets . -}}
+{{- end -}}
+{{- $secrets | uniq | toJson -}}
+{{- end -}}
+
+{{- /* SeaweedFS image contract shared by the vendored subchart and dynamic
+       control-plane IAM Jobs. Mirrors seaweedfs.image, including namespace
+       override, global registry rewrite, and digest precedence. */ -}}
+{{- define "in-falcone.seaweedfsImage" -}}
+{{- $image := .Values.global.seaweedfs.image -}}
+{{- $name := $image.name | toString -}}
+{{- $repositoryName := $image.repository | default "" | toString -}}
+{{- if $repositoryName -}}
+  {{- $name = printf "%s/%s" (trimSuffix "/" $repositoryName) (base $name) -}}
+{{- end -}}
+{{- $repository := include "in-falcone.normalizeRepository" (dict "Values" .Values "repository" $name) -}}
+{{- if $image.digest -}}
+  {{- printf "%s@%s" $repository $image.digest -}}
+{{- else -}}
+  {{- printf "%s:%s" $repository ($image.tag | default "4.33") -}}
 {{- end -}}
 {{- end -}}
 
@@ -223,7 +263,11 @@ imagePullSecrets:
 {{- define "in-falcone.temporal.imagePullSecrets" -}}
 {{- $secrets := list -}}
 {{- range (default (list) .Values.global.imagePullSecrets) -}}
-  {{- $secrets = append $secrets (.name | default .) -}}
+  {{- if kindIs "map" . -}}
+    {{- $secrets = append $secrets .name -}}
+  {{- else -}}
+    {{- $secrets = append $secrets . -}}
+  {{- end -}}
 {{- end -}}
 {{- range (default (list) .Values.global.privateRegistry.pullSecretNames) -}}
   {{- $secrets = append $secrets . -}}

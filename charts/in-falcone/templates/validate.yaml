@@ -2,6 +2,140 @@
 {{- $components := list "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" -}}
 {{- $coreServiceAliases := list "bootstrap" "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "seaweedfs" "grafana" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" "eso" "openbao" "temporal" "mcp" -}}
 {{- $supportedExposureKinds := list "Ingress" "LoadBalancer" "Route" -}}
+{{- $webhookKey := .Values.global.webhookSigningKey -}}
+{{- $webhookDatabase := .Values.global.webhookDatabase -}}
+{{- $webhookDatabasePrincipals := $webhookDatabase.principals -}}
+{{- $adoption := $webhookKey.adoption -}}
+{{- $rotation := $webhookKey.rotation -}}
+{{- $reservedWebhookKey := "WEBHOOK_SIGNING_KEY" -}}
+{{- $reservedWebhookDatabaseNames := list
+      "WEBHOOK_SCHEMA_DATABASE_URL"
+      "WEBHOOK_RUNTIME_DATABASE_URL"
+      "WEBHOOK_KEY_WRITE_DATABASE_URL"
+      "WEBHOOK_KEY_LIFECYCLE_DATABASE_URL"
+      "WEBHOOK_SCHEMA_DATABASE_ROLE"
+      "WEBHOOK_RUNTIME_DATABASE_ROLE"
+      "WEBHOOK_KEY_WRITE_DATABASE_ROLE"
+      "WEBHOOK_KEY_LIFECYCLE_DATABASE_ROLE"
+      "WEBHOOK_DATABASE_AUTHORITY_GRANTOR_ROLE" -}}
+{{- $protectedWebhookDatabaseRoles := list
+      $webhookDatabasePrincipals.schema
+      $webhookDatabasePrincipals.runtime
+      $webhookDatabasePrincipals.writer
+      $webhookDatabasePrincipals.lifecycle
+      $webhookDatabasePrincipals.grantor
+      "falcone_app"
+      "falcone_webhook_key_writer"
+      "falcone_webhook_key_lifecycle" -}}
+{{- if ne (len ($protectedWebhookDatabaseRoles | uniq)) (len $protectedWebhookDatabaseRoles) -}}
+  {{- fail "global.webhookDatabase principal and fixed authority role names must all be distinct" -}}
+{{- end -}}
+{{- if ne $webhookDatabasePrincipals.grantor $webhookDatabase.administrator.role -}}
+  {{- fail "global.webhookDatabase.principals.grantor must equal the durable PostgreSQL administrator role" -}}
+{{- end -}}
+{{- if and .Release.IsInstall (or (eq $adoption.mode "legacy") (ne $rotation.action "none")) -}}
+  {{- fail "webhook key adoption/rotation/recovery/finalization is upgrade-only and requires an existing deployment maintenance window" -}}
+{{- end -}}
+{{- if and .Release.IsInstall $webhookDatabase.migration.firstHandoff -}}
+  {{- fail "global.webhookDatabase.migration.firstHandoff is upgrade-only; fresh installs initialize credentials without it" -}}
+{{- end -}}
+{{- $requiresWebhookDatabaseBackup := .Release.IsUpgrade -}}
+{{- if $requiresWebhookDatabaseBackup -}}
+  {{- if or
+        (not $webhookDatabase.migration.backupVerified)
+        (not $webhookDatabase.migration.parityVerified)
+        (eq ($webhookDatabase.migration.backupReference | default "") "") -}}
+    {{- fail "global.webhookDatabase.migration requires backupVerified, parityVerified, and a non-secret backupReference before every applying upgrade, including no-op authority replay" -}}
+  {{- end -}}
+{{- end -}}
+{{- range $entry := (.Values.controlPlane.env | default (list)) -}}
+  {{- if eq ($entry.name | default "") $reservedWebhookKey -}}
+    {{- fail "controlPlane.env must not define reserved WEBHOOK_SIGNING_KEY; configure global.webhookSigningKey Secret references only" -}}
+  {{- end -}}
+  {{- if has ($entry.name | default "") $reservedWebhookDatabaseNames -}}
+    {{- fail "controlPlane.env must not define reserved webhook database DSN/role entries; configure global.webhookDatabase references only" -}}
+  {{- end -}}
+{{- end -}}
+{{- $transportSecurity := .Values.global.transportSecurity | default (dict) -}}
+{{- range $entry := ($transportSecurity.env | default (list)) -}}
+  {{- if eq ($entry.name | default "") $reservedWebhookKey -}}
+    {{- fail "global.transportSecurity.env must not define reserved WEBHOOK_SIGNING_KEY; configure global.webhookSigningKey Secret references only" -}}
+  {{- end -}}
+  {{- if has ($entry.name | default "") $reservedWebhookDatabaseNames -}}
+    {{- fail "global.transportSecurity.env must not define reserved webhook database DSN/role entries; configure global.webhookDatabase references only" -}}
+  {{- end -}}
+{{- end -}}
+{{- $controlPlaneInline := .Values.controlPlane.config.inline | default (dict) -}}
+{{- if hasKey $controlPlaneInline $reservedWebhookKey -}}
+  {{- fail "controlPlane.config.inline must not define reserved WEBHOOK_SIGNING_KEY; configure global.webhookSigningKey Secret references only" -}}
+{{- end -}}
+{{- range $reservedName := $reservedWebhookDatabaseNames -}}
+  {{- if hasKey $controlPlaneInline $reservedName -}}
+    {{- fail "controlPlane.config.inline must not define reserved webhook database DSN/role entries; configure global.webhookDatabase references only" -}}
+  {{- end -}}
+{{- end -}}
+{{- if ($transportSecurity.enabled | default false) -}}
+  {{- if not .Values.controlPlane.transportSecurityClient -}}
+    {{- fail "controlPlane.transportSecurityClient must be true when global.transportSecurity.enabled=true" -}}
+  {{- end -}}
+  {{- if eq ($transportSecurity.caSecretName | default "") "" -}}
+    {{- fail "global.transportSecurity.caSecretName is required for hardened PostgreSQL verify-full" -}}
+  {{- end -}}
+  {{- $caMountPath := $transportSecurity.caMountPath | default "" -}}
+  {{- if or (not (hasPrefix "/" $caMountPath)) (contains ".." $caMountPath) -}}
+    {{- fail "global.transportSecurity.caMountPath must be an absolute traversal-free path" -}}
+  {{- end -}}
+  {{- $postgresModeCount := 0 -}}
+  {{- $postgresRootCount := 0 -}}
+  {{- range $entry := ($transportSecurity.env | default (list)) -}}
+    {{- if eq ($entry.name | default "") "PGSSLMODE" -}}
+      {{- $postgresModeCount = add1 $postgresModeCount -}}
+      {{- if ne ($entry.value | default "") "verify-full" -}}
+        {{- fail "global.transportSecurity.env PGSSLMODE must be verify-full" -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if eq ($entry.name | default "") "PGSSLROOTCERT" -}}
+      {{- $postgresRootCount = add1 $postgresRootCount -}}
+      {{- $rootPath := $entry.value | default "" -}}
+      {{- if or (not (hasPrefix (printf "%s/" (trimSuffix "/" $caMountPath)) $rootPath)) (contains ".." $rootPath) -}}
+        {{- fail "global.transportSecurity.env PGSSLROOTCERT must be a traversal-free file below caMountPath" -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if or (ne $postgresModeCount 1) (ne $postgresRootCount 1) -}}
+    {{- fail "global.transportSecurity.env must define exactly one PGSSLMODE and PGSSLROOTCERT for hardened PostgreSQL" -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (eq $adoption.mode "legacy") (eq ($adoption.requestId | default "") "") -}}
+  {{- fail "global.webhookSigningKey.adoption.requestId is required when adoption.mode=legacy" -}}
+{{- end -}}
+{{- if and (eq $adoption.mode "legacy") $webhookKey.create (ne $rotation.action "rotate") -}}
+  {{- fail "global.webhookSigningKey.create must be false for legacy adoption/recovery material; provision the exact historical value externally" -}}
+{{- end -}}
+{{- if and (eq $adoption.mode "none") (ne ($adoption.requestId | default "") "") -}}
+  {{- fail "global.webhookSigningKey.adoption.requestId must be empty when adoption.mode=none" -}}
+{{- end -}}
+{{- if eq $rotation.action "none" -}}
+  {{- if or $rotation.requestId $rotation.sourceSecretName $rotation.sourceSecretKey $rotation.rotationId -}}
+    {{- fail "global.webhookSigningKey.rotation fields must be empty when rotation.action=none" -}}
+  {{- end -}}
+{{- else -}}
+  {{- if eq ($rotation.requestId | default "") "" -}}
+    {{- fail "global.webhookSigningKey.rotation.requestId is required for lifecycle actions" -}}
+  {{- end -}}
+  {{- if eq $rotation.action "finalize" -}}
+    {{- if or (eq ($rotation.sourceSecretName | default "") "") (eq ($rotation.sourceSecretKey | default "") "") -}}
+      {{- fail "global.webhookSigningKey.rotation source Secret identity is required for finalize" -}}
+    {{- end -}}
+  {{- else -}}
+    {{- if or (eq ($rotation.sourceSecretName | default "") "") (eq ($rotation.sourceSecretKey | default "") "") (eq ($rotation.rotationId | default "") "") -}}
+      {{- fail "global.webhookSigningKey.rotation source identity and rotationId are required for rotate/recover" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if and (eq $rotation.sourceSecretName $webhookKey.secretName) (eq $rotation.sourceSecretKey $webhookKey.secretKey) -}}
+    {{- fail "global.webhookSigningKey source and target Secret identities must differ" -}}
+  {{- end -}}
+{{- end -}}
 {{- range $alias := $coreServiceAliases }}
   {{- $block := index $.Values $alias -}}
   {{- if and (kindIs "map" $block) (hasKey $block "enabled") -}}

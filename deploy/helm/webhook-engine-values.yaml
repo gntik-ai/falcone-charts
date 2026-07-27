@@ -1,8 +1,6 @@
 webhookEngine:
   enabled: true
   env:
-    WEBHOOK_SIGNING_KEY:
-      secretRef: webhook-engine-signing-key
     WEBHOOK_MAX_SUBSCRIPTIONS_PER_WORKSPACE: 25
     WEBHOOK_MAX_DELIVERIES_PER_MINUTE_PER_WORKSPACE: 100
     WEBHOOK_MAX_RETRY_ATTEMPTS: 5

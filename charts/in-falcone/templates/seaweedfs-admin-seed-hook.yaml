@@ -18,8 +18,6 @@
   no seed Job.
 */ -}}
 {{- if not .Values.seaweedfs.s3.enableAuth }}
-{{- $seaweedfsRepository := dig "global" "seaweedfs" "image" "name" "chrislusf/seaweedfs" .Values.seaweedfs -}}
-{{- $seaweedfsImage := dict "repository" $seaweedfsRepository "tag" "4.33" -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -48,21 +46,32 @@ spec:
         app.kubernetes.io/component: seaweedfs-admin-seed
     spec:
       restartPolicy: Never
-      {{- with .Values.global.imagePullSecrets }}
-      imagePullSecrets:
-        {{- range . }}
-        - name: {{ .name | default . }}
-        {{- end }}
-      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: admin-seed
           # Pinned to the seaweedfs subchart image selection so Harbor/airgap
           # installs follow global.imageRegistry and the OpenShift overlay.
-          image: {{ include "in-falcone.imageNameWithTag" (dict "root" . "image" $seaweedfsImage) | quote }}
-          imagePullPolicy: IfNotPresent
+          image: {{ include "in-falcone.seaweedfsImage" . | quote }}
+          imagePullPolicy: {{ .Values.global.seaweedfs.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            {{- if not (dig "podSecurity" "openshiftRestricted" false .Values.global) }}
+            runAsUser: 1000
+            runAsGroup: 1000
+            {{- end }}
           env:
             - name: SW_MASTER
               value: "{{ .Release.Name }}-seaweedfs-master.{{ .Release.Namespace }}:9333"
+            - name: SW_FILER
+              value: "{{ .Release.Name }}-seaweedfs-filer.{{ .Release.Namespace }}:8888"
             - name: ADMIN_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
@@ -82,7 +91,7 @@ spec:
               while [ "$i" -le 60 ]; do
                 out=$(printf 's3.configure -apply -user falcone-s3-admin -access_key %s -secret_key %s -actions Admin,Read,Write,List,Tagging\n' \
                         "$ADMIN_ACCESS_KEY" "$ADMIN_SECRET_KEY" \
-                      | weed shell -master="$SW_MASTER" 2>&1) || true
+                      | weed shell -master="$SW_MASTER" -filer="$SW_FILER" 2>&1) || true
                 if printf '%s' "$out" | grep -q 'falcone-s3-admin'; then
                   echo "OK: admin identity present in the filer IAM config."
                   exit 0

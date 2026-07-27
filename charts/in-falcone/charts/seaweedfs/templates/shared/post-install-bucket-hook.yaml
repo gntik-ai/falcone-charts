@@ -62,14 +62,25 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name | quote }}
     spec:
       restartPolicy: Never
-      {{- if .Values.filer.podSecurityContext.enabled }}
-      securityContext: {{- omit .Values.filer.podSecurityContext "enabled" | toYaml | nindent 8 }}
-      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       {{- include "seaweedfs.imagePullSecrets" $ | nindent 6 }}
       containers:
       - name: post-install-job
         image: {{ template "seaweedfs.master.image" . }}
         imagePullPolicy: {{ $.Values.global.seaweedfs.imagePullPolicy | default "IfNotPresent" }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          {{- if not (dig "podSecurity" "openshiftRestricted" false .Values.global) }}
+          runAsUser: 1000
+          runAsGroup: 1000
+          {{- end }}
         env:
           - name: WEED_CLUSTER_DEFAULT
             value: "sw"
@@ -195,9 +206,6 @@ spec:
         {{- with coalesce .Values.allInOne.s3.createBucketsHook.resources .Values.s3.createBucketsHook.resources .Values.filer.s3.createBucketsHook.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- if .Values.filer.containerSecurityContext.enabled }}
-        securityContext: {{- omit .Values.filer.containerSecurityContext "enabled" | toYaml | nindent 12 }}
         {{- end }}
     {{- if $enableAuth }}
       volumes:

@@ -1,0 +1,12 @@
+{{- $name := printf "%s-webhook-db-principal-gate" .Release.Name | trunc 63 | trimSuffix "-" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-database-principal-gate
+data:
+  principal-gate.sh: |
+{{ .Files.Get "files/webhook-database-principal-gate.sh" | indent 4 }}

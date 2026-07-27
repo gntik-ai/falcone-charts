@@ -3,8 +3,9 @@
   SeaweedFS inter-component TLS bootstrap (add-seaweedfs-deployment, task 8.2 / OQ-3).
 
   SAFE DEFAULT for clusters WITHOUT cert-manager: a Helm pre-install/pre-upgrade
-  hook Job that generates a self-signed CA + leaf certs with openssl and writes
-  them into the Secrets the SeaweedFS sub-chart consumes when
+  hook Job whose restricted init container generates a self-signed CA + leaf
+  certs and whose separate Kubernetes client writes them into the Secrets the
+  SeaweedFS sub-chart consumes when
   certificates.externalCertificates.enabled=true:
     <release>-seaweedfs-{ca,master,volume,filer,client}-cert
   Each leaf Secret carries tls.crt/tls.key/ca.crt; the ca Secret carries the CA.
@@ -19,6 +20,7 @@
   master/volume/filer/s3 pods mount them.
 */ -}}
 {{- $b := .Values.seaweedfsTls.bootstrap -}}
+{{- $generator := $b.generatorImage -}}
 {{- $prefix := printf "%s-seaweedfs" .Release.Name -}}
 {{- $ns := .Release.Namespace -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -97,13 +99,49 @@ spec:
       serviceAccountName: {{ .Release.Name }}-seaweedfs-tls-bootstrap
       {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
       securityContext: {{- toYaml .Values.seaweedfsTls.bootstrap.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: tls-generator
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" $generator "name" "SeaweedFS TLS generator") | quote }}
+          imagePullPolicy: {{ $generator.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PREFIX
+              value: {{ $prefix | quote }}
+            - name: CN
+              value: {{ $b.commonName | quote }}
+            - name: DAYS
+              value: {{ $b.days | quote }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              umask 077
+              D=/tls-bootstrap
+              openssl req -x509 -nodes -newkey rsa:2048 -days "$DAYS" \
+                -keyout "$D/ca.key" -out "$D/ca.crt" -subj "/CN=$CN"
+              make_leaf() {
+                comp="$1"
+                openssl req -nodes -newkey rsa:2048 \
+                  -keyout "$D/$comp.key" -out "$D/$comp.csr" \
+                  -subj "/CN=${PREFIX}-$comp"
+                openssl x509 -req -in "$D/$comp.csr" -CA "$D/ca.crt" -CAkey "$D/ca.key" \
+                  -CAcreateserial -days "$DAYS" -out "$D/$comp.crt"
+              }
+              for c in master volume filer client; do make_leaf "$c"; done
+          volumeMounts:
+            - name: tls-bootstrap
+              mountPath: /tls-bootstrap
       containers:
-        - name: tls-bootstrap
-          image: {{ .Values.seaweedfsTls.bootstrap.image.repository }}:{{ .Values.seaweedfsTls.bootstrap.image.tag }}
+        - name: kubernetes-client
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" $b.image "name" "SeaweedFS TLS Kubernetes client") | quote }}
           imagePullPolicy: {{ .Values.seaweedfsTls.bootstrap.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           env:
@@ -119,22 +157,27 @@ spec:
             - /bin/sh
             - -ec
             - |
-              command -v openssl >/dev/null || { echo "openssl required in the bootstrap image"; exit 1; }
-              # Skip if the CA Secret already exists (idempotent re-install).
-              if kubectl -n "$NS" get secret "${PREFIX}-ca-cert" >/dev/null 2>&1; then
-                echo "CA secret already present; skipping TLS bootstrap"; exit 0
+              D=/tls-bootstrap
+              secret_complete() {
+                name="$1"
+                kubectl -n "$NS" get secret "$name" >/dev/null 2>&1 || return 1
+                for key in 'tls\.crt' 'tls\.key' 'ca\.crt'; do
+                  value=$(kubectl -n "$NS" get secret "$name" -o "jsonpath={.data.$key}" 2>/dev/null) || return 1
+                  [ -n "$value" ] || return 1
+                done
+              }
+              all_complete=true
+              for component in ca master volume filer client; do
+                secret_complete "${PREFIX}-${component}-cert" || all_complete=false
+              done
+              if [ "$all_complete" = true ]; then
+                echo "all five SeaweedFS TLS Secrets are complete; preserving the existing CA"; exit 0
               fi
-              D=$(mktemp -d)
-              # Self-signed CA.
-              openssl req -x509 -nodes -newkey rsa:2048 -days "$DAYS" \
-                -keyout "$D/ca.key" -out "$D/ca.crt" -subj "/CN=$CN"
+              echo "SeaweedFS TLS Secret set is missing or partial; replacing the complete CA/leaf set"
               make_leaf() {
                 comp="$1"
-                openssl req -nodes -newkey rsa:2048 \
-                  -keyout "$D/$comp.key" -out "$D/$comp.csr" \
-                  -subj "/CN=${PREFIX}-$comp"
-                openssl x509 -req -in "$D/$comp.csr" -CA "$D/ca.crt" -CAkey "$D/ca.key" \
-                  -CAcreateserial -days "$DAYS" -out "$D/$comp.crt"
+                test -s "$D/$comp.key"
+                test -s "$D/$comp.crt"
                 kubectl -n "$NS" create secret generic "${PREFIX}-${comp}-cert" \
                   --from-file=tls.crt="$D/$comp.crt" \
                   --from-file=tls.key="$D/$comp.key" \
@@ -148,4 +191,10 @@ spec:
                 --dry-run=client -o yaml | kubectl apply -f -
               for c in master volume filer client; do make_leaf "$c"; done
               echo "SeaweedFS inter-component TLS secrets created under ${PREFIX}-*-cert"
+          volumeMounts:
+            - name: tls-bootstrap
+              mountPath: /tls-bootstrap
+      volumes:
+        - name: tls-bootstrap
+          emptyDir: {}
 {{- end }}

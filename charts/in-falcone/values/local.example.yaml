@@ -12,7 +12,7 @@ deployment:
 
 controlPlane:
   image:
-    tag: 0.3.0-dev1
+    tag: 0.3.1
   config:
     inline:
       NODE_ENV: development

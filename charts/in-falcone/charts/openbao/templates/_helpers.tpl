@@ -37,12 +37,20 @@
 
 {{- define "openbao.image" -}}
 {{- $repo := include "openbao.normalizeRepository" (dict "Values" .root.Values "repository" .image.repository) -}}
+{{- if .image.digest -}}
+{{- printf "%s@%s" $repo .image.digest -}}
+{{- else -}}
 {{- printf "%s:%s" $repo .image.tag -}}
+{{- end -}}
 {{- end -}}
 {{- define "openbao.imagePullSecrets" -}}
 {{- $secrets := list -}}
 {{- range (default (list) .Values.global.imagePullSecrets) -}}
-  {{- $secrets = append $secrets (.name | default .) -}}
+  {{- if kindIs "map" . -}}
+    {{- $secrets = append $secrets .name -}}
+  {{- else -}}
+    {{- $secrets = append $secrets . -}}
+  {{- end -}}
 {{- end -}}
 {{- range (default (list) .Values.global.privateRegistry.pullSecretNames) -}}
   {{- $secrets = append $secrets . -}}

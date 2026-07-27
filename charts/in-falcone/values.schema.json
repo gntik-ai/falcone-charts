@@ -38,7 +38,9 @@
         "environment",
         "createNamespace",
         "airgap",
-        "privateRegistry"
+        "privateRegistry",
+        "webhookSigningKey",
+        "webhookDatabase"
       ],
       "properties": {
         "nameOverride": {
@@ -111,6 +113,242 @@
             }
           },
           "additionalProperties": true
+        },
+        "webhookSigningKey": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "create",
+            "secretName",
+            "secretKey",
+            "adoption",
+            "rotation"
+          ],
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            },
+            "secretKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "adoption": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "requestId"
+              ],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "legacy"
+                  ]
+                },
+                "requestId": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                }
+              }
+            },
+            "rotation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "requestId",
+                "sourceSecretName",
+                "sourceSecretKey",
+                "rotationId",
+                "recoveryWindowSeconds"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "rotate",
+                    "recover",
+                    "finalize"
+                  ]
+                },
+                "requestId": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "sourceSecretName": {
+                  "type": "string",
+                  "maxLength": 253,
+                  "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                },
+                "sourceSecretKey": {
+                  "type": "string",
+                  "maxLength": 253,
+                  "pattern": "^$|^[A-Za-z0-9._-]+$"
+                },
+                "rotationId": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "recoveryWindowSeconds": {
+                  "type": "integer",
+                  "minimum": 300,
+                  "maximum": 2592000
+                }
+              }
+            }
+          }
+        },
+        "webhookDatabase": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "credentials",
+            "principals",
+            "administrator",
+            "connection",
+            "migration",
+            "bootstrapImage",
+            "securityContext",
+            "resources"
+          ],
+          "properties": {
+            "credentials": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "create",
+                "secretName"
+              ],
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "secretName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                }
+              }
+            },
+            "principals": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "schema",
+                "runtime",
+                "writer",
+                "lifecycle",
+                "grantor"
+              ],
+              "properties": {
+                "schema": {
+                  "$ref": "#/definitions/postgresqlRoleName"
+                },
+                "runtime": {
+                  "$ref": "#/definitions/postgresqlRoleName"
+                },
+                "writer": {
+                  "$ref": "#/definitions/postgresqlRoleName"
+                },
+                "lifecycle": {
+                  "$ref": "#/definitions/postgresqlRoleName"
+                },
+                "grantor": {
+                  "$ref": "#/definitions/postgresqlRoleName"
+                }
+              }
+            },
+            "administrator": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "role"
+              ],
+              "properties": {
+                "role": {
+                  "$ref": "#/definitions/postgresqlRoleName"
+                }
+              }
+            },
+            "connection": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "host",
+                "port",
+                "database"
+              ],
+              "properties": {
+                "host": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "database": {
+                  "$ref": "#/definitions/postgresqlRoleName"
+                }
+              }
+            },
+            "migration": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "firstHandoff",
+                "backupVerified",
+                "parityVerified",
+                "backupReference"
+              ],
+              "properties": {
+                "firstHandoff": {
+                  "type": "boolean",
+                  "description": "Upgrade-only one-time legacy credential/ownership handoff selector; it does not replace the backup gate required on every upgrade."
+                },
+                "backupVerified": {
+                  "type": "boolean",
+                  "description": "Must be true on every Helm upgrade because the authority bootstrap applies on every upgrade, including a no-op replay."
+                },
+                "parityVerified": {
+                  "type": "boolean",
+                  "description": "Must be true on every Helm upgrade after backup restore and database/application parity have been verified."
+                },
+                "backupReference": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "description": "Non-secret backup evidence identifier required on every Helm upgrade; empty is permitted only for fresh-install values."
+                }
+              }
+            },
+            "bootstrapImage": {
+              "$ref": "#/definitions/image"
+            },
+            "securityContext": {
+              "type": "object"
+            },
+            "resources": {
+              "type": "object"
+            }
+          }
         },
         "defaultStorageClass": {
           "type": "string"
@@ -1797,6 +2035,12 @@
     }
   },
   "definitions": {
+    "postgresqlRoleName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_$-]{0,62}$"
+    },
     "coreEnabledReplicaRole": {
       "type": "object",
       "properties": {

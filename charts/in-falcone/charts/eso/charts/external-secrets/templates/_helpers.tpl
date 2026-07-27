@@ -33,6 +33,56 @@ operator can run in the same namespace that the OpenBao auth and NetworkPolicy v
 {{- end }}
 
 {{/*
+Merge umbrella-global, private-registry, and component-local pull secrets.
+The umbrella schema accepts global entries as either strings or {name: ...}
+objects, while the vendored ESO chart traditionally accepts local object lists.
+*/}}
+{{- define "external-secrets.imagePullSecrets" -}}
+{{- $root := .root -}}
+{{- $global := default (dict) $root.Values.global -}}
+{{- $privateRegistry := default (dict) $global.privateRegistry -}}
+{{- $secrets := list -}}
+{{- $configured := default (list) $global.imagePullSecrets -}}
+{{- if kindIs "string" $configured -}}
+  {{- if ne $configured "" -}}
+    {{- $secrets = append $secrets $configured -}}
+  {{- end -}}
+{{- else -}}
+  {{- range $configured -}}
+    {{- if kindIs "map" . -}}
+      {{- $secrets = append $secrets .name -}}
+    {{- else -}}
+      {{- $secrets = append $secrets . -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- range (default (list) $privateRegistry.pullSecretNames) -}}
+  {{- $secrets = append $secrets . -}}
+{{- end -}}
+{{- $local := default (list) .local -}}
+{{- if kindIs "string" $local -}}
+  {{- if ne $local "" -}}
+    {{- $secrets = append $secrets $local -}}
+  {{- end -}}
+{{- else -}}
+  {{- range $local -}}
+    {{- if kindIs "map" . -}}
+      {{- $secrets = append $secrets .name -}}
+    {{- else -}}
+      {{- $secrets = append $secrets . -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $secrets = $secrets | uniq -}}
+{{- if gt (len $secrets) 0 }}
+imagePullSecrets:
+{{- range $secrets }}
+  - name: {{ . }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "external-secrets.chart" -}}
