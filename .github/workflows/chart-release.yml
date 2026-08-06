@@ -37,6 +37,13 @@ jobs:
         run: helm lint charts/in-falcone
       - name: Render default release
         run: helm template falcone charts/in-falcone --namespace falcone >/dev/null
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install black-box test dependencies
+        run: python -m pip install --requirement tests/blackbox/requirements.txt
+      - name: Verify rendered control-plane health probes
+        run: bash tests/blackbox/run.sh
       - name: Package chart
         run: helm package charts/in-falcone --destination .chart-packages
       - uses: actions/upload-artifact@v4
