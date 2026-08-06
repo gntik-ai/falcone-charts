@@ -38,3 +38,12 @@ Webhook PostgreSQL authority:
 - Credential hook cleanup (Helm 4.1.4): support hooks are deleted after success, including when the later credential Job fails; the failed Job and owned Pod remain as bounded evidence, and before-hook-creation recreates support on retry.
 - Runbook: charts/in-falcone/WEBHOOK-DATABASE-AUTHORITY.md
 - Rollback boundary: use forward key recovery or a compatible database-and-Secret restore; Helm rollback alone cannot reverse authority/ownership state.
+{{- if .Values.global.openshiftBuild.enabled }}
+OpenShift source builds are enabled. Create the referenced Secret {{ .Values.global.openshiftBuild.webhookSecret }} with a key named WebHookSecretKey; this chart never prints secret material.
+{{- range $name := list "control-plane" "control-plane-executor" "web-console" "workflow-worker" "mcp-runtime" "fn-runtime" }}
+- GitLab webhook ({{ $name }}): `webhook_secret=$(oc -n {{ $.Release.Namespace }} get secret {{ $.Values.global.openshiftBuild.webhookSecret }} -o jsonpath='{.data.WebHookSecretKey}' | base64 -d); printf '%s/apis/build.openshift.io/v1/namespaces/%s/buildconfigs/in-falcone-{{ $name }}/webhooks/%s/gitlab\n' "$(oc whoami --show-server)" "{{ $.Release.Namespace }}" "$webhook_secret"`
+{{- end }}
+{{- with .Values.global.openshiftBuild.git.sourceSecret }}
+- Private mirror source Secret: {{ . }} (must grant the builder access to {{ $.Values.global.openshiftBuild.git.uri }})
+{{- end }}
+{{- end }}

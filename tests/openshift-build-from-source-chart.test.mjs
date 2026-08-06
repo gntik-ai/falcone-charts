@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import test from 'node:test';
+import fs from 'node:fs';
+
+const chart='charts/in-falcone';
+function render(args=[]){const r=spawnSync('helm',['template','t',chart,...args],{encoding:'utf8'}); assert.equal(r.status,0,r.stderr); return r.stdout;}
+test('disabled mode has no OpenShift objects and NOTES are silent',()=>{const y=render(); assert.equal((y.match(/kind: BuildConfig/g)||[]).length,0); assert.equal((y.match(/kind: ImageStream\n/g)||[]).length,0); assert.equal(y.includes('image.openshift.io/triggers'),false);});
+test('enabled mode renders six builds/streams and contract fields',()=>{const y=render(['--set','global.openshiftBuild.enabled=true','--set','global.openshiftBuild.git.uri=https://git.example/repo','--set','global.openshiftBuild.git.ref=main','--set','global.openshiftBuild.git.sourceSecret=source','--set','global.openshiftBuild.webhookSecret=hooks']); assert.equal((y.match(/kind: BuildConfig/g)||[]).length,6); assert.equal((y.match(/kind: ImageStream\n/g)||[]).length,6); for(const n of ['control-plane','control-plane-executor','web-console','workflow-worker','mcp-runtime','fn-runtime']){assert.match(y,new RegExp(`in-falcone-${n}`)); assert.match(y,new RegExp(`apps/${n}/Dockerfile`));} assert.equal((y.match(/type: ConfigChange/g)||[]).length,6); assert.equal((y.match(/type: GitLab/g)||[]).length,6); assert.equal((y.match(/secretReference:/g)||[]).length,6); assert.match(y,/MCP_RUNTIME_IMAGE:.*mcp-runtime/); assert.match(y,/FN_RUNTIME_IMAGE/); assert.equal((y.match(/image.openshift.io\/triggers/g)||[]).length,4);});
+test('NOTES emits six safe executable commands without secret bytes',()=>{const y=fs.readFileSync(`${chart}/templates/NOTES.txt`,'utf8'); assert.equal((y.match(/webhook_secret=\$\(oc -n/g)||[]).length,1); assert.match(y,/oc whoami --show-server/); assert.equal(y.includes('WebHookSecretKey:'),false);});
+test('strict schema rejects unknown key and missing required enabled values',()=>{const p=spawnSync('helm',['template','t',chart,'--set','global.openshiftBuild.enabled=true'],{encoding:'utf8'}); assert.notEqual(p.status,0); const s=JSON.parse(fs.readFileSync(`${chart}/values.schema.json`)); assert.equal(s.properties.global.properties.openshiftBuild.additionalProperties,false);});

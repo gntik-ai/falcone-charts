@@ -115,6 +115,12 @@ global:
     caMountPath: /etc/falcone/tls
     # Env appended to opted-in components (e.g. PGSSLMODE, MONGO_TLS, KAFKA_SSL, NODE_EXTRA_CA_CERTS).
     env: []
+  openshiftBuild:
+    enabled: false
+    git: {uri: "", ref: main, sourceSecret: ""}
+    webhookSecret: ""
+    tag: latest
+## OpenShift build mode is configured under global.openshiftBuild so aliased subcharts receive it.
 publicSurface:
   routePrefixes:
     controlPlane: /control-plane
@@ -3445,7 +3451,7 @@ controlPlane:
     - name: KAFKA_BROKERS
       value: "{{ .Release.Name }}-kafka:9092"
     - name: FN_RUNTIME_IMAGE
-      value: '{{ include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.functionExecutor.runtimeImage "name" "function runtime") }}'
+      value: '{{ include "component-wrapper.renderImage" (dict "Values" .Values "Release" .Release "image" .Values.functionExecutor.runtimeImage "name" "function runtime" "imageIdentity" (ternary "fn-runtime" "" .Values.global.openshiftBuild.enabled)) }}'
   envFromSecrets: []
   envFromConfigMaps:
     - in-falcone-control-plane-config

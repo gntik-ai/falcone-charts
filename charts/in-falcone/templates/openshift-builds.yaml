@@ -1,0 +1,46 @@
+{{- $b := .Values.global.openshiftBuild }}
+{{- if $b.enabled }}
+{{- $services := list (dict "name" "control-plane" "identity" "control-plane" "path" "apps/control-plane/Dockerfile") (dict "name" "control-plane-executor" "identity" "control-plane-executor" "path" "apps/control-plane-executor/Dockerfile") (dict "name" "web-console" "identity" "web-console" "path" "apps/web-console/Dockerfile") (dict "name" "workflow-worker" "identity" "workflow-worker" "path" "apps/workflow-worker/Dockerfile") (dict "name" "mcp-runtime" "identity" "mcp-runtime" "path" "apps/mcp-runtime/Dockerfile") (dict "name" "fn-runtime" "identity" "fn-runtime" "path" "apps/fn-runtime/Dockerfile") }}
+{{- range $s := $services }}
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: in-falcone-{{ $s.identity }}
+  labels:
+    app.kubernetes.io/part-of: in-falcone
+spec: {}
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: in-falcone-{{ $s.name }}
+  labels:
+    app.kubernetes.io/part-of: in-falcone
+spec:
+  runPolicy: SerialLatestOnly
+  source:
+    type: Git
+    git:
+      uri: {{ required "global.openshiftBuild.git.uri is required" $b.git.uri | quote }}
+      ref: {{ $b.git.ref | quote }}
+    {{- with $b.git.sourceSecret }}
+    sourceSecret:
+      name: {{ . | quote }}
+    {{- end }}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: {{ $s.path | quote }}
+  output:
+    to:
+      kind: ImageStreamTag
+      name: in-falcone-{{ $s.identity }}:{{ $b.tag }}
+  triggers:
+    - type: ConfigChange
+    - type: GitLab
+      gitlab:
+        secretReference:
+          name: {{ required "global.openshiftBuild.webhookSecret is required" $b.webhookSecret | quote }}
+{{- end }}
+{{- end }}

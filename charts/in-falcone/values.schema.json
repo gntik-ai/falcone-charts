@@ -355,6 +355,36 @@
         },
         "podSecurity": {
           "type": "object"
+        },
+        "openshiftBuild": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "git": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "sourceSecret": {
+                  "type": "string"
+                }
+              }
+            },
+            "webhookSecret": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            }
+          }
         }
       },
       "additionalProperties": true

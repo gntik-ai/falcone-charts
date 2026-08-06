@@ -6,10 +6,10 @@ metadata:
     {{- include "in-falcone.labels" . | nindent 4 }}
 data:
   BAO_ADDR: {{ include "in-falcone.openbaoAddress" . | quote }}
-  MCP_RUNTIME_IMAGE: {{ include "in-falcone.imageNameWithTag" (dict "root" . "image" .Values.mcp.runtimeImage) | quote }}
-{{- with .Values.mcp.runtimeImage.digest }}
+  MCP_RUNTIME_IMAGE: "{{ if .Values.global.openshiftBuild.enabled }}{{ include "component-wrapper.renderImage" (dict "Values" .Values "Release" .Release "image" .Values.mcp.runtimeImage "imageIdentity" "mcp-runtime" "name" "mcp-runtime") }}{{ else }}{{ include "in-falcone.imageNameWithTag" (dict "root" . "image" .Values.mcp.runtimeImage) }}{{ end }}"
+{{- if not .Values.global.openshiftBuild.enabled }}{{- with .Values.mcp.runtimeImage.digest }}
   MCP_RUNTIME_IMAGE_DIGEST: {{ . | quote }}
-{{- end }}
+{{- end }}{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
