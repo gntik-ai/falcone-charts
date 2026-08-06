@@ -623,7 +623,26 @@
       "$ref": "#/definitions/component"
     },
     "controlPlane": {
-      "$ref": "#/definitions/component"
+      "allOf": [
+        {
+          "$ref": "#/definitions/component"
+        },
+        {
+          "type": "object",
+          "required": [
+            "livenessProbe",
+            "readinessProbe"
+          ],
+          "properties": {
+            "livenessProbe": {
+              "$ref": "#/definitions/httpProbe"
+            },
+            "readinessProbe": {
+              "$ref": "#/definitions/httpProbe"
+            }
+          }
+        }
+      ]
     },
     "controlPlaneExecutor": {
       "$ref": "#/definitions/component"
@@ -1797,6 +1816,51 @@
     }
   },
   "definitions": {
+    "httpProbe": {
+      "type": "object",
+      "required": [
+        "httpGet"
+      ],
+      "properties": {
+        "httpGet": {
+          "type": "object",
+          "required": [
+            "path",
+            "port"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^/"
+            },
+            "port": {
+              "type": [
+                "integer",
+                "string"
+              ]
+            }
+          },
+          "additionalProperties": true
+        },
+        "initialDelaySeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "periodSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "failureThreshold": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    },
     "coreEnabledReplicaRole": {
       "type": "object",
       "properties": {
