@@ -32,6 +32,10 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: {{ $s.path | quote }}
+  resources:
+    {{- $r := deepCopy (default (dict) $b.resources) -}}
+    {{- with (index (default (dict) $b.serviceResources) $s.name) }}{{- $r = mergeOverwrite $r . -}}{{- end }}
+    {{- toYaml $r | nindent 4 }}
   output:
     to:
       kind: ImageStreamTag
