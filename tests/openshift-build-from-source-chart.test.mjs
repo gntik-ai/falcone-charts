@@ -38,6 +38,13 @@ const enabledArgs = [
   '--set', `global.openshiftBuild.webhookSecret=${webhookSecret}`,
   '--set', `global.openshiftBuild.tag=${imageTag}`,
 ];
+const customResourceArgs = [
+  ...enabledArgs,
+  '--set', 'global.openshiftBuild.resources.requests.memory=256Mi',
+  '--set', 'global.openshiftBuild.resources.limits.memory=2Gi',
+  '--set', 'global.openshiftBuild.serviceResources.web-console.requests.memory=640Mi',
+  '--set', 'global.openshiftBuild.serviceResources.web-console.limits.memory=4Gi',
+];
 
 function runHelm(args) {
   return spawnSync('helm', args, {
@@ -215,6 +222,14 @@ function envValue(docs, deploymentName, containerName, envName) {
   return yamlScalar(env, ['value']);
 }
 
+function buildMemory(docs, service) {
+  const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+  return {
+    request: yamlScalar(build.yaml, ['spec', 'resources', 'requests', 'memory']),
+    limit: yamlScalar(build.yaml, ['spec', 'resources', 'limits', 'memory']),
+  };
+}
+
 function assertUnrelatedImages(docs) {
   assert.equal(containerImage(docs, 'Deployment', `${release}-apisix`, 'apisix'), 'docker.io/apache/apisix:3.10.0-debian');
   assert.equal(containerImage(docs, 'Deployment', `${release}-keycloak`, 'keycloak'), 'quay.io/keycloak/keycloak:26.1.0');
@@ -284,6 +299,12 @@ test('enabled mode emits exactly six service-keyed ImageStreams and BuildConfigs
     assert.equal(yamlScalar(build.yaml, ['spec', 'source', 'sourceSecret', 'name']), sourceSecret);
     assert.equal(yamlScalar(build.yaml, ['spec', 'strategy', 'type']), 'Docker');
     assert.equal(yamlScalar(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'dockerfilePath']), dockerfiles[service]);
+    assert.deepEqual(
+      buildMemory(docs, service),
+      service === 'web-console'
+        ? {request: '512Mi', limit: '3Gi'}
+        : {request: '128Mi', limit: '1Gi'},
+    );
     assert.equal(yamlScalar(build.yaml, ['spec', 'output', 'to', 'kind']), 'ImageStreamTag');
     assert.equal(yamlScalar(build.yaml, ['spec', 'output', 'to', 'name']), `${name}:${imageTag}`);
 
@@ -418,4 +439,34 @@ test('Helm schema validation rejects wrong types and unknown openshiftBuild/git 
   expectTemplateFailure([
     '--set', 'global.openshiftBuild.git.unknown=value',
   ], /openshiftBuild\/git[^\n]*additional properties 'unknown' not allowed/);
+});
+
+// bbx-openshift-build-009 | fn-openshift-build-from-source | #### Scenario: Custom global build resources merge with the web-console service override
+test('custom build resources reach five services while the web-console override remains isolated', () => {
+  const docs = documents(render(customResourceArgs));
+  assert.equal(objectsOfKind(docs, 'BuildConfig').length, 6);
+  for (const service of services) {
+    assert.deepEqual(
+      buildMemory(docs, service),
+      service === 'web-console'
+        ? {request: '640Mi', limit: '4Gi'}
+        : {request: '256Mi', limit: '2Gi'},
+    );
+  }
+});
+
+// bbx-openshift-build-010 | fn-openshift-build-from-source | #### Scenario: Build resource schema rejects invalid shapes, keys, and service names
+test('Helm schema rejects wrong resource types, unknown resource keys, and unknown service overrides', () => {
+  expectTemplateFailure([
+    '--set-string', 'global.openshiftBuild.resources.requests=oops',
+  ], /openshiftBuild\/resources\/requests[^\n]*got string, want object/);
+  expectTemplateFailure([
+    '--set', 'global.openshiftBuild.resources.burst.memory=2Gi',
+  ], /openshiftBuild\/resources[^\n]*additional properties 'burst' not allowed/);
+  expectTemplateFailure([
+    '--set', 'global.openshiftBuild.serviceResources.fn-runtime.limits.memory=2Gi',
+  ], /openshiftBuild\/serviceResources[^\n]*additional properties 'fn-runtime' not allowed/);
+  expectTemplateFailure([
+    '--set', 'global.openshiftBuild.serviceResources.web-console.burst.memory=2Gi',
+  ], /serviceResources\/web-console[^\n]*additional properties 'burst' not allowed/);
 });
