@@ -66,6 +66,12 @@
   {{- end -}}
 {{- end -}}
 {{- $podAnnotations := deepCopy (default (dict) .Values.podAnnotations) -}}
+{{- $workloadAnnotations := dict -}}
+{{- $build := default (dict) .Values.global.openshiftBuild -}}
+{{- if and $build.enabled (has (.Values.wrapper.componentId | default "") (list "control-plane" "control-plane-executor" "web-console" "workflow-worker")) -}}
+  {{- $stream := printf "in-falcone-%s" .Values.wrapper.componentId -}}
+  {{- $_ := set $workloadAnnotations "image.openshift.io/triggers" (printf "[{\"from\":{\"kind\":\"ImageStreamTag\",\"name\":\"%s:%s\",\"namespace\":\"%s\"},\"fieldPath\":\"spec.template.spec.containers[?(@.name==\\\"%s\\\")].image\"}]" $stream ($build.tag | default "latest") .Release.Namespace .Values.wrapper.componentId) -}}
+{{- end -}}
 {{- if $isControlPlane -}}
   {{- $_ := set $podAnnotations "in-falcone.io/release-revision" (printf "%d" (.Release.Revision | int)) -}}
   {{- $_ := set $podAnnotations "in-falcone.io/webhook-key-id" $webhookKeyId -}}
@@ -78,6 +84,10 @@ apiVersion: apps/v1
 kind: {{ $workloadKind }}
 metadata:
   name: {{ include "component-wrapper.fullname" . }}
+  {{- with $workloadAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   labels:
     {{- include "component-wrapper.labels" . | nindent 4 }}
 spec:

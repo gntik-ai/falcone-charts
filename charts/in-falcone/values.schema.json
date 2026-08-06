@@ -355,6 +355,78 @@
         },
         "podSecurity": {
           "type": "object"
+        },
+        "openshiftBuild": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "git": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "sourceSecret": {
+                  "type": "string"
+                }
+              }
+            },
+            "webhookSecret": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "memory": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "memory": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "serviceResources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "web-console": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "requests": {
+                      "type": "object"
+                    },
+                    "limits": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "additionalProperties": true

@@ -47,6 +47,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "component-wrapper.renderImage" -}}
 {{- $name := .name | default "component" -}}
 {{- $image := .image -}}
+{{- $build := default (dict) .Values.global.openshiftBuild -}}
+{{- if and $build.enabled (has .imageIdentity (list "control-plane" "control-plane-executor" "web-console" "workflow-worker" "fn-runtime" "mcp-runtime")) -}}
+{{ printf "image-registry.openshift-image-registry.svc:5000/%s/in-falcone-%s:%s" .Release.Namespace .imageIdentity ($build.tag | default "latest") }}
+{{- else -}}
 {{- $repository := required (printf "%s image.repository is required" $name) $image.repository -}}
 {{- $normalizedRepository := include "component-wrapper.normalizeRepository" (dict "Values" .Values "repository" $repository) -}}
 {{- if $image.digest -}}
@@ -55,9 +59,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{ printf "%s:%s" $normalizedRepository $image.tag }}
 {{- end -}}
 {{- end -}}
+{{- end -}}
 
 {{- define "component-wrapper.image" -}}
-{{- include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.image "name" (include "component-wrapper.name" .)) -}}
+{{- include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.image "name" (include "component-wrapper.name" .) "imageIdentity" .Values.wrapper.componentId "Release" .Release) -}}
 {{- end -}}
 
 {{- define "component-wrapper.persistenceClaimName" -}}
