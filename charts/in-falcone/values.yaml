@@ -120,6 +120,15 @@ global:
     git: {uri: "", ref: main, sourceSecret: ""}
     webhookSecret: ""
     tag: latest
+    baseImages:
+      control-plane: ""
+      control-plane-executor: ""
+      web-console: ""
+      workflow-worker: ""
+      mcp-runtime: ""
+      fn-runtime: ""
+    buildArgs: {}
+    env: {}
     resources:
       requests: {memory: 128Mi}
       limits: {memory: 1Gi}

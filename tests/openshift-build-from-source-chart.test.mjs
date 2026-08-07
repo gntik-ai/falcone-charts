@@ -28,6 +28,11 @@ const dockerfiles = {
   'fn-runtime': 'apps/fn-runtime/Dockerfile',
 };
 const deploymentServices = services.slice(0, 4);
+const privateRegistry = 'registry.airgap.in-falcone.local';
+const privateBaseImages = Object.fromEntries(services.map((service) => [
+  service,
+  `${privateRegistry}/library/node:${service === 'workflow-worker' ? '22-slim' : '22-alpine'}`,
+]));
 
 const enabledArgs = [
   '--namespace', buildNamespace,
@@ -45,6 +50,10 @@ const customResourceArgs = [
   '--set', 'global.openshiftBuild.serviceResources.web-console.requests.memory=640Mi',
   '--set', 'global.openshiftBuild.serviceResources.web-console.limits.memory=4Gi',
 ];
+const privateBaseImageArgs = services.flatMap((service) => [
+  '--set-string',
+  `global.openshiftBuild.baseImages.${service}=${privateBaseImages[service]}`,
+]);
 
 function runHelm(args) {
   return spawnSync('helm', args, {
@@ -72,6 +81,20 @@ function expectTemplateFailure(args, errorPattern) {
   const result = runHelm(['template', release, chart, ...args]);
   assert.notEqual(result.status, 0, 'helm template unexpectedly accepted invalid values');
   assert.match(`${result.stderr}\n${result.stdout}`, errorPattern);
+}
+
+function expectTemplateCaseFailures(cases) {
+  const failures = [];
+  for (const {name, args, errorPattern} of cases) {
+    const result = runHelm(['template', release, chart, ...args]);
+    const diagnostic = `${result.stderr}\n${result.stdout}`;
+    if (result.status === 0) {
+      failures.push(`${name}: helm template unexpectedly accepted invalid values`);
+    } else if (!errorPattern.test(diagnostic)) {
+      failures.push(`${name}: rejection did not identify the invalid contract (${diagnostic.trim()})`);
+    }
+  }
+  assert.equal(failures.length, 0, failures.join('\n'));
 }
 
 function escapeRegExp(value) {
@@ -228,6 +251,13 @@ function buildMemory(docs, service) {
     request: yamlScalar(build.yaml, ['spec', 'resources', 'requests', 'memory']),
     limit: yamlScalar(build.yaml, ['spec', 'resources', 'limits', 'memory']),
   };
+}
+
+function namedValues(yaml, path) {
+  return sequenceItems(yamlBlock(yaml, path)).map((item) => ({
+    name: yamlScalar(item, ['name']),
+    value: yamlScalar(item, ['value']),
+  }));
 }
 
 function assertUnrelatedImages(docs) {
@@ -469,4 +499,431 @@ test('Helm schema rejects wrong resource types, unknown resource keys, and unkno
   expectTemplateFailure([
     '--set', 'global.openshiftBuild.serviceResources.web-console.burst.memory=2Gi',
   ], /serviceResources\/web-console[^\n]*additional properties 'burst' not allowed/);
+});
+
+// bbx-openshift-build-011 | fn-openshift-build-from-source | #### Scenario: Default builds are unchanged
+test('connected build mode without disconnected inputs omits build args, build env, and registry pull secret', () => {
+  const docs = getCustomDocs();
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.equal(yamlLocation(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs']), undefined);
+    assert.equal(yamlLocation(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'env']), undefined);
+    assert.equal(yamlLocation(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'pullSecret']), undefined);
+  }
+});
+
+// bbx-openshift-build-012 | fn-openshift-build-from-source | #### Scenario: Base-image overrides reach the build
+test('all six nonempty service base-image overrides render as the exact NODE_BASE_IMAGE build arg', () => {
+  const docs = documents(render([...enabledArgs, ...privateBaseImageArgs]));
+  assert.deepEqual(Object.keys(privateBaseImages).sort(), services.slice().sort());
+
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.deepEqual(
+      namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs']),
+      [{name: 'NODE_BASE_IMAGE', value: privateBaseImages[service]}],
+    );
+  }
+
+  const emptyOverrideDocs = documents(render([
+    ...enabledArgs,
+    '--set-string', 'global.openshiftBuild.baseImages.control-plane=',
+  ]));
+  const emptyOverrideBuild = oneObject(emptyOverrideDocs, 'BuildConfig', 'in-falcone-control-plane');
+  assert.equal(
+    yamlLocation(emptyOverrideBuild.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs']),
+    undefined,
+    'an explicitly empty service override must preserve the Dockerfile default rather than emit an empty arg',
+  );
+});
+
+// bbx-openshift-build-013 | fn-openshift-build-from-source | #### Scenario: Base-image overrides reach the build
+test('generic build args and env render deterministically on every build while a service base image wins', () => {
+  const genericNodeBase = `${privateRegistry}/library/node:generic`;
+  const webConsoleBase = `${privateRegistry}/library/node:web-console`;
+  const docs = documents(render([
+    ...enabledArgs,
+    '--set-string', 'global.openshiftBuild.buildArgs.ZZ_BUILD_MODE=disconnected',
+    '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${genericNodeBase}`,
+    '--set-string', 'global.openshiftBuild.buildArgs.HTTP_PROXY=http://proxy.internal.test:8080',
+    '--set-string', 'global.openshiftBuild.env.ZZ_TRACE=enabled',
+    '--set-string', 'global.openshiftBuild.env.NPM_CONFIG_REGISTRY=https://npm.internal.test/repository/npm/',
+    '--set-string', `global.openshiftBuild.baseImages.web-console=${webConsoleBase}`,
+  ]));
+
+  const expectedEnv = [
+    {name: 'NPM_CONFIG_REGISTRY', value: 'https://npm.internal.test/repository/npm/'},
+    {name: 'ZZ_TRACE', value: 'enabled'},
+  ];
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.deepEqual(
+      namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs']),
+      [
+        {name: 'HTTP_PROXY', value: 'http://proxy.internal.test:8080'},
+        {
+          name: 'NODE_BASE_IMAGE',
+          value: service === 'web-console' ? webConsoleBase : genericNodeBase,
+        },
+        {name: 'ZZ_BUILD_MODE', value: 'disconnected'},
+      ],
+      `${service} must receive a sorted, duplicate-free build-arg list`,
+    );
+    assert.deepEqual(
+      namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'env']),
+      expectedEnv,
+      `${service} must receive the same sorted build environment`,
+    );
+  }
+});
+
+// bbx-openshift-build-014 | fn-openshift-build-from-source | #### Scenario: Base-image overrides reach the build
+test('the first private-registry pull secret reaches every Docker build and NOTES truthfully scopes the CA prerequisite', () => {
+  const registryArgs = [
+    ...enabledArgs,
+    '--set', 'global.privateRegistry.enabled=true',
+    '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+    '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+    '--set-string', 'global.privateRegistry.pullSecretNames[1]=harbor-secondary',
+    '--set-string', 'global.privateRegistry.caBundleConfigMap=harbor-registry-ca',
+    '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${privateRegistry}/library/node:22-alpine`,
+  ];
+  const docs = documents(render(registryArgs));
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.equal(
+      yamlScalar(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'pullSecret', 'name']),
+      'harbor-primary',
+    );
+    assert.doesNotMatch(build.yaml, /additionalTrustedCA|caBundleConfigMap|harbor-registry-ca/);
+  }
+
+  const notes = renderNotes(registryArgs);
+  assert.match(notes, /harbor-registry-ca/);
+  assert.match(notes, /image\.config\.openshift\.io\/cluster/);
+  assert.match(notes, /additionalTrustedCA/);
+  assert.match(notes, /cluster-level/i);
+});
+
+// bbx-openshift-build-015 | fn-openshift-build-from-source | #### Scenario: Strict schema rejects wrong types and unknown nested keys
+test('strict schema limits base images to six service names and string map values', () => {
+  expectTemplateFailure([
+    '--set-string', `global.openshiftBuild.baseImages.unknown-service=${privateRegistry}/library/node:22-alpine`,
+  ], /openshiftBuild\/baseImages[^\n]*additional properties 'unknown-service' not allowed/);
+  expectTemplateFailure([
+    '--set', 'global.openshiftBuild.baseImages.control-plane=true',
+  ], /openshiftBuild\/baseImages\/control-plane[^\n]*got boolean, want string/);
+  expectTemplateFailure([
+    '--set-string', 'global.openshiftBuild.baseImages=not-a-map',
+  ], /openshiftBuild\/baseImages[^\n]*got string, want object/);
+  expectTemplateFailure([
+    '--set', 'global.openshiftBuild.buildArgs.NPM_CONFIG_REGISTRY=true',
+  ], /openshiftBuild\/buildArgs\/NPM_CONFIG_REGISTRY[^\n]*got boolean, want string/);
+  expectTemplateFailure([
+    '--set', 'global.openshiftBuild.env.NPM_CONFIG_REGISTRY=true',
+  ], /openshiftBuild\/env\/NPM_CONFIG_REGISTRY[^\n]*got boolean, want string/);
+});
+
+// bbx-openshift-build-017 | fn-openshift-build-from-source | #### Scenario: Base-image overrides reach the build
+test('an enabled private registry rejects an empty first build pull-secret name', () => {
+  expectTemplateFailure([
+    '--set', 'global.privateRegistry.enabled=true',
+    '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+    '--set-string', 'global.privateRegistry.pullSecretNames[0]=',
+  ], /privateRegistry(?:\/|\.)pullSecretNames[^\n]*0[^\n]*(?:non-empty|must not be empty|length must be >= 1|minLength:\s*got 0,\s*want 1)/i);
+});
+
+// bbx-openshift-build-018 | fn-openshift-build-from-source | #### Scenario: Strict schema rejects wrong types and unknown nested keys
+test('build-argument and environment names must be valid C identifiers', () => {
+  expectTemplateFailure([
+    '--set-string', 'global.openshiftBuild.buildArgs.BAD-NAME=value',
+  ], /openshiftBuild\/buildArgs[^\n]*BAD-NAME[^\n]*(?:match|pattern|C_IDENTIFIER)/i);
+  expectTemplateFailure([
+    '--set-string', 'global.openshiftBuild.env.BAD-NAME=value',
+  ], /openshiftBuild\/env[^\n]*BAD-NAME[^\n]*(?:match|pattern|C_IDENTIFIER)/i);
+});
+
+// bbx-openshift-build-019 | fn-openshift-build-from-source | #### Scenario: Base-image overrides reach the build
+test('a base-image override with whitespace is rejected as an invalid image reference', () => {
+  expectTemplateFailure([
+    '--set-string', 'global.openshiftBuild.baseImages.control-plane=not an image reference',
+  ], /openshiftBuild\/baseImages\/control-plane[^\n]*(?:invalid image reference|match|pattern)/i);
+});
+
+// bbx-openshift-build-016 | fn-openshift-build-from-source | #### Scenario: Fully private render
+test('air-gap build mode exposes only private or internal workload and Node base-image references', () => {
+  const docs = documents(render([
+    '-f', 'charts/in-falcone/values/airgap.yaml',
+    ...enabledArgs,
+    ...privateBaseImageArgs,
+  ]));
+  const workloadImages = docs
+    .filter((doc) => ['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob'].includes(doc.kind))
+    .flatMap((doc) => workloadContainers(doc).map((container) => ({
+      owner: `${doc.kind}/${doc.name}/${container.group}/${container.name}`,
+      image: container.image,
+    })));
+  assert.ok(workloadImages.length > 10, 'expected a non-vacuous set of rendered workload images');
+  for (const {owner, image} of workloadImages) {
+    assert.ok(
+      image?.startsWith(`${privateRegistry}/`) || image?.startsWith('image-registry.openshift-image-registry.svc:5000/'),
+      `${owner} escaped the private/internal registry boundary: ${image}`,
+    );
+  }
+
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    const nodeBaseArgs = namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs'])
+      .filter(({name}) => name === 'NODE_BASE_IMAGE');
+    assert.deepEqual(nodeBaseArgs, [{name: 'NODE_BASE_IMAGE', value: privateBaseImages[service]}]);
+    assert.ok(nodeBaseArgs[0].value.startsWith(`${privateRegistry}/`));
+  }
+});
+
+// bbx-openshift-build-020 | fn-openshift-build-from-source | #### Scenario: Fully private source build succeeds
+test('private source builds accept service and generic Node base images only at the configured or OpenShift-internal registry boundary', () => {
+  const internalRegistry = 'image-registry.openshift-image-registry.svc:5000';
+  const allowedImages = Object.fromEntries(services.map((service, index) => [
+    service,
+    index % 2 === 0
+      ? `${privateRegistry}/falcone/node:${service}`
+      : `${internalRegistry}/${buildNamespace}/node:${service}`,
+  ]));
+  const docs = documents(render([
+    ...enabledArgs,
+    '--set', 'global.privateRegistry.enabled=true',
+    '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+    '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+    '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${privateRegistry}/falcone/node:generic`,
+    ...services.flatMap((service) => [
+      '--set-string',
+      `global.openshiftBuild.baseImages.${service}=${allowedImages[service]}`,
+    ]),
+  ]));
+
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.deepEqual(
+      namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs'])
+        .filter(({name}) => name === 'NODE_BASE_IMAGE'),
+      [{name: 'NODE_BASE_IMAGE', value: allowedImages[service]}],
+    );
+  }
+});
+
+// bbx-openshift-build-021 | fn-openshift-build-from-source | #### Scenario: Invalid or unsafe input is rejected
+test('private source builds reject every service base image that escapes the exact registry boundary', () => {
+  const escapingImages = [
+    'docker.io/library/node:22-alpine',
+    'not-an-image',
+    `${privateRegistry}.lookalike.invalid/library/node:22-alpine`,
+  ];
+  expectTemplateCaseFailures(services.flatMap((service) => escapingImages.map((image) => ({
+    name: `${service}=${image}`,
+    args: [
+      ...enabledArgs,
+      '--set', 'global.privateRegistry.enabled=true',
+      '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+      '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+      '--set-string', `global.openshiftBuild.baseImages.${service}=${image}`,
+    ],
+    errorPattern: /(?:baseImages|privateRegistry|private registry|OpenShift internal registry)/i,
+  }))));
+});
+
+// bbx-openshift-build-022 | fn-openshift-build-from-source | #### Scenario: Invalid or unsafe input is rejected
+test('private source builds reject a generic NODE_BASE_IMAGE that escapes the exact registry boundary', () => {
+  const escapingImages = [
+    'docker.io/library/node:22-alpine',
+    'not-an-image',
+    `${privateRegistry}.lookalike.invalid/library/node:22-alpine`,
+  ];
+  expectTemplateCaseFailures(escapingImages.map((image) => ({
+    name: `NODE_BASE_IMAGE=${image}`,
+    args: [
+      ...enabledArgs,
+      '--set', 'global.privateRegistry.enabled=true',
+      '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+      '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+      '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${image}`,
+    ],
+    errorPattern: /(?:NODE_BASE_IMAGE|buildArgs|privateRegistry|private registry|OpenShift internal registry)/i,
+  })));
+});
+
+// bbx-openshift-build-023 | fn-openshift-build-from-source | #### Scenario: Defaults preserve connected installs
+test('connected source builds continue to accept valid external service and generic Node base-image overrides', () => {
+  const serviceImage = 'quay.io/acme/node:22-alpine';
+  const genericImage = 'docker.io/library/node:22-slim';
+  const docs = documents(render([
+    ...enabledArgs,
+    '--set-string', `global.openshiftBuild.baseImages.control-plane=${serviceImage}`,
+    '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${genericImage}`,
+  ]));
+
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.deepEqual(
+      namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs'])
+        .filter(({name}) => name === 'NODE_BASE_IMAGE'),
+      [{name: 'NODE_BASE_IMAGE', value: service === 'control-plane' ? serviceImage : genericImage}],
+    );
+  }
+});
+
+// bbx-openshift-build-024 | fn-openshift-build-from-source | #### Scenario: Pull-secret contract is validated
+test('private source builds reject an empty pull-secret name at every later list position', () => {
+  expectTemplateCaseFailures([
+    {
+      name: 'empty second pull-secret name',
+      args: [
+        ...enabledArgs,
+        '--set', 'global.privateRegistry.enabled=true',
+        '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+        '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+        '--set-string', 'global.privateRegistry.pullSecretNames[1]=',
+      ],
+      errorPattern: /pullSecretNames/i,
+    },
+    {
+      name: 'empty third pull-secret name',
+      args: [
+        ...enabledArgs,
+        '--set', 'global.privateRegistry.enabled=true',
+        '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+        '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+        '--set-string', 'global.privateRegistry.pullSecretNames[1]=harbor-secondary',
+        '--set-string', 'global.privateRegistry.pullSecretNames[2]=',
+      ],
+      errorPattern: /pullSecretNames/i,
+    },
+  ]);
+});
+
+// bbx-openshift-build-025 | fn-openshift-build-from-source | #### Scenario: Fully private source build succeeds
+test('private mode with source builds rejects an empty configured registry', () => {
+  expectTemplateFailure([
+    ...enabledArgs,
+    '--set', 'global.privateRegistry.enabled=true',
+    '--set-string', 'global.privateRegistry.registry=',
+    '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+  ], /privateRegistry(?:\/|\.)registry[^\n]*(?:required|non-empty|must not be empty|length must be >= 1)/i);
+});
+
+// bbx-openshift-build-026 | fn-openshift-build-from-source | #### Scenario: Fully private source build succeeds
+test('private source builds reject public Dockerfile fallback when no effective NODE_BASE_IMAGE is configured', () => {
+  expectTemplateFailure([
+    ...enabledArgs,
+    '--set', 'global.privateRegistry.enabled=true',
+    '--set-string', `global.privateRegistry.registry=${privateRegistry}`,
+    '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+    ...services.flatMap((service) => [
+      '--set-string',
+      `global.openshiftBuild.baseImages.${service}=`,
+    ]),
+  ], /(?:NODE_BASE_IMAGE|baseImages)[^\n]*(?:required|private|internal|must not be empty|Dockerfile default)/i);
+});
+
+// bbx-openshift-build-027 | fn-openshift-build-from-source | #### Scenario: Fully private source build succeeds
+test('private source builds accept a qualified registry project path and valid multi-label pull-secret names', () => {
+  const registryProject = `${privateRegistry}/platform/falcone`;
+  const nodeBaseImage = `${registryProject}/node:22-alpine`;
+  const primaryPullSecret = 'harbor-primary.registry-pull.prod';
+  const docs = documents(render([
+    ...enabledArgs,
+    '--set', 'global.privateRegistry.enabled=true',
+    '--set-string', `global.privateRegistry.registry=${registryProject}`,
+    '--set-string', `global.privateRegistry.pullSecretNames[0]=${primaryPullSecret}`,
+    '--set-string', 'global.privateRegistry.pullSecretNames[1]=harbor-secondary.registry-pull.prod',
+    '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${nodeBaseImage}`,
+  ]));
+
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.deepEqual(
+      namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs'])
+        .filter(({name}) => name === 'NODE_BASE_IMAGE'),
+      [{name: 'NODE_BASE_IMAGE', value: nodeBaseImage}],
+    );
+    assert.equal(
+      yamlScalar(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'pullSecret', 'name']),
+      primaryPullSecret,
+    );
+  }
+});
+
+// bbx-openshift-build-028 | fn-openshift-build-from-source | #### Scenario: Invalid or unsafe input is rejected
+test('private source builds reject an unqualified registry even when NODE_BASE_IMAGE is under its apparent prefix', () => {
+  expectTemplateFailure([
+    ...enabledArgs,
+    '--set', 'global.privateRegistry.enabled=true',
+    '--set-string', 'global.privateRegistry.registry=library',
+    '--set-string', 'global.privateRegistry.pullSecretNames[0]=harbor-primary',
+    '--set-string', 'global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=library/node:22-alpine',
+  ], /privateRegistry(?:\/|\.)registry[^\n]*(?:qualified|hostname|domain|registry host)/i);
+});
+
+// bbx-openshift-build-029 | fn-openshift-build-from-source | #### Scenario: Pull-secret contract is validated
+test('pull-secret schema rejects every Kubernetes-invalid DNS-1123 subdomain shape', () => {
+  const invalidPullSecretNames = [
+    {name: 'empty DNS label', value: 'bad..name'},
+    {name: '64-character DNS label', value: 'a'.repeat(64)},
+    {name: 'leading hyphen', value: '-bad-name'},
+    {name: 'trailing hyphen', value: 'bad-name-'},
+    {name: 'uppercase characters', value: 'Bad.Name'},
+  ];
+  expectTemplateCaseFailures(invalidPullSecretNames.map(({name, value}) => ({
+    name: `${name}: ${value}`,
+    args: [
+      '--set-string',
+      `global.privateRegistry.pullSecretNames[0]=${value}`,
+    ],
+    errorPattern: /privateRegistry(?:\/|\.)pullSecretNames[^\n]*0[^\n]*(?:DNS-1123|subdomain|match|pattern)/i,
+  })));
+});
+
+// bbx-openshift-build-030 | fn-openshift-build-from-source | #### Scenario: Defaults preserve connected installs
+test('connected source builds accept qualified dotted registry authorities with explicit ports', () => {
+  const serviceImage = 'registry.build.example.com:5443/team/node:22-alpine';
+  const genericImage = 'mirror.registry.example.net:5000/library/node:22-slim';
+  const docs = documents(render([
+    ...enabledArgs,
+    '--set-string', `global.openshiftBuild.baseImages.control-plane=${serviceImage}`,
+    '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${genericImage}`,
+  ]));
+
+  for (const service of services) {
+    const build = oneObject(docs, 'BuildConfig', `in-falcone-${service}`);
+    assert.deepEqual(
+      namedValues(build.yaml, ['spec', 'strategy', 'dockerStrategy', 'buildArgs'])
+        .filter(({name}) => name === 'NODE_BASE_IMAGE'),
+      [{name: 'NODE_BASE_IMAGE', value: service === 'control-plane' ? serviceImage : genericImage}],
+    );
+  }
+});
+
+// bbx-openshift-build-031 | fn-openshift-build-from-source | #### Scenario: Invalid or unsafe input is rejected
+test('connected source builds reject malformed registry authorities in service and generic Node base images', () => {
+  const malformedImages = [
+    'reg..example.com/node:22',
+    'reg.-bad.example/node:22',
+  ];
+  expectTemplateCaseFailures(malformedImages.flatMap((image) => [
+    {
+      name: `service base image ${image}`,
+      args: [
+        ...enabledArgs,
+        '--set-string', `global.openshiftBuild.baseImages.control-plane=${image}`,
+      ],
+      errorPattern: /(?:baseImages|control-plane)[^\n]*(?:invalid image reference|authority|hostname|match|pattern)/i,
+    },
+    {
+      name: `generic NODE_BASE_IMAGE ${image}`,
+      args: [
+        ...enabledArgs,
+        '--set-string', `global.openshiftBuild.buildArgs.NODE_BASE_IMAGE=${image}`,
+      ],
+      errorPattern: /(?:NODE_BASE_IMAGE|buildArgs)[^\n]*(?:invalid image reference|authority|hostname|match|pattern)/i,
+    },
+  ]));
 });

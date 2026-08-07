@@ -105,7 +105,10 @@
             "pullSecretNames": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253,
+                "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$"
               }
             },
             "caBundleConfigMap": {
@@ -383,6 +386,27 @@
             },
             "tag": {
               "type": "string"
+            },
+            "baseImages": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["control-plane", "control-plane-executor", "web-console", "workflow-worker", "mcp-runtime", "fn-runtime"],
+              "properties": {
+                "control-plane": {"type": "string", "pattern": "^$|^\\S+$"},
+                "control-plane-executor": {"type": "string", "pattern": "^$|^\\S+$"},
+                "web-console": {"type": "string", "pattern": "^$|^\\S+$"},
+                "workflow-worker": {"type": "string", "pattern": "^$|^\\S+$"},
+                "mcp-runtime": {"type": "string", "pattern": "^$|^\\S+$"},
+                "fn-runtime": {"type": "string", "pattern": "^$|^\\S+$"}
+              }
+            },
+            "buildArgs": {
+              "type": "object",
+              "additionalProperties": {"type": "string"}
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {"type": "string"}
             },
             "resources": {
               "type": "object",

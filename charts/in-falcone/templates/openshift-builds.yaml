@@ -32,6 +32,28 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: {{ $s.path | quote }}
+      {{- $args := deepCopy (default (dict) $b.buildArgs) -}}
+      {{- $serviceBase := index (default (dict) $b.baseImages) $s.name | default "" -}}
+      {{- if $serviceBase }}{{- $_ := set $args "NODE_BASE_IMAGE" $serviceBase -}}{{- end }}
+      {{- if gt (len $args) 0 }}
+      buildArgs:
+        {{- range $name := keys $args | sortAlpha }}
+        - name: {{ $name | quote }}
+          value: {{ index $args $name | quote }}
+        {{- end }}
+      {{- end }}
+      {{- $env := default (dict) $b.env -}}
+      {{- if gt (len $env) 0 }}
+      env:
+        {{- range $name := keys $env | sortAlpha }}
+        - name: {{ $name | quote }}
+          value: {{ index $env $name | quote }}
+        {{- end }}
+      {{- end }}
+      {{- if and $.Values.global.privateRegistry.enabled (gt (len $.Values.global.privateRegistry.pullSecretNames) 0) }}
+      pullSecret:
+        name: {{ index $.Values.global.privateRegistry.pullSecretNames 0 | quote }}
+      {{- end }}
   resources:
     {{- $r := deepCopy (default (dict) $b.resources) -}}
     {{- with (index (default (dict) $b.serviceResources) $s.name) }}{{- $r = mergeOverwrite $r . -}}{{- end }}
