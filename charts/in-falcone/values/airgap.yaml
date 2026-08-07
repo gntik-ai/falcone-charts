@@ -36,6 +36,16 @@ kafka:
 seaweedfs:
   image:
     repository: registry.airgap.in-falcone.local/chrislusf/seaweedfs
+eso:
+  external-secrets:
+    image:
+      repository: registry.airgap.in-falcone.local/external-secrets/external-secrets
+    webhook:
+      image:
+        repository: registry.airgap.in-falcone.local/external-secrets/external-secrets
+    certController:
+      image:
+        repository: registry.airgap.in-falcone.local/external-secrets/external-secrets
 observability:
   image:
     repository: registry.airgap.in-falcone.local/prometheus/prometheus

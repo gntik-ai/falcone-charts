@@ -222,6 +222,53 @@
 {{- if and .Values.global.privateRegistry.enabled (eq (len .Values.global.privateRegistry.pullSecretNames) 0) -}}
   {{- fail "global.privateRegistry.pullSecretNames must not be empty when the private registry is enabled" -}}
 {{- end -}}
+{{- $root := . -}}
+{{- range $mapName := list "buildArgs" "env" }}
+  {{- $map := index $root.Values.global.openshiftBuild $mapName | default (dict) -}}
+  {{- range $key := keys $map }}
+    {{- if not (regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" $key) -}}
+      {{- fail (printf "global.openshiftBuild/%s key %q must match C_IDENTIFIER" $mapName $key) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $build := .Values.global.openshiftBuild -}}
+{{- $baseImages := $build.baseImages | default (dict) -}}
+{{- $buildArgs := $build.buildArgs | default (dict) -}}
+{{- $genericNodeBase := index $buildArgs "NODE_BASE_IMAGE" | default "" -}}
+{{- $imageReferencePattern := "^(?:(?:localhost|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:[.][a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(?:@sha256:[A-Fa-f0-9]{64})?$" -}}
+{{- range $service, $image := $baseImages -}}
+  {{- if and $image (not (regexMatch $imageReferencePattern $image)) -}}
+    {{- fail (printf "global.openshiftBuild/baseImages/%s is an invalid image reference" $service) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and $genericNodeBase (not (regexMatch $imageReferencePattern $genericNodeBase)) -}}
+  {{- fail "global.openshiftBuild/buildArgs/NODE_BASE_IMAGE is an invalid image reference" -}}
+{{- end -}}
+{{- if and $build.enabled .Values.global.privateRegistry.enabled -}}
+  {{- $privateRegistry := trimSuffix "/" (.Values.global.privateRegistry.registry | default "") -}}
+  {{- if eq $privateRegistry "" -}}
+    {{- fail "global.privateRegistry.registry is required when private source builds are enabled" -}}
+  {{- end -}}
+  {{- $qualifiedRegistryPattern := "^(localhost(:[0-9]{1,5})?|[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?|[a-z0-9]([a-z0-9-]*[a-z0-9])?:[0-9]{1,5})(/[a-z0-9]+(([._]|__|[-]+)[a-z0-9]+)*)*$" -}}
+  {{- if not (regexMatch $qualifiedRegistryPattern $privateRegistry) -}}
+    {{- fail "global.privateRegistry.registry must be a qualified registry hostname containing a dot or port, or localhost, with optional repository path segments" -}}
+  {{- end -}}
+  {{- $privatePrefix := printf "%s/" $privateRegistry -}}
+  {{- $internalPrefix := "image-registry.openshift-image-registry.svc:5000/" -}}
+  {{- range $service := list "control-plane" "control-plane-executor" "web-console" "workflow-worker" "mcp-runtime" "fn-runtime" -}}
+    {{- $serviceBase := index $baseImages $service | default "" -}}
+    {{- $effectiveNodeBase := $genericNodeBase -}}
+    {{- if $serviceBase -}}
+      {{- $effectiveNodeBase = $serviceBase -}}
+    {{- end -}}
+    {{- if eq $effectiveNodeBase "" -}}
+      {{- fail (printf "global.openshiftBuild/baseImages/%s or buildArgs/NODE_BASE_IMAGE is required for private source builds; public Dockerfile defaults are not allowed" $service) -}}
+    {{- end -}}
+    {{- if not (or (hasPrefix $privatePrefix $effectiveNodeBase) (hasPrefix $internalPrefix $effectiveNodeBase)) -}}
+      {{- fail (printf "effective NODE_BASE_IMAGE for %s must use global.privateRegistry.registry %q or the OpenShift internal registry" $service $privateRegistry) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- if not (has .Values.platform.network.exposureKind $supportedExposureKinds) -}}
   {{- fail "platform.network.exposureKind must be one of Ingress, LoadBalancer, or Route" -}}
 {{- end -}}

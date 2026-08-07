@@ -46,4 +46,7 @@ OpenShift source builds are enabled. Create the referenced Secret {{ .Values.glo
 {{- with .Values.global.openshiftBuild.git.sourceSecret }}
 - Private mirror source Secret: {{ . }} (must grant the builder access to {{ $.Values.global.openshiftBuild.git.uri }})
 {{- end }}
+{{- if and .Values.global.privateRegistry.enabled .Values.global.privateRegistry.caBundleConfigMap }}
+- Cluster-level CA prerequisite: ensure ConfigMap {{ .Values.global.privateRegistry.caBundleConfigMap }} exists in the `openshift-config` namespace and is referenced by `image.config.openshift.io/cluster` under `spec.additionalTrustedCA`. This chart does not configure a per-BuildConfig CA.
+{{- end }}
 {{- end }}

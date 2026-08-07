@@ -146,3 +146,228 @@ Chart and deployment-value history was extracted from
 [gntik-ai/falcone](https://github.com/gntik-ai/falcone) with `git filter-repo`.
 The retained commits preserve the evolution of the moved paths while excluding
 application source files from this repository.
+
+## Fully disconnected OpenShift source builds (chart 0.4.1)
+
+This section is for an OpenShift platform operator building the six Falcone
+application images from a local GitLab mirror while the cluster has no public
+network route. It applies to chart `0.4.1` and later. The chart creates
+OpenShift `BuildConfig`/`ImageStream` pairs; it does not install GitLab,
+Harbor, a registry, or a cluster-wide CA. Those services and their credentials
+must already exist, or be operated separately.
+
+### Prerequisites and source preparation
+
+Prepare all of the following before enabling builds:
+
+* An OpenShift project and a GitLab repository reachable from the build pods.
+  Mirror the Falcone source repository, including the Dockerfiles under
+  `apps/`, and expose a stable branch or tag through `global.openshiftBuild.git.ref`.
+* A private registry reachable from the OpenShift image-builder network path,
+  or an approved internal mirror. Mirror every runtime image referenced by the
+  selected values profile, plus the Node base images used by the six
+  Dockerfiles. The chart's `values/airgap.yaml` is a starting-point list for
+  runtime repositories; replace its example registry and repository names with
+  your own inventory.
+* A source Secret, if GitLab requires authentication. The Secret named by
+  `global.openshiftBuild.git.sourceSecret` must be usable by the OpenShift
+  builder for the configured Git URI.
+* A registry pull Secret in the release namespace. Put the preferred Secret
+  first in `global.privateRegistry.pullSecretNames`; the chart attaches only
+  element zero to each Docker build. Additional names are retained for other
+  chart consumers but are not fallback credentials for BuildConfigs.
+* A GitLab webhook Secret in the release namespace. Create it with key
+  `WebHookSecretKey` and reference the Secret name with
+  `global.openshiftBuild.webhookSecret`. Do not put its value in values files,
+  `--set` arguments, rendered manifests, logs, or support bundles.
+
+For an air-gapped package mirror, publish the Node package proxy inside the
+network and pass its URL as a build environment variable, for example
+`NPM_CONFIG_REGISTRY=https://npm.mirror.example/repository/npm/`. This is an
+OpenShift build environment variable; it is not a chart runtime environment
+variable and it does not make the package mirror public.
+
+### Base-image, argument, and environment contract
+
+The global block is deliberately shared by all six BuildConfigs:
+
+```yaml
+global:
+  privateRegistry:
+    enabled: true
+    registry: registry.example.internal
+    pullSecretNames: [in-falcone-registry]
+  openshiftBuild:
+    enabled: true
+    git:
+      uri: https://gitlab.example.internal/platform/falcone.git
+      ref: release-0.4.1
+      sourceSecret: falcone-gitlab-source
+    webhookSecret: falcone-build-webhook
+    tag: 0.4.1-airgap
+    baseImages:
+      control-plane: registry.example.internal/library/node:22-alpine
+      control-plane-executor: registry.example.internal/library/node:22-alpine
+      web-console: registry.example.internal/library/node:22-alpine
+      workflow-worker: registry.example.internal/library/node:22-slim
+      mcp-runtime: registry.example.internal/library/node:22-alpine
+      fn-runtime: registry.example.internal/library/node:22-alpine
+    buildArgs:
+      HTTP_PROXY: http://proxy.example.internal:8080
+    env:
+      NPM_CONFIG_REGISTRY: https://npm.mirror.example/repository/npm/
+```
+
+`baseImages` is service-specific and has precedence over the generic
+`buildArgs.NODE_BASE_IMAGE`. If a service entry is non-empty, the chart writes
+that value as the service BuildConfig's `NODE_BASE_IMAGE` argument. If it is
+empty, no service override is added and the generic build-argument map is used
+unchanged. If neither supplies `NODE_BASE_IMAGE`, each Dockerfile's connected
+default remains authoritative (`node:22-alpine`, except
+`workflow-worker`, which defaults to `node:22-slim`). Do not use a service key
+outside the six names above in `baseImages`; schema validation rejects it.
+
+That fallback applies only to connected source builds. When
+`global.privateRegistry.enabled=true`, the chart fails closed unless every
+service resolves an effective `NODE_BASE_IMAGE` from its service override or
+the generic build argument. Each effective reference must begin with the exact
+configured `global.privateRegistry.registry` prefix or the OpenShift internal
+registry prefix; public, unqualified, and lookalike-host references are
+rejected before any BuildConfig reaches the API server.
+
+Use a qualified registry authority containing a dot or port, or `localhost`;
+an optional repository/project path and one trailing slash are supported. For
+example, `registry.example.internal/falcone` is valid, while `library` is not a
+registry authority and cannot establish a disconnected boundary.
+
+`buildArgs` and `env` are string maps applied to every BuildConfig. Keys must
+be valid C identifiers. Keep proxy credentials out of these maps; use a
+Secret-backed mechanism supported by your build policy instead. Values are
+visible to OpenShift build metadata and should therefore be treated as
+non-secret configuration.
+
+Every entry in `global.privateRegistry.pullSecretNames` must be a non-empty
+DNS-1123 Kubernetes Secret name: at most 253 characters overall and 63 per
+dot-separated label. The first entry is the BuildConfig pull Secret; later
+entries are not BuildConfig fallbacks.
+
+The chart renders six ImageStreams (`in-falcone-control-plane`,
+`in-falcone-control-plane-executor`, `in-falcone-web-console`,
+`in-falcone-workflow-worker`, `in-falcone-mcp-runtime`, and
+`in-falcone-fn-runtime`) and six serial BuildConfigs with matching names.
+Each uses Docker strategy, the corresponding `apps/*/Dockerfile`, the GitLab
+trigger Secret, and the configured output tag. The runtime deployment consumes
+these ImageStreams through the source-build image identity behavior inherited
+from Falcone charts PR #4. See [Falcone PR #930](https://github.com/gntik-ai/falcone/pull/930)
+for the application-side Dockerfile and catalog contract, and
+[falcone-charts issue #6](https://github.com/gntik-ai/falcone-charts/issues/6)
+for the chart-side delivery history.
+
+### Custom CA: cluster prerequisite, not a chart value
+
+For a private registry signed by an internal CA, create the CA ConfigMap in
+the `openshift-config` namespace and reference it from the cluster image
+configuration. This requires cluster-admin authority and is intentionally not
+rendered by this chart:
+
+```bash
+oc -n openshift-config create configmap in-falcone-registry-ca \
+  --from-file=registry-ca.crt=./registry-ca.crt
+oc patch image.config.openshift.io/cluster --type=merge \
+  -p '{"spec":{"additionalTrustedCA":{"name":"in-falcone-registry-ca"}}}'
+oc get image.config.openshift.io/cluster \
+  -o jsonpath='{.spec.additionalTrustedCA.name}{"\\n"}'
+```
+
+The ConfigMap name may instead be set as
+`global.privateRegistry.caBundleConfigMap`; when private-registry mode is
+enabled, the chart's validation notes require that same-named ConfigMap to
+exist in `openshift-config` and be referenced by
+`image.config.openshift.io/cluster.spec.additionalTrustedCA`. A ConfigMap in
+the release namespace is not a substitute. Follow your platform's documented
+image-config rollout and verify node/build readiness before starting builds.
+
+### Install, render, and verify without exposing secrets
+
+Create the release namespace and credentials out of band, then render once
+before installing:
+
+```bash
+oc new-project falcone-airgap
+helm template falcone charts/in-falcone \
+  --namespace falcone-airgap \
+  -f charts/in-falcone/values/airgap.yaml \
+  -f values-openshift-airgap.yaml \
+  --set global.openshiftBuild.enabled=true \
+  > /tmp/falcone-airgap.yaml
+rg -n 'kind: (BuildConfig|ImageStream)|NODE_BASE_IMAGE|NPM_CONFIG_REGISTRY' \
+  /tmp/falcone-airgap.yaml
+helm upgrade --install falcone charts/in-falcone \
+  --namespace falcone-airgap --create-namespace \
+  -f charts/in-falcone/values/airgap.yaml \
+  -f values-openshift-airgap.yaml
+```
+
+Do not grep, print, or archive Secret data. Verify object state and build
+completion with metadata-only commands:
+
+```bash
+oc -n falcone-airgap get buildconfig,imageStream
+oc -n falcone-airgap start-build in-falcone-control-plane --follow
+oc -n falcone-airgap get builds -o custom-columns=NAME:.metadata.name,PHASE:.status.phase
+oc -n falcone-airgap describe buildconfig in-falcone-workflow-worker
+oc -n falcone-airgap get imagestreamtag in-falcone-fn-runtime:0.4.1-airgap
+helm -n falcone-airgap status falcone
+```
+
+Use the webhook URLs printed by `helm status`/the chart NOTES only with your
+GitLab administrator. Retrieve the webhook value only in a protected shell
+when configuring GitLab; never include it in a command transcript.
+
+### Failure modes and recovery
+
+* **`git.uri is required` or a source clone fails:** set a reachable URI and
+  ref, confirm the source Secret grants the builder access, and retry the
+  failed BuildConfig after correcting the mirror.
+* **`ImagePullBackOff`, x509 errors, or registry authentication failures:**
+  confirm `pullSecretNames[0]` exists in the release namespace, the registry
+  hostname matches the image references, and the cluster
+  `additionalTrustedCA` configuration is rolled out. The chart cannot repair
+  cluster CA configuration.
+* **Node base-image pull fails:** mirror the exact architecture-compatible
+  image, use a fully qualified reference in `baseImages`, and confirm the
+  builder can pull it with the first registry Secret. A private override does
+  not alter Dockerfile package-manager behavior.
+* **A package install attempts the public internet:** set the internal
+  `NPM_CONFIG_REGISTRY` (or your organization’s supported package-mirror
+  variable) under `global.openshiftBuild.env`, then start a fresh build.
+* **Webhook does not trigger:** verify the Secret key is exactly
+  `WebHookSecretKey`, the GitLab endpoint targets the correct BuildConfig, and
+  the project can reach the OpenShift API. A manual `oc start-build` is a safe
+  diagnostic.
+* **The web console build needs a different memory limit:** use
+  `global.openshiftBuild.serviceResources.web-console`; it is merged over the
+  global build resources for that service only. The current schema exposes no
+  other service-specific resource key, so size all other builds with the shared
+  `global.openshiftBuild.resources` values.
+
+### Disable, rollback, and cleanup
+
+Setting `global.openshiftBuild.enabled=false` stops rendering the six
+BuildConfigs and ImageStreams on the next Helm revision; it does not delete
+already-pushed image content or undo deployments that already reference an
+ImageStreamTag. Retain or remove those objects according to your image-retention
+policy, then deploy immutable application images before disabling source builds.
+
+To change a base image, Git ref, tag, or mirror, update the values and run a
+new Helm upgrade; BuildConfigs remain `SerialLatestOnly`, so an in-flight build
+finishes before the latest one starts. Do not use Helm rollback to recover a
+partially completed image migration. Restore the prior values, rebuild the
+known-good tag, and verify each ImageStreamTag and deployment rollout. Delete
+disposable build evidence only after collecting metadata and logs that contain
+no credentials.
+
+Removing all base-image overrides while private source-build mode remains
+enabled is intentionally rejected, because it would restore the public
+Dockerfile defaults. To return to connected defaults, disable private-registry
+mode or source-build mode in the same validated values revision.
