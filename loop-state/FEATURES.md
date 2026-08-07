@@ -4,7 +4,7 @@
 
 - Issue: https://github.com/gntik-ai/falcone-charts/issues/6
 - Branch: `feature/6-openshift-build-from-source`
-- Pull request: pending publication
+- Pull request: https://github.com/gntik-ai/falcone-charts/pull/7 (draft)
 - Personas: `P3` platform operator/SRE; `P4` security/compliance auditor; `P13` adjacent-scope actor
 - Contract: `openspec/changes/add-6-openshift-airgap-build-inputs`
 - Outcome: six source-build BuildConfigs accept deterministic private base images, build arguments,
