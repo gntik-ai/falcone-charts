@@ -12,6 +12,13 @@ global:
     registry: ""
     pullSecretNames: []
     caBundleConfigMap: ""
+  # Namespace of an administrator-owned External Secrets controller when the
+  # bundled controller is disabled. This is deliberately separate from
+  # eso.eso.namespace: the latter remains a Falcone-owned namespace for the
+  # OpenBao authentication ServiceAccount, while this namespace is used only
+  # for compatibility preflight and OpenBao NetworkPolicy ingress.
+  externalSecrets:
+    operatorNamespace: ""
   # One immutable SeaweedFS image contract is inherited by the vendored
   # data-plane workloads and by control-plane-created IAM Jobs.
   seaweedfs:
@@ -4819,6 +4826,11 @@ gatewayPolicy:
 # backend, and ESO materializes the Kubernetes Secrets consumed by workloads.
 eso:
   external-secrets:
+    # Keep true for the self-contained topology. Set false to reuse an
+    # administrator-owned External Secrets controller and CRDs; in that mode,
+    # also set global.externalSecrets.operatorNamespace to that controller's
+    # namespace. Falcone never renders resources into the external namespace.
+    enabled: true
     namespaceOverride: eso-system
   eso:
     namespace: eso-system

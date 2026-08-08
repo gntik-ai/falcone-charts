@@ -26,7 +26,10 @@ data:
   oidcIssuerUrl: {{ .Values.gatewayPolicy.oidc.issuerUrl | quote }}
   oidcDiscoveryUrl: {{ .Values.gatewayPolicy.oidc.discoveryUrl | quote }}
   passthroughMode: {{ .Values.gatewayPolicy.passthrough.mode | quote }}
-  propagatedAuthHeaders: {{ values .Values.gatewayPolicy.claimsPropagation.headers | join "," | quote }}
+  # Go map iteration order is intentionally unstable. Sort the configured values
+  # so equivalent Helm renders are byte-for-byte reproducible and release
+  # baselines do not flap between invocations.
+  propagatedAuthHeaders: {{ values .Values.gatewayPolicy.claimsPropagation.headers | sortAlpha | join "," | quote }}
   correlationHeader: {{ .Values.gatewayPolicy.correlation.headerName | quote }}
   requestIdHeader: {{ .Values.gatewayPolicy.correlation.requestIdHeader | quote }}
   gatewayInternalMode: {{ .Values.gatewayPolicy.internalRequests.mode | quote }}

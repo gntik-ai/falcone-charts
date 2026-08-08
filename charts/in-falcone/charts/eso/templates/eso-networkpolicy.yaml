@@ -1,3 +1,8 @@
+{{- $es := index .Values "external-secrets" | default dict -}}
+{{- /* Helm's default function treats false as empty; preserve an explicit false. */ -}}
+{{- $esoManaged := true -}}
+{{- if hasKey $es "enabled" }}{{- $esoManaged = $es.enabled }}{{- end -}}
+{{- if $esoManaged }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 {{ $openbaoNamespace := .Values.eso.caProvider.namespace | default "secret-store" }}
@@ -33,3 +38,4 @@ spec:
       ports:
         - protocol: TCP
           port: 8200
+{{- end }}

@@ -1,3 +1,6 @@
+{{- $globalValues := .Values.global | default dict -}}
+{{- $globalExternalSecrets := index $globalValues "externalSecrets" | default dict -}}
+{{- $esoOperatorNamespace := $globalExternalSecrets.operatorNamespace | default (.Values.eso.namespace | default "eso-system") -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -20,7 +23,11 @@ spec:
               kubernetes.io/metadata.name: {{ .Values.openbao.namespace }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.eso.namespace | default "eso-system" }}
+              # In managed mode this is Falcone's ESO namespace. In adopted mode
+              # it is the explicitly configured administrator-owned controller
+              # namespace; this selector grants ingress without rendering or
+              # taking ownership of any object in that external namespace.
+              kubernetes.io/metadata.name: {{ $esoOperatorNamespace }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Release.Namespace }}
