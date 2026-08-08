@@ -5,6 +5,13 @@ type: application
 version: 0.1.0
 appVersion: "0.9.0"
 dependencies:
+  # Gated so the umbrella can install BESIDE a cluster that already runs its own
+  # External Secrets Operator (issue #908). Defaults to true, so the standard
+  # self-contained install stays byte-compatible; set
+  # `eso.external-secrets.enabled: false` to adopt an administrator-owned ESO rather
+  # than vendoring a second controller, which collides on the shared, cluster-scoped
+  # ESO CRDs.
   - name: external-secrets
     version: "0.9.0"
     repository: https://charts.external-secrets.io
+    condition: external-secrets.enabled

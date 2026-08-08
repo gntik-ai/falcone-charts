@@ -354,26 +354,61 @@
   {{- fail "eso.eso.namespace and openbao.eso.namespace must match; ESO/OpenBao namespace wiring is a single install contract" -}}
 {{- end -}}
 {{- $externalSecretsValues := index .Values.eso "external-secrets" | default (dict) -}}
-{{- if lt (int ($externalSecretsValues.replicaCount | default 0)) 1 -}}
-  {{- fail "eso.external-secrets.replicaCount must be at least 1: the ESO controller is core" -}}
+{{- /*
+  ESO ownership (issue #908). Two supported topologies:
+
+    managed  (eso.external-secrets.enabled=true, the default) — this release installs and
+             owns the ESO controller AND the cluster-scoped ESO CRDs. Every role below is
+             core and may not be individually disabled.
+
+    adopted  (eso.external-secrets.enabled=false) — the cluster administrator already runs
+             an ESO release that owns the CRDs. ESO CRDs are cluster-scoped and singly
+             owned, so a second Helm release cannot adopt them; installing over them fails
+             with `invalid ownership metadata`. In this mode we render the ClusterSecretStore
+             and the ExternalSecrets ONLY, and the existing controller reconciles them.
+             The "is core" guards below are therefore not applicable and are skipped —
+             disabling a controller we do not install is not a downgrade of this release.
+*/ -}}
+{{- /* NB: `.enabled | default true` is WRONG here — Helm's `default` treats false as empty
+     and would flip an explicit false back to true. Read the key presence instead. */ -}}
+{{- $esoManaged := true -}}
+{{- if hasKey $externalSecretsValues "enabled" -}}
+  {{- $esoManaged = $externalSecretsValues.enabled -}}
 {{- end -}}
-{{- if not ($externalSecretsValues.installCRDs | default true) -}}
-  {{- fail "eso.external-secrets.installCRDs=false is no longer supported: fresh installs must provision ESO CRDs" -}}
-{{- end -}}
-{{- range $role := list "webhook" "certController" }}
-  {{- $cfg := index $externalSecretsValues $role | default dict -}}
-  {{- if not (kindIs "map" $cfg) -}}
-    {{- fail (printf "eso.external-secrets.%s must be an object with create=true and replicaCount >= 1" $role) -}}
+{{- if $esoManaged -}}
+  {{- if lt (int ($externalSecretsValues.replicaCount | default 0)) 1 -}}
+    {{- fail "eso.external-secrets.replicaCount must be at least 1: the ESO controller is core" -}}
   {{- end -}}
-  {{- if not ($cfg.create | default true) -}}
-    {{- fail (printf "eso.external-secrets.%s.create=false is no longer supported: ESO %s is core" $role $role) -}}
+  {{- if not ($externalSecretsValues.installCRDs | default true) -}}
+    {{- fail "eso.external-secrets.installCRDs=false is no longer supported: fresh installs must provision ESO CRDs. To install beside an operator-owned ESO, set eso.external-secrets.enabled=false instead" -}}
   {{- end -}}
-  {{- if lt (int ($cfg.replicaCount | default 0)) 1 -}}
-    {{- fail (printf "eso.external-secrets.%s.replicaCount must be at least 1: ESO %s is core" $role $role) -}}
+  {{- range $role := list "webhook" "certController" }}
+    {{- $cfg := index $externalSecretsValues $role | default dict -}}
+    {{- if not (kindIs "map" $cfg) -}}
+      {{- fail (printf "eso.external-secrets.%s must be an object with create=true and replicaCount >= 1" $role) -}}
+    {{- end -}}
+    {{- if not ($cfg.create | default true) -}}
+      {{- fail (printf "eso.external-secrets.%s.create=false is no longer supported: ESO %s is core" $role $role) -}}
+    {{- end -}}
+    {{- if lt (int ($cfg.replicaCount | default 0)) 1 -}}
+      {{- fail (printf "eso.external-secrets.%s.replicaCount must be at least 1: ESO %s is core" $role $role) -}}
+    {{- end -}}
   {{- end -}}
-{{- end -}}
-{{- if ne ($externalSecretsValues.namespaceOverride | default .Release.Namespace) (.Values.eso.eso.namespace | default "eso-system") -}}
-  {{- fail "eso.external-secrets.namespaceOverride must match eso.eso.namespace so ESO pods run in the namespace protected by ESO NetworkPolicy and OpenBao auth" -}}
+  {{- if ne ($externalSecretsValues.namespaceOverride | default .Release.Namespace) (.Values.eso.eso.namespace | default "eso-system") -}}
+    {{- fail "eso.external-secrets.namespaceOverride must match eso.eso.namespace so ESO pods run in the namespace protected by ESO NetworkPolicy and OpenBao auth" -}}
+  {{- end -}}
+{{- else -}}
+  {{- /*
+    Adopted mode still has one hard requirement: the OpenBao Kubernetes-auth ServiceAccount
+    is created in `openbao.eso.namespace` (kept equal to `eso.eso.namespace` by the check
+    above), and the ClusterSecretStore references it there. That namespace must therefore be
+    the one the EXISTING operator runs in, or the store cannot authenticate to OpenBao.
+    Requiring it to be set explicitly stops the default `eso-system` from silently pointing
+    at a namespace with no controller in it.
+  */ -}}
+  {{- if eq (.Values.eso.eso.namespace | default "") "" -}}
+    {{- fail "eso.eso.namespace must be set explicitly when eso.external-secrets.enabled=false: point it at the namespace of the existing External Secrets Operator so the OpenBao auth ServiceAccount and ClusterSecretStore serviceAccountRef land where that controller can use them" -}}
+  {{- end -}}
 {{- end -}}
 {{- if ne (.Values.eso.eso.serviceAccountName | default "eso-openbao-auth") (.Values.openbao.eso.serviceAccountName | default "eso-openbao-auth") -}}
   {{- fail "eso.eso.serviceAccountName and openbao.eso.serviceAccountName must match" -}}

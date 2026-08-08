@@ -4,7 +4,19 @@
   apply fails with "connection refused" calling the webhook. This post-install/upgrade hook (weight -5,
   i.e. BEFORE the CR hooks at weight 0/5) blocks until the webhook endpoint is actually serving, so the
   CR hooks then validate successfully — making the whole release install in a single pass.
+
+  ONLY rendered when this release installs the ESO controller. In adopted mode
+  (`eso.external-secrets.enabled=false`, issue #908) the administrator's controller is already
+  running, so there is no start-up race to guard — and the probe below polls the endpoints of
+  `eso-external-secrets-webhook`, this chart's own `fullnameOverride`, which does not exist under
+  someone else's release name. Rendering it there would block the install forever on a Service
+  that is never created.
 */ -}}
+{{- $es := index .Values "external-secrets" | default dict -}}
+{{- /* `.enabled | default true` would be wrong: Helm's `default` treats false as empty. */ -}}
+{{- $esoManaged := true -}}
+{{- if hasKey $es "enabled" }}{{- $esoManaged = $es.enabled }}{{- end }}
+{{- if $esoManaged }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -88,3 +100,4 @@ spec:
                 sleep 3
               done
               echo "external-secrets webhook endpoint is ready"
+{{- end }}
