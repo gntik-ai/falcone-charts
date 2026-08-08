@@ -21,9 +21,42 @@ including an action-none/no-op `0.3.1` replay, and therefore must set
 `parityVerified=true`, and a non-secret `backupReference`. The chart rejects
 the upgrade before emitting a manifest when any gate is absent.
 
-The chart-release workflow packages `charts/in-falcone` and publishes it as an
-OCI artifact at `oci://ghcr.io/gntik-ai/charts/in-falcone`. Releases must use a
-new `version` in `charts/in-falcone/Chart.yaml`.
+The chart-release workflow validates and packages the independent
+`charts/in-falcone` and `charts/falcone-knative` charts and publishes them as
+OCI artifacts at `oci://ghcr.io/gntik-ai/charts/in-falcone` and
+`oci://ghcr.io/gntik-ai/charts/falcone-knative`. Releases must use a new
+`version` in each changed chart's `Chart.yaml`. The managed-runtime chart must
+never be added as an umbrella dependency.
+
+## Managed Knative Serving and Kourier (proposed)
+
+> **Managed mode is proposed and unavailable.** The separate raw-upstream
+> Knative Serving/Kourier lifecycle has not passed the required disposable
+> remote OpenShift 4.21 acceptance. A chart render, offline test, package, or
+> publication is not evidence that managed mode is supported.
+
+The umbrella exposes one explicit, schema-validated choice at
+`global.knativeRuntime.mode`:
+
+| Mode | Use |
+|---|---|
+| `disabled` | Safe default. Function and hosted-MCP runtime gates remain closed; the umbrella installs no serving layer. |
+| `external` | Use an administrator-owned compatible Knative/Kourier installation. Falcone discovers and invokes only an existing administrator-supplied canary and never adopts the runtime. |
+| `managed` | Future separate cluster-admin lifecycle through `bin/falcone-knative` and the `falcone-knative` release. It remains unavailable until the published acceptance blockers close. |
+
+The proposed fixed matrix is Knative Serving/Kourier 1.22.1 on Kubernetes 1.34
+and OpenShift 4.21 under `restricted-v2`, without a custom SCC. Every other
+combination fails closed before mutation. This is a Falcone-supported patched
+upstream bundle boundary; it is **not** the Red Hat-supported OpenShift
+Serverless product path. Organizations requiring that product boundary should
+operate OpenShift Serverless themselves and select `external`.
+
+Read the [proposed support and installation guide](docs/managed-knative-support.md)
+for the mode/authority/Harbor decision, fixed matrix, status contract, and live
+blockers. The [lifecycle runbook](docs/managed-knative-runbook.md) covers staged
+readiness, one-minor upgrades and storage migration, compatibility-bounded
+rollback/forward repair, retain uninstall, separately confirmed purge,
+single-owner handoff, outage/recovery, secret-safe evidence, and cleanup.
 
 ## Webhook signing-key reference
 

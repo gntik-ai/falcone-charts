@@ -30,6 +30,18 @@
 {{- $tsOn := and .Values.transportSecurityClient ($ts.enabled | default false) -}}
 {{- $tsEnv := ternary (default (list) $ts.env) (list) $tsOn -}}
 {{- $tsCa := and $tsOn (ne (default "" $ts.caSecretName) "") -}}
+{{- /* A projected Knative status lease is consumed only by the two application
+       components. The application gets an emptyDir; a tokenless sidecar alone
+       sees the optional source ConfigMap and atomically materializes status.json. */ -}}
+{{- $knativeRuntime := default (dict) .Values.global.knativeRuntime -}}
+{{- $knativeMode := $knativeRuntime.mode | default "disabled" -}}
+{{- $knativeRuntimeConsumer := and
+      (has $knativeMode (list "managed" "external"))
+      (has (.Values.wrapper.componentId | default "") (list "control-plane" "control-plane-executor")) -}}
+{{- $knativeOwner := $knativeRuntime.owner | default .Release.Name -}}
+{{- $knativeSourceVolume := "falcone-knative-runtime-source" -}}
+{{- $knativeMaterializedVolume := "falcone-knative-runtime" -}}
+{{- $knativeAppTokenVolume := "falcone-application-api-token" -}}
 {{- $postgresTsEnv := list -}}
 {{- if $tsOn -}}
   {{- range $tsEnv -}}
@@ -111,7 +123,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "component-wrapper.serviceAccountName" . }}
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken | default false }}
+      automountServiceAccountToken: {{ ternary false (.Values.serviceAccount.automountToken | default false) $knativeRuntimeConsumer }}
       enableServiceLinks: false
       {{- if gt (len $imagePullSecrets) 0 }}
       imagePullSecrets:
@@ -208,7 +220,7 @@ spec:
           ports:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane }}
+          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $knativeRuntimeConsumer }}
           env:
             {{- if $isControlPlane }}
             - name: WEBHOOK_SIGNING_KEY
@@ -261,6 +273,12 @@ spec:
             {{- with .Values.env }}
             {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}
+            {{- if $knativeRuntimeConsumer }}
+            - name: KNATIVE_RUNTIME_MODE
+              value: {{ $knativeMode | quote }}
+            - name: KNATIVE_RUNTIME_STATUS_FILE
+              value: "/var/run/falcone/knative/status.json"
+            {{- end }}
             {{- with $tsEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -284,7 +302,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.persistence.enabled (gt (len .Values.extraVolumeMounts) 0) $tsCa }}
+          {{- if or .Values.persistence.enabled (gt (len .Values.extraVolumeMounts) 0) $tsCa $knativeRuntimeConsumer }}
           volumeMounts:
             {{- if .Values.persistence.enabled }}
             - name: data
@@ -292,6 +310,17 @@ spec:
             {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $knativeRuntimeConsumer }}
+            - name: {{ $knativeMaterializedVolume }}
+              mountPath: /var/run/falcone/knative
+            {{- if .Values.serviceAccount.automountToken }}
+            # Keep Kubernetes credentials available to the application without
+            # exposing them to the runtime-status guard sidecar.
+            - name: {{ $knativeAppTokenVolume }}
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            {{- end }}
             {{- end }}
             {{- if $tsCa }}
             - name: falcone-transport-ca
@@ -315,10 +344,123 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+        {{- if $knativeRuntimeConsumer }}
+        - name: knative-runtime-status-guard
+          image: {{ include "component-wrapper.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          command: ["node", "-e"]
+          args:
+            - |
+              'use strict';
+              const fs = require('node:fs');
+              const path = require('node:path');
+              const source = process.env.RUNTIME_STATUS_SOURCE;
+              const target = process.env.RUNTIME_STATUS_TARGET;
+              const mode = process.env.RUNTIME_STATUS_EXPECTED_MODE;
+              const owner = process.env.KNATIVE_RUNTIME_OWNER;
+              const version = process.env.KNATIVE_RUNTIME_VERSION;
+              const interval = Number(process.env.RUNTIME_STATUS_LEASE_CHECK_INTERVAL_MS);
+              const maxBytes = 16 * 1024;
+              const maxLeaseMs = 5 * 60 * 1000;
+              const maxClockSkewMs = 60 * 1000;
+              const modes = new Set(['managed', 'external']);
+              const compatibility = new Set(['compatible', 'incompatible', 'unverified']);
+              const states = new Set(['ready', 'unverified', 'degraded', 'unavailable', 'disabled']);
+              const stages = new Set(['configured', 'preflight', 'crds', 'webhook', 'serving', 'kourier', 'smoke', 'ready', 'disabled', 'external_validation', 'unknown']);
+              const canaryStates = new Set(['verified', 'missing', 'unreadable', 'invoke_failed']);
+              const reasonPattern = /^[A-Z][A-Z0-9_]{0,63}$/;
+              const safeNamePattern = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+              function unavailable(reason) {
+                const now = new Date().toISOString();
+                return {
+                  schemaVersion: 'falcone.knative-runtime/v1', mode, owner, version,
+                  compatibility: 'unverified',
+                  readiness: { state: 'unavailable', stage: 'unknown', reason, lastTransitionAt: now },
+                  observedAt: now, validUntil: now,
+                };
+              }
+              function validateLease(document) {
+                if (!document || document.schemaVersion !== 'falcone.knative-runtime/v1') return 'STATUS_SOURCE_INVALID';
+                if (!modes.has(document.mode) || document.mode !== mode) return 'STATUS_SOURCE_INVALID';
+                if (!safeNamePattern.test(document.owner || '') || document.owner !== owner) return 'STATUS_OWNER_MISMATCH';
+                if (document.version !== version || !compatibility.has(document.compatibility)) return 'STATUS_SOURCE_INVALID';
+                const readiness = document.readiness;
+                if (!readiness || !states.has(readiness.state) || !stages.has(readiness.stage) || !reasonPattern.test(readiness.reason || '')) return 'STATUS_SOURCE_INVALID';
+                const transition = Date.parse(readiness.lastTransitionAt);
+                const observed = Date.parse(document.observedAt);
+                const validUntil = Date.parse(document.validUntil);
+                if (![transition, observed, validUntil].every(Number.isFinite) || observed > validUntil) return 'STATUS_SOURCE_INVALID';
+                if (validUntil - observed > maxLeaseMs || observed > Date.now() + maxClockSkewMs) return 'LEASE_INVALID';
+                if (mode === 'external' && (!document.externalCanary || !canaryStates.has(document.externalCanary.state))) return 'STATUS_SOURCE_INVALID';
+                if (validUntil <= Date.now()) return 'LEASE_EXPIRED';
+                return '';
+              }
+              function readCurrentLease() {
+                try {
+                  const stat = fs.statSync(source);
+                  if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) return unavailable('STATUS_SOURCE_INVALID');
+                  const document = JSON.parse(fs.readFileSync(source, 'utf8'));
+                  const reason = validateLease(document);
+                  return reason ? unavailable(reason) : document;
+                } catch (error) {
+                  return unavailable(error && error.code === 'ENOENT' ? 'STATUS_SOURCE_MISSING' : 'STATUS_SOURCE_INVALID');
+                }
+              }
+              function atomicMaterialize(document) {
+                const directory = path.dirname(target);
+                const temporary = path.join(directory, `.status.json.${process.pid}.tmp`);
+                fs.writeFileSync(temporary, `${JSON.stringify(document)}\n`, { encoding: 'utf8', mode: 0o444 });
+                fs.renameSync(temporary, target);
+              }
+              function refreshMaterializedStatus() {
+                try {
+                  atomicMaterialize(readCurrentLease());
+                } catch (error) {
+                  // Never leave stale ready state when atomic replacement cannot complete.
+                  try { fs.rmSync(target, { force: true }); } catch {}
+                }
+              }
+              refreshMaterializedStatus();
+              setInterval(refreshMaterializedStatus, interval).unref();
+              setInterval(() => {}, 0x7fffffff);
+          env:
+            - name: RUNTIME_STATUS_SOURCE
+              value: /var/run/falcone/knative-source/status.json
+            - name: RUNTIME_STATUS_TARGET
+              value: /var/run/falcone/knative/status.json
+            - name: RUNTIME_STATUS_EXPECTED_MODE
+              value: {{ $knativeMode | quote }}
+            - name: KNATIVE_RUNTIME_OWNER
+              value: {{ $knativeOwner | quote }}
+            - name: KNATIVE_RUNTIME_VERSION
+              value: "1.22.1"
+            - name: RUNTIME_STATUS_LEASE_CHECK_INTERVAL_MS
+              value: "5000"
+          volumeMounts:
+            - name: {{ $knativeSourceVolume }}
+              mountPath: /var/run/falcone/knative-source
+              readOnly: true
+            - name: {{ $knativeMaterializedVolume }}
+              mountPath: /var/run/falcone/knative
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 5m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+        {{- end }}
       {{- with .Values.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
-      {{- if or $isControlPlane .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa }}
+      {{- if or $isControlPlane .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa $knativeRuntimeConsumer }}
       volumes:
         {{- if $isControlPlane }}
         - name: webhook-database-principal-gate
@@ -333,6 +475,36 @@ spec:
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- tpl (toYaml .) $ | nindent 8 }}
+        {{- end }}
+        {{- if $knativeRuntimeConsumer }}
+        - name: {{ $knativeSourceVolume }}
+          configMap:
+            name: {{ $knativeRuntime.statusConfigMapName }}
+            optional: true
+            defaultMode: 0444
+        - name: {{ $knativeMaterializedVolume }}
+          emptyDir: {}
+        {{- if .Values.serviceAccount.automountToken }}
+        - name: {{ $knativeAppTokenVolume }}
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  optional: true
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+        {{- end }}
         {{- end }}
         {{- if $tsCa }}
         - name: falcone-transport-ca

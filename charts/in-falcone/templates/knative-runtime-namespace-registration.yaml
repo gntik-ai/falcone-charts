@@ -1,0 +1,351 @@
+{{- $runtime := .Values.global.knativeRuntime | default (dict) -}}
+{{- $mode := $runtime.mode | default "disabled" -}}
+{{- $active := has $mode (list "managed" "external") -}}
+{{- $cleanupRequested := and (eq $mode "disabled") ($runtime.unregister | default false) -}}
+{{- $owner := $runtime.owner | default .Release.Name -}}
+{{- $projectorNamespace := $runtime.projectorNamespace | default "knative-serving" -}}
+{{- $projectorServiceAccount := $runtime.projectorServiceAccountName | default (printf "falcone-knative-status-projector-%s" ($owner | sha256sum | trunc 8)) -}}
+{{- $releasePrefix := .Release.Name | trunc 35 | trimSuffix "-" -}}
+{{- $releaseIdentity := printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8 -}}
+{{- $name := printf "%s-knative-register-%s" $releasePrefix $releaseIdentity -}}
+{{- $revokeName := printf "%s-knative-unregister-%s" $releasePrefix $releaseIdentity -}}
+{{- $runtimeWriterName := printf "%s-knative-runtime-writer-%s" $releasePrefix $releaseIdentity -}}
+{{- $runtimeBootstrapName := printf "%s-knative-runtime-bootstrap-%s" $releasePrefix $releaseIdentity -}}
+{{- $supportEvents := ternary "pre-install,pre-upgrade,pre-delete" "pre-upgrade,pre-delete" $active -}}
+{{- $revokeEvents := ternary "pre-delete" "pre-upgrade,pre-delete" $active -}}
+{{- $supportHookAnnotations := dict
+      "helm.sh/hook" $supportEvents
+      "helm.sh/hook-weight" "-20"
+      "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded,hook-failed" -}}
+{{- $jobHookAnnotations := dict
+      "helm.sh/hook-weight" "-19"
+      "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded,hook-failed" -}}
+{{- $containerSecurityContext := deepCopy (default (dict) .Values.bootstrap.job.securityContext) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $containerSecurityContext "runAsUser" -}}
+  {{- $_ := unset $containerSecurityContext "runAsGroup" -}}
+{{- end -}}
+{{- if or $active $cleanupRequested }}
+{{- if $active }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $runtimeWriterName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+    falcone.io/knative-owner: {{ $owner | quote }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ $runtime.statusConfigMapName | quote }}]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $runtimeWriterName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+    falcone.io/knative-owner: {{ $owner | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $runtimeWriterName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $projectorServiceAccount }}
+    namespace: {{ $projectorNamespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $runtimeBootstrapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+    falcone.io/knative-owner: {{ $owner | quote }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook" "pre-install,pre-upgrade") $supportHookAnnotations) | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ $runtime.statusConfigMapName | quote }}]
+    verbs: ["get"]
+  # Kubernetes does not support resourceNames on create authorization. This
+  # namespace-local permission is ephemeral; the hook code creates only the
+  # exact runtime ConfigMap after a NotFound read and is deleted after the hook.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $runtimeBootstrapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+    falcone.io/knative-owner: {{ $owner | quote }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook" "pre-install,pre-upgrade") $supportHookAnnotations) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $runtimeBootstrapName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+  annotations:
+    {{- toYaml $supportHookAnnotations | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+  annotations:
+    {{- toYaml $supportHookAnnotations | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: [{{ .Release.Namespace | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+  annotations:
+    {{- toYaml $supportHookAnnotations | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+{{- if $active }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook" "pre-install,pre-upgrade") $jobHookAnnotations) | nindent 4 }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        in-falcone.io/component: knative-runtime-registration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.bootstrap.job.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: register-namespace
+          image: "{{ include "component-wrapper.normalizeRepository" (dict "Values" .Values "repository" .Values.bootstrap.job.image.repository) }}:{{ .Values.bootstrap.job.image.tag }}"
+          imagePullPolicy: {{ .Values.bootstrap.job.image.pullPolicy }}
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              namespace={{ .Release.Namespace | quote }}
+              owner={{ $owner | quote }}
+              owner_label="falcone.io/knative-owner=$owner"
+              runtime_name={{ $runtime.statusConfigMapName | quote }}
+              namespace_json="$(kubectl get namespace "$namespace" -o json)"
+              current_registration="$(jq -r '.metadata.labels["falcone.io/knative-runtime-projection"] // ""' <<<"$namespace_json")"
+              current_owner="$(jq -r '.metadata.labels["falcone.io/knative-owner"] // ""' <<<"$namespace_json")"
+              namespace_resourceVersion="$(jq -r '.metadata.resourceVersion // ""' <<<"$namespace_json")"
+              if [ -z "$namespace_resourceVersion" ]; then
+                printf 'refusing namespace registration: Namespace resourceVersion is missing\n' >&2
+                exit 1
+              fi
+              if { [ -n "$current_owner" ] && [ "$current_owner" != "$owner" ]; } || \
+                 { [ -z "$current_owner" ] && [ -n "$current_registration" ]; } || \
+                 { [ -n "$current_registration" ] && [ "$current_registration" != enabled ]; }; then
+                printf 'refusing namespace registration: foreign or partial Knative runtime owner\n' >&2
+                exit 1
+              fi
+
+              runtime_missing=false
+              if runtime_json="$(kubectl get configmap "$runtime_name" -n "$namespace" -o json 2>&1)"; then
+                runtime_kind="$(jq -r '.kind // ""' <<<"$runtime_json")"
+                if [ "$runtime_kind" = ConfigMapList ] && [ "$(jq -r '.items | length' <<<"$runtime_json")" -eq 0 ]; then
+                  runtime_missing=true
+                elif [ "$runtime_kind" != ConfigMap ]; then
+                  printf 'refusing namespace registration: unexpected runtime ConfigMap response\n' >&2
+                  exit 1
+                else
+                  runtime_owner="$(jq -r '.metadata.labels["falcone.io/knative-owner"] // ""' <<<"$runtime_json")"
+                  document_owner="$(jq -r '.data["status.json"] | fromjson? | .owner // ""' <<<"$runtime_json")"
+                  document_schema="$(jq -r '.data["status.json"] | fromjson? | .schemaVersion // ""' <<<"$runtime_json")"
+                  if [ "$runtime_owner" != "$owner" ] || [ "$document_owner" != "$owner" ] || \
+                     [ "$document_schema" != falcone.knative-runtime/v1 ]; then
+                    printf 'refusing namespace registration: runtime ConfigMap is foreign, unowned, or invalid\n' >&2
+                    exit 1
+                  fi
+                fi
+              elif grep -qi 'notfound\|not found' <<<"$runtime_json"; then
+                runtime_missing=true
+              else
+                printf 'refusing namespace registration: runtime ConfigMap inspection failed\n' >&2
+                exit 1
+              fi
+
+              if [ "$runtime_missing" = true ]; then
+                cat <<'FALCONE_RUNTIME_PLACEHOLDER' | kubectl create -f -
+              {{ dict
+                  "apiVersion" "v1"
+                  "kind" "ConfigMap"
+                  "metadata" (dict
+                    "name" $runtime.statusConfigMapName
+                    "namespace" .Release.Namespace
+                    "labels" (dict
+                      "falcone.io/knative-owner" $owner
+                      "falcone.io/runtime-schema" "v1"))
+                  "data" (dict
+                    "status.json" (dict
+                      "schemaVersion" "falcone.knative-runtime/v1"
+                      "mode" $mode
+                      "owner" $owner
+                      "version" "1.22.1"
+                      "compatibility" "unverified"
+                      "readiness" (dict
+                        "state" "unavailable"
+                        "stage" "configured"
+                        "reason" "AWAITING_INITIAL_PROJECTION"
+                        "lastTransitionAt" "1970-01-01T00:00:00Z")
+                      "observedAt" "1970-01-01T00:00:00Z"
+                      "validUntil" "1970-01-01T00:00:00Z"
+                      | toJson))
+                  | toJson }}
+              FALCONE_RUNTIME_PLACEHOLDER
+              fi
+
+              if [ "$current_registration" = enabled ] && [ "$current_owner" = "$owner" ]; then
+                exit 0
+              fi
+              if [ "$(jq -r '.metadata.labels | type' <<<"$namespace_json")" = object ]; then
+                namespace_patch="$(jq -cn \
+                  --arg resourceVersion "$namespace_resourceVersion" \
+                  --arg owner "$owner" \
+                  '[
+                    {"op":"test","path":"/metadata/resourceVersion","value":$resourceVersion},
+                    {"op":"add","path":"/metadata/labels/falcone.io~1knative-runtime-projection","value":"enabled"},
+                    {"op":"add","path":"/metadata/labels/falcone.io~1knative-owner","value":$owner}
+                  ]')"
+              else
+                namespace_patch="$(jq -cn \
+                  --arg resourceVersion "$namespace_resourceVersion" \
+                  --arg owner "$owner" \
+                  '[
+                    {"op":"test","path":"/metadata/resourceVersion","value":$resourceVersion},
+                    {"op":"add","path":"/metadata/labels","value":{"falcone.io/knative-runtime-projection":"enabled","falcone.io/knative-owner":$owner}}
+                  ]')"
+              fi
+              kubectl patch namespace "$namespace" --type=json --field-manager label --patch "$namespace_patch"
+          {{- with .Values.bootstrap.job.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $containerSecurityContext | nindent 12 }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $revokeName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: knative-runtime-registration
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook" $revokeEvents) $jobHookAnnotations) | nindent 4 }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        in-falcone.io/component: knative-runtime-registration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.bootstrap.job.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: unregister-namespace
+          image: "{{ include "component-wrapper.normalizeRepository" (dict "Values" .Values "repository" .Values.bootstrap.job.image.repository) }}:{{ .Values.bootstrap.job.image.tag }}"
+          imagePullPolicy: {{ .Values.bootstrap.job.image.pullPolicy }}
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              namespace={{ .Release.Namespace | quote }}
+              owner={{ $owner | quote }}
+              namespace_json="$(kubectl get namespace "$namespace" -o json)"
+              current_registration="$(jq -r '.metadata.labels["falcone.io/knative-runtime-projection"] // ""' <<<"$namespace_json")"
+              current_owner="$(jq -r '.metadata.labels["falcone.io/knative-owner"] // ""' <<<"$namespace_json")"
+              namespace_resourceVersion="$(jq -r '.metadata.resourceVersion // ""' <<<"$namespace_json")"
+              if [ -z "$current_owner" ] && [ -z "$current_registration" ]; then
+                exit 0
+              fi
+              if [ "$current_owner" != "$owner" ] || [ -z "$namespace_resourceVersion" ]; then
+                printf 'refusing namespace unregistration: foreign Knative runtime owner\n' >&2
+                exit 1
+              fi
+              namespace_patch="$(jq -cn \
+                --arg resourceVersion "$namespace_resourceVersion" \
+                '[
+                  {"op":"test","path":"/metadata/resourceVersion","value":$resourceVersion},
+                  {"op":"remove","path":"/metadata/labels/falcone.io~1knative-runtime-projection"},
+                  {"op":"remove","path":"/metadata/labels/falcone.io~1knative-owner"}
+                ]')"
+              kubectl patch namespace "$namespace" --type=json --field-manager label --patch "$namespace_patch"
+          {{- with .Values.bootstrap.job.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $containerSecurityContext | nindent 12 }}
+{{- end }}

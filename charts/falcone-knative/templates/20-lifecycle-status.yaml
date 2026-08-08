@@ -1,0 +1,35 @@
+{{- if and .Values.status.enabled (or (eq .Values.lifecycle.installStage "all") (eq .Values.lifecycle.installStage "status") (eq .Values.lifecycle.installStage "complete")) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.status.name | quote }}
+  namespace: {{ .Values.status.namespace | quote }}
+  labels:
+    app.kubernetes.io/name: falcone-knative
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    app.kubernetes.io/version: {{ .Chart.Version | quote }}
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
+    falcone.io/knative-owner: {{ .Values.owner | quote }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Values.status.namespace | quote }}
+    falcone.io/status-owner: helm
+data:
+  lifecycle.json: {{ dict
+      "schemaVersion" "falcone.knative-lifecycle/v1"
+      "release" .Release.Name
+      "version" .Chart.Version
+      "status" .Values.status.state
+      "runId" .Values.status.runId
+      "clusterIdentity" (dict
+        "apiUrl" .Values.status.clusterIdentity.apiUrl
+        "infrastructureName" .Values.status.clusterIdentity.infrastructureName
+        "infrastructureId" .Values.status.clusterIdentity.infrastructureId
+        "clusterUid" .Values.status.clusterIdentity.clusterUid)
+      "lifecycleExecutable" (dict
+        "name" .Values.status.lifecycleExecutable.name
+        "version" .Values.status.lifecycleExecutable.version
+        "sha256" .Values.status.lifecycleExecutable.sha256)
+      | toJson | quote }}
+{{- end }}

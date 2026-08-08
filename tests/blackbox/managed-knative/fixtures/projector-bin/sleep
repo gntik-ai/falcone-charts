@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# One refresh is enough for the projector ownership contract; stop deterministically.
+exit 86

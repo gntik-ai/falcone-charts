@@ -1,0 +1,129 @@
+{{- if and .Values.projector.enabled (ne .Values.mode "disabled") (or (eq .Values.lifecycle.installStage "all") (eq .Values.lifecycle.installStage "projector") (eq .Values.lifecycle.installStage "complete")) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "falcone-knative.projectorServiceAccountName" . | quote }}
+  namespace: {{ .Values.status.namespace | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-status-projector" .Release.Name | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+rules:
+  # Namespace access is discovery-only. The projector additionally checks both
+  # registration and owner labels immediately before each projection update.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-status-projector" .Release.Name | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-status-projector" .Release.Name | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "falcone-knative.projectorServiceAccountName" . | quote }}
+    namespace: {{ .Values.status.namespace | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s-serving-health-reader" .Release.Name | quote }}
+  namespace: knative-serving
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["controller", "net-kourier-controller"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    resourceNames: ["webhook"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-serving-health-reader" .Release.Name | quote }}
+  namespace: knative-serving
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s-serving-health-reader" .Release.Name | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "falcone-knative.projectorServiceAccountName" . | quote }}
+    namespace: {{ .Values.status.namespace | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s-kourier-health-reader" .Release.Name | quote }}
+  namespace: kourier-system
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["3scale-kourier-gateway"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-kourier-health-reader" .Release.Name | quote }}
+  namespace: kourier-system
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s-kourier-health-reader" .Release.Name | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "falcone-knative.projectorServiceAccountName" . | quote }}
+    namespace: {{ .Values.status.namespace | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s-lifecycle-status-reader" .Release.Name | quote }}
+  namespace: {{ .Values.status.namespace | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ .Values.status.name | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-lifecycle-status-reader" .Release.Name | quote }}
+  namespace: {{ .Values.status.namespace | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s-lifecycle-status-reader" .Release.Name | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "falcone-knative.projectorServiceAccountName" . | quote }}
+    namespace: {{ .Values.status.namespace | quote }}
+{{- end }}

@@ -115,6 +115,27 @@ global:
     caMountPath: /etc/falcone/tls
     # Env appended to opted-in components (e.g. PGSSLMODE, MONGO_TLS, KAFKA_SSL, NODE_EXTRA_CA_CERTS).
     env: []
+  # Application-side contract for Knative dependency availability. Managed
+  # Knative is installed and owned by the separate falcone-knative release;
+  # this umbrella only registers its namespace and consumes the leased status.
+  knativeRuntime:
+    # managed  - consume status from the separate Falcone-managed lifecycle
+    # external - consume status discovered from an administrator-owned runtime
+    # disabled - render no runtime status wiring (the byte-compatible default)
+    mode: disabled
+    # Must match the lifecycle/projector owner. Empty resolves to the Helm
+    # release name so the common single-release case needs no extra value.
+    owner: ""
+    # Projector-owned ConfigMap in the Falcone application namespace. The
+    # umbrella mounts it read-only but never templates or adopts it.
+    statusConfigMapName: falcone-knative-runtime
+    # Set true only on an explicit active-to-disabled transition so the
+    # pre-upgrade hook removes this release's registration labels. The normal
+    # disabled/default render remains byte-compatible and hook-free.
+    unregister: false
+    projectorNamespace: knative-serving
+    # Empty derives the owner-specific projector service account name.
+    projectorServiceAccountName: ""
   openshiftBuild:
     enabled: false
     git: {uri: "", ref: main, sourceSecret: ""}

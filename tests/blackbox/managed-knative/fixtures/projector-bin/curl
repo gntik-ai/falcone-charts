@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+import { appendFileSync, readFileSync } from 'node:fs'
+
+const args = process.argv.slice(2)
+const scenario = process.env.FALCONE_BBX_PROJECTOR_SCENARIO ?? 'foreign-runtime-owner'
+const requestIndex = args.indexOf('--request')
+const method = requestIndex >= 0 ? args[requestIndex + 1] : 'GET'
+const url = args.at(-1)
+const dataIndex = args.indexOf('--data-binary')
+let body = ''
+if (dataIndex >= 0 && args[dataIndex + 1]?.startsWith('@')) {
+  body = readFileSync(args[dataIndex + 1].slice(1), 'utf8')
+}
+
+if (process.env.FALCONE_BBX_PROJECTOR_LOG) {
+  appendFileSync(process.env.FALCONE_BBX_PROJECTOR_LOG, `${JSON.stringify({ method, url, body })}\n`)
+}
+
+if (method !== 'GET') {
+  process.stdout.write('{"kind":"ConfigMap"}\n')
+} else if (url.includes('/configmaps/falcone-knative-status')) {
+  process.stdout.write('{"data":{"lifecycle.json":"compatible"}}\n')
+} else if (url.includes('/namespaces?labelSelector=')) {
+  process.stdout.write('{"items":[{"metadata":{"name":"falcone-app-a"}}]}\n')
+} else if (url.endsWith('/namespaces/falcone-app-a')) {
+  process.stdout.write('{"metadata":{"name":"falcone-app-a","labels":{"falcone.io/knative-runtime-projection":"enabled","falcone.io/knative-owner":"falcone-knative"}}}\n')
+} else if (url.endsWith('/namespaces/falcone-app-a/configmaps/falcone-knative-runtime')) {
+  const runtimeOwner = scenario === 'foreign-runtime-owner' ? 'foreign-lifecycle-owner' : 'falcone-knative'
+  process.stdout.write(`${JSON.stringify({
+    metadata: {
+      name: 'falcone-knative-runtime', namespace: 'falcone-app-a', resourceVersion: '88',
+      labels: { 'falcone.io/knative-runtime-projection': 'projected', 'falcone.io/knative-owner': runtimeOwner },
+    },
+    data: {
+      'status.json': JSON.stringify({
+        schemaVersion: 'falcone.knative-runtime/v1', mode: 'managed', owner: runtimeOwner,
+        readiness: { state: 'ready', stage: 'ready', reason: 'STALE_READY' },
+        observedAt: '2026-08-07T00:00:00Z', validUntil: '2026-08-07T00:02:00Z',
+      }),
+    },
+  })}\n`)
+} else if (url.endsWith('/apis/apps/v1/namespaces/knative-serving/deployments/controller')) {
+  process.stdout.write('{"metadata":{"name":"controller"},"status":{"availableReplicas":0,"conditions":[{"type":"Available","status":"False"}]}}\n')
+} else if (url.endsWith('/apis/apps/v1/namespaces/knative-serving/deployments/net-kourier-controller')) {
+  process.stdout.write('{"metadata":{"name":"net-kourier-controller"},"status":{"availableReplicas":1,"conditions":[{"type":"Available","status":"True"}]}}\n')
+} else if (url.endsWith('/apis/apps/v1/namespaces/kourier-system/deployments/3scale-kourier-gateway')) {
+  process.stdout.write('{"metadata":{"name":"3scale-kourier-gateway"},"status":{"availableReplicas":1,"conditions":[{"type":"Available","status":"True"}]}}\n')
+} else if (url.endsWith('/api/v1/namespaces/knative-serving/endpoints/webhook')) {
+  process.stdout.write('{"metadata":{"name":"webhook"},"subsets":[{"addresses":[{"ip":"10.0.0.8"}],"ports":[{"port":8443}]}]}\n')
+} else {
+  process.stdout.write('{}\n')
+}

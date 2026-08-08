@@ -37,6 +37,7 @@
         "namespace",
         "environment",
         "createNamespace",
+        "knativeRuntime",
         "airgap",
         "privateRegistry",
         "webhookSigningKey",
@@ -62,6 +63,57 @@
         },
         "createNamespace": {
           "type": "boolean"
+        },
+        "knativeRuntime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "owner",
+            "statusConfigMapName",
+            "unregister",
+            "projectorNamespace",
+            "projectorServiceAccountName"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "managed",
+                "external",
+                "disabled"
+              ],
+              "default": "disabled"
+            },
+            "owner": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$",
+              "default": ""
+            },
+            "statusConfigMapName": {
+              "type": "string",
+              "maxLength": 253,
+              "const": "falcone-knative-runtime",
+              "default": "falcone-knative-runtime"
+            },
+            "unregister": {
+              "type": "boolean",
+              "default": false
+            },
+            "projectorNamespace": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$",
+              "default": "knative-serving"
+            },
+            "projectorServiceAccountName": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^(?:|[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)$",
+              "default": ""
+            }
+          }
         },
         "imageRegistry": {
           "type": "string"

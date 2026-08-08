@@ -9,6 +9,13 @@ global:
   namespace: falcone
   createNamespace: false
   imagePullSecrets: []
+  # Knative runtime modes (default stays disabled):
+  # knativeRuntime:
+  #   mode: managed   # separate falcone-knative release owns Serving/Kourier
+  #   owner: falcone  # omit/empty to use this Helm release name
+  # Use mode: external for administrator-owned Knative, or mode: disabled for
+  # no Function/MCP serving dependency. The projected ConfigMap name defaults
+  # to falcone-knative-runtime in this application namespace.
 mcp:
   runtimeImage:
     repository: localhost:30500/in-falcone-mcp-runtime

@@ -1,0 +1,150 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: config.webhook.serving.knative.dev
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: admissionregistration
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+webhooks:
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: webhook
+      namespace: knative-serving
+  failurePolicy: Fail
+  sideEffects: None
+  name: config.webhook.serving.knative.dev
+  objectSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values:
+      - knative-serving
+    - key: app.kubernetes.io/component
+      operator: In
+      values:
+      - autoscaler
+      - controller
+      - logging
+      - networking
+      - observability
+      - tracing
+      - net-certmanager
+  timeoutSeconds: 10
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: webhook.serving.knative.dev
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: admissionregistration
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+webhooks:
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: webhook
+      namespace: knative-serving
+  failurePolicy: Fail
+  sideEffects: None
+  name: webhook.serving.knative.dev
+  timeoutSeconds: 10
+  rules:
+  - apiGroups:
+    - autoscaling.internal.knative.dev
+    - networking.internal.knative.dev
+    - serving.knative.dev
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    scope: '*'
+    resources:
+    - metrics
+    - podautoscalers
+    - certificates
+    - ingresses
+    - serverlessservices
+    - configurations
+    - revisions
+    - routes
+    - services
+    - domainmappings
+    - domainmappings/status
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validation.webhook.serving.knative.dev
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: admissionregistration
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+webhooks:
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: webhook
+      namespace: knative-serving
+  failurePolicy: Fail
+  sideEffects: None
+  name: validation.webhook.serving.knative.dev
+  timeoutSeconds: 10
+  rules:
+  - apiGroups:
+    - autoscaling.internal.knative.dev
+    - networking.internal.knative.dev
+    - serving.knative.dev
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    scope: '*'
+    resources:
+    - metrics
+    - podautoscalers
+    - certificates
+    - ingresses
+    - serverlessservices
+    - configurations
+    - revisions
+    - routes
+    - services
+    - domainmappings
+    - domainmappings/status

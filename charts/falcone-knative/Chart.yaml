@@ -1,0 +1,14 @@
+apiVersion: v2
+name: falcone-knative
+description: Operator-free, lifecycle-gated Knative Serving and Kourier bundle for Falcone
+type: application
+version: 0.1.0
+appVersion: "1.22.1"
+home: https://github.com/gntik-ai/falcone-charts
+sources:
+  - https://github.com/knative/serving
+  - https://github.com/knative-extensions/net-kourier
+annotations:
+  falcone.io/support-boundary: Falcone-supported patched upstream bundle; not Red Hat OpenShift Serverless
+  falcone.io/supported-kubernetes: "1.34"
+  falcone.io/supported-openshift: "4.21 restricted-v2"

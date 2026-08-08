@@ -1,0 +1,28 @@
+{{- if eq .Values.mode "managed" }}
+{{- if eq .Values.lifecycle.installStage "complete" }}
+{{ include "falcone-knative.renderOwnedStage" (list . "bundle/stages/02-foundation.yaml") }}
+{{ include "falcone-knative.renderOwnedStage" (list . "bundle/stages/03-webhook-backend.yaml") }}
+{{ include "falcone-knative.renderOwnedStage" (list . "bundle/stages/04-admissionregistration.yaml") }}
+{{ include "falcone-knative.renderOwnedStage" (list . "bundle/stages/05-serving-controllers.yaml") }}
+{{ include "falcone-knative.renderOwnedStage" (list . "bundle/stages/06-kourier.yaml") }}
+{{- else }}
+{{- if include "falcone-knative.stageSelected" (list . "crds") }}
+{{ include "falcone-knative.renderStage" (list . "bundle/stages/01-crds.yaml") }}
+{{- end }}
+{{- if include "falcone-knative.stageSelected" (list . "foundation") }}
+{{ include "falcone-knative.renderStage" (list . "bundle/stages/02-foundation.yaml") }}
+{{- end }}
+{{- if include "falcone-knative.stageSelected" (list . "webhook-backend") }}
+{{ include "falcone-knative.renderStage" (list . "bundle/stages/03-webhook-backend.yaml") }}
+{{- end }}
+{{- if include "falcone-knative.stageSelected" (list . "admissionregistration") }}
+{{ include "falcone-knative.renderStage" (list . "bundle/stages/04-admissionregistration.yaml") }}
+{{- end }}
+{{- if include "falcone-knative.stageSelected" (list . "serving-controllers") }}
+{{ include "falcone-knative.renderStage" (list . "bundle/stages/05-serving-controllers.yaml") }}
+{{- end }}
+{{- if include "falcone-knative.stageSelected" (list . "kourier") }}
+{{ include "falcone-knative.renderStage" (list . "bundle/stages/06-kourier.yaml") }}
+{{- end }}
+{{- end }}
+{{- end }}

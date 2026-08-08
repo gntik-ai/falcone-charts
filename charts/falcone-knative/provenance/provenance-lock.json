@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "falcone.knative-provenance/v1",
+  "chartVersion": "0.1.0",
+  "bundleVersion": "1.22.1",
+  "support": {
+    "kubernetes": "1.34",
+    "openshift": "4.21",
+    "securityProfile": "restricted-v2",
+    "boundary": "Falcone-supported patched upstream bundle; not the Red Hat-supported OpenShift Serverless product path"
+  },
+  "upstream": {
+    "serving": {
+      "repository": "https://github.com/knative/serving",
+      "release": "knative-v1.22.1",
+      "tagObject": "438d52029f6739194a499a009f728ab5da09dc1f",
+      "sourceRevision": "3bd82a6177c278b1192abee1b3ca39daf25c3f35",
+      "releaseChecksumAssetSha256": "3c7a6ae60a9fe2fa4ee8661fdfb7d91ea71cc3d81524994b5ad41301007d0b00",
+      "originalManifests": [
+        {"path": "bundle/upstream/serving-crds.yaml", "sha256": "469f019b54407f6b4362da8500e6ba343c6d2e3f2cb27c2c1cfcaaab4f6d5883"},
+        {"path": "bundle/upstream/serving-core.yaml", "sha256": "aafb2bfd722ad184d0d0dacf1f55cedc388827ed81c94312f4df71e5eccb5ae1"}
+      ]
+    },
+    "kourier": {
+      "repository": "https://github.com/knative-extensions/net-kourier",
+      "release": "knative-v1.22.1",
+      "tagObject": "0e938d49ea9ed14137d275d29d48c3ef76bb5e37",
+      "sourceRevision": "0f143a69791e6f3c0fdd14ea16933cc1a3fd6f10",
+      "releaseChecksumAssetSha256": "12ac2342ccdc9a9a389fdfa305b073869e3aacc91c72e9972d7f19229a6d7a3c",
+      "originalManifests": [
+        {"path": "bundle/upstream/kourier.yaml", "sha256": "d92bd38fb99f0351d56fc80f819204763ce77060ffd5205813557c60faa7a8ee"}
+      ]
+    }
+  },
+  "patches": [
+    "partition into lifecycle-ordered stages",
+    "add exclusive Falcone ownership and bundle markers",
+    "retain CRDs and namespaces by default",
+    "remove fixed runAsUser/runAsGroup from every workload",
+    "retain runAsNonRoot, no privilege escalation, RuntimeDefault seccomp and capabilities drop ALL",
+    "pin the upstream Envoy v1.37-latest multi-platform index by digest"
+  ],
+  "patchedManifests": [
+    {"stage": "crds", "path": "bundle/stages/01-crds.yaml", "sha256": "58f8774beab43e8d0f7733e0ce0037d300ccc7e8601fcf9e4b2fed0ea94a5dc2"},
+    {"stage": "foundation", "path": "bundle/stages/02-foundation.yaml", "sha256": "4d90b1b7a74e8a05d8a26370cb778de48ececdbddf05bd5337f9365e1259c8fc"},
+    {"stage": "webhook-backend", "path": "bundle/stages/03-webhook-backend.yaml", "sha256": "afd2e9a694080deac80a35a139df7f647bfd2333a179abbc5da5201bc85b6dfd"},
+    {"stage": "admissionregistration", "path": "bundle/stages/04-admissionregistration.yaml", "sha256": "6bbbe0fa0489b510f4266eb645e1d2a34283901c0c03ca67a69befcb40e579cd"},
+    {"stage": "serving-controllers", "path": "bundle/stages/05-serving-controllers.yaml", "sha256": "e77e2c31f2b87f6a80bf23542acd93f0a55dcf294206a42f8c9cd87fefff2f4c"},
+    {"stage": "kourier", "path": "bundle/stages/06-kourier.yaml", "sha256": "2309227b7097db2ec24b84f9c4553108fe60e0fa48b815d7c6be87c9c2e8d991"}
+  ],
+  "artifacts": [
+    {"kind": "image-lock", "path": "provenance/image-lock.json", "sha256": "206529d051bbbe9708a17b8ba6791d1cf3b00295e11611c36b64b553f4930157"},
+    {"kind": "license-inventory", "path": "provenance/license-inventory.json", "sha256": "f4d182f51c884b81a377d596847a6af98946462f0803f4c75aee2734b40f9f1d"},
+    {"kind": "cyclonedx-sbom", "path": "provenance/sbom.cdx.json", "sha256": "045574c91ba814ff53d7d70e4e1872b564df1e2c97967604f70ac709a8d9ef5a"},
+    {"kind": "license", "path": "provenance/licenses/knative-serving-LICENSE", "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
+    {"kind": "license", "path": "provenance/licenses/net-kourier-LICENSE", "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"}
+  ],
+  "lifecycleExecutable": {
+    "name": "falcone-knative",
+    "version": "0.1.0",
+    "sha256": "d5516166302c9d418ac4509b4d4e9bafc270334acd5b34fc261e5ae5c5363377",
+    "synchronization": "Must match the repository-distributed bin/falcone-knative at release packaging time"
+  }
+}

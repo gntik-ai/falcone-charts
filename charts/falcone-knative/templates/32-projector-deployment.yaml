@@ -1,0 +1,138 @@
+{{- if and .Values.projector.enabled (ne .Values.mode "disabled") (or (eq .Values.lifecycle.installStage "all") (eq .Values.lifecycle.installStage "projector") (eq .Values.lifecycle.installStage "complete")) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-status-projector" .Release.Name | quote }}
+  namespace: {{ .Values.status.namespace | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falcone-knative-status-projector
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: falcone-knative-status-projector
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        falcone.io/knative-owner: {{ .Values.owner | quote }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: {{ .Values.projector.metricsPort | quote }}
+    spec:
+      serviceAccountName: {{ include "falcone-knative.projectorServiceAccountName" . | quote }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: projector
+          image: {{ include "falcone-knative.image" (list . .Values.projector.image.repository .Values.projector.image.digest) | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "/opt/falcone/projector.sh"]
+          securityContext:
+            {{- if eq .Values.platform.type "kubernetes" }}
+            runAsUser: 65532
+            runAsGroup: 65532
+            {{- end }}
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            {{- toYaml .Values.projector.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "test -f /tmp/heartbeat"]
+            initialDelaySeconds: {{ .Values.projector.refreshSeconds }}
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "find /tmp/heartbeat -mmin -2 | grep -q heartbeat"]
+            initialDelaySeconds: {{ add .Values.projector.refreshSeconds 15 }}
+            periodSeconds: 30
+          volumeMounts:
+            - name: script
+              mountPath: /opt/falcone
+              readOnly: true
+            - name: state
+              mountPath: /tmp
+            - name: metrics
+              mountPath: /metrics
+        - name: metrics
+          image: {{ include "falcone-knative.image" (list . .Values.projector.metricsImage.repository .Values.projector.metricsImage.digest) | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec", "touch /www/metrics; exec httpd -f -p {{ .Values.projector.metricsPort }} -h /www"]
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.projector.metricsPort }}
+              protocol: TCP
+          securityContext:
+            {{- if eq .Values.platform.type "kubernetes" }}
+            runAsUser: 65532
+            runAsGroup: 65532
+            {{- end }}
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 25m
+              memory: 16Mi
+          volumeMounts:
+            - name: metrics
+              mountPath: /www
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 30
+      volumes:
+        - name: script
+          configMap:
+            name: {{ printf "%s-status-projector-script" .Release.Name | quote }}
+            defaultMode: 0555
+        - name: state
+          emptyDir: {}
+        - name: metrics
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-status-projector-metrics" .Release.Name | quote }}
+  namespace: {{ .Values.status.namespace | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: falcone-knative-status-projector
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  ports:
+    - name: metrics
+      port: {{ .Values.projector.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

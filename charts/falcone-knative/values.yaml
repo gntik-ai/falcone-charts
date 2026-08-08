@@ -1,0 +1,67 @@
+# This chart is a separate cluster-administrator release. It is never an
+# in-falcone dependency and must be operated through the falcone-knative CLI.
+mode: managed
+owner: falcone-knative
+
+platform:
+  # kubernetes or openshift. The managed support matrix is Kubernetes 1.34;
+  # OpenShift additionally requires 4.21 restricted-v2.
+  type: kubernetes
+  kubernetesVersion: "1.34"
+  openshiftVersion: "4.21"
+  securityProfile: restricted-v2
+
+lifecycle:
+  # The CLI renders one stage at a time. `all` exists for review, policy
+  # validation, and packaging; it is not a safe replacement for staged install.
+  installStage: all
+  smokeVerified: false
+
+supplyChain:
+  # When set, source registries are removed and each repository is rooted below
+  # this prefix while its sha256 digest remains unchanged.
+  registry: ""
+  disconnected: false
+
+status:
+  enabled: true
+  namespace: knative-serving
+  name: falcone-knative-status
+  state: installing
+  runId: render-only
+  clusterIdentity:
+    apiUrl: https://unverified.invalid
+    infrastructureName: unverified
+    infrastructureId: unverified
+    clusterUid: 00000000-0000-0000-0000-000000000000
+  lifecycleExecutable:
+    name: falcone-knative
+    version: 0.1.0
+    sha256: d5516166302c9d418ac4509b4d4e9bafc270334acd5b34fc261e5ae5c5363377
+
+projector:
+  enabled: true
+  image:
+    repository: docker.io/curlimages/curl
+    digest: sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922
+  metricsImage:
+    repository: docker.io/library/busybox
+    digest: sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+  # Empty derives an owner-specific identity shared only with owner-matching
+  # application-namespace RoleBindings.
+  serviceAccountName: ""
+  runtimeConfigMapName: falcone-knative-runtime
+  runtimeDataKey: status.json
+  registrationLabel: falcone.io/knative-runtime-projection
+  registrationValue: enabled
+  ownerLabel: falcone.io/knative-owner
+  refreshSeconds: 30
+  leaseSeconds: 120
+  metricsPort: 9090
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
