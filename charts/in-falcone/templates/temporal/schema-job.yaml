@@ -65,20 +65,35 @@ spec:
               update_temporal_schema() {
                 db="$1"
                 dir="$2"
-                {{- if .Release.IsUpgrade }}
-                # Initial schema creation is not an upgrade operation: once
-                # schema_version exists, rerunning it can fail or mask a bad
-                # lifecycle. The pre-upgrade DB bootstrap hook has already ensured
-                # the role/databases exist.
-                echo "upgrading existing Temporal schema in ${db}"
-                {{- else }}
-                # Fresh installs start from empty dedicated databases. The DB bootstrap
-                # Job creates them first; create-database is retained here as an
-                # idempotent race guard while both normal install Jobs converge.
+                # Whether the schema must be CREATED or UPGRADED is a property of the
+                # DATABASE, not of the Helm release. Branching on .Release.IsUpgrade was
+                # wrong: adding Temporal to an existing release — exactly what happens when
+                # a deployment adopts a chart where Temporal became core — is a Helm upgrade
+                # whose Temporal databases are brand new and empty. That took the upgrade
+                # path and failed with:
+                #
+                #   Unable to update SQL schema. error reading current schema version:
+                #   pq: relation "schema_version" does not exist
+                #
+                # Probe the database instead. `setup-schema` is the operation that creates
+                # schema_version, so its absence is the exact, authoritative signal.
                 ${SQL} --database "${db}" create-database
-                ${SQL} --database "${db}" setup-schema -v 0.0
-                {{- end }}
-                ${SQL} --database "${db}" update-schema -d "${dir}"
+                if ${SQL} --database "${db}" update-schema -d "${dir}" 2>/tmp/schema-err; then
+                  echo "upgraded existing Temporal schema in ${db}"
+                  return 0
+                fi
+                # Match quote-agnostically: temporal-sql-tool emits the driver error inside a
+                # JSON log field, so the quotes around the relation name arrive backslash-escaped
+                # (relation \"schema_version\" does not exist).
+                if grep -q 'schema_version' /tmp/schema-err && grep -q 'does not exist' /tmp/schema-err; then
+                  echo "no schema_version in ${db} — initialising Temporal schema"
+                  ${SQL} --database "${db}" setup-schema -v 0.0
+                  ${SQL} --database "${db}" update-schema -d "${dir}"
+                  return 0
+                fi
+                echo "failed to update Temporal schema in ${db}:" >&2
+                cat /tmp/schema-err >&2
+                return 1
               }
 
               # Primary persistence database + schema.
