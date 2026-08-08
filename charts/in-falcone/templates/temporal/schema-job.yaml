@@ -47,7 +47,6 @@ spec:
               # NOTE: the admin-tools image is alpine-based and ships /bin/sh ONLY (no
               # bash). Keep this script POSIX-sh compatible (no arrays, no PIPESTATUS).
               SQL="temporal-sql-tool --ep ${SQL_HOST} --port ${SQL_PORT} --user ${SQL_USER} --password ${SQL_PASSWORD} --plugin ${SQL_PLUGIN}"
-              schema_lifecycle="{{ ternary "upgrade" "install" .Release.IsUpgrade }}"
 
               # Wait for PostgreSQL to accept connections before touching schemas.
               # temporal-sql-tool has no `ping`; `create-database` against the default

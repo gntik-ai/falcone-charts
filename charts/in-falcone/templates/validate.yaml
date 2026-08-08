@@ -375,7 +375,11 @@
 {{- if hasKey $externalSecretsValues "enabled" -}}
   {{- $esoManaged = $externalSecretsValues.enabled -}}
 {{- end -}}
+{{- $externalEsoNamespace := .Values.global.externalSecrets.operatorNamespace | default "" -}}
 {{- if $esoManaged -}}
+  {{- if ne $externalEsoNamespace "" -}}
+    {{- fail "global.externalSecrets.operatorNamespace is valid only when eso.external-secrets.enabled=false" -}}
+  {{- end -}}
   {{- if lt (int ($externalSecretsValues.replicaCount | default 0)) 1 -}}
     {{- fail "eso.external-secrets.replicaCount must be at least 1: the ESO controller is core" -}}
   {{- end -}}
@@ -399,15 +403,17 @@
   {{- end -}}
 {{- else -}}
   {{- /*
-    Adopted mode still has one hard requirement: the OpenBao Kubernetes-auth ServiceAccount
-    is created in `openbao.eso.namespace` (kept equal to `eso.eso.namespace` by the check
-    above), and the ClusterSecretStore references it there. That namespace must therefore be
-    the one the EXISTING operator runs in, or the store cannot authenticate to OpenBao.
-    Requiring it to be set explicitly stops the default `eso-system` from silently pointing
-    at a namespace with no controller in it.
+    The external controller namespace is needed for two bounded purposes only: compatibility
+    preflight and OpenBao ingress. The ClusterSecretStore authenticates with Falcone's own
+    ServiceAccount in eso.eso.namespace; External Secrets can request a token for that explicit
+    serviceAccountRef across namespaces. Keeping the namespaces distinct prevents Helm from
+    trying to own or placing a blanket NetworkPolicy in the administrator's ESO namespace.
   */ -}}
-  {{- if eq (.Values.eso.eso.namespace | default "") "" -}}
-    {{- fail "eso.eso.namespace must be set explicitly when eso.external-secrets.enabled=false: point it at the namespace of the existing External Secrets Operator so the OpenBao auth ServiceAccount and ClusterSecretStore serviceAccountRef land where that controller can use them" -}}
+  {{- if eq $externalEsoNamespace "" -}}
+    {{- fail "global.externalSecrets.operatorNamespace is required when eso.external-secrets.enabled=false: set it to the namespace of the existing External Secrets controller" -}}
+  {{- end -}}
+  {{- if eq $externalEsoNamespace (.Values.eso.eso.namespace | default "eso-system") -}}
+    {{- fail "global.externalSecrets.operatorNamespace must differ from eso.eso.namespace in adopted mode: Falcone must not own or render resources into the administrator's ESO namespace" -}}
   {{- end -}}
 {{- end -}}
 {{- if ne (.Values.eso.eso.serviceAccountName | default "eso-openbao-auth") (.Values.openbao.eso.serviceAccountName | default "eso-openbao-auth") -}}

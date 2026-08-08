@@ -28,6 +28,56 @@ OCI artifacts at `oci://ghcr.io/gntik-ai/charts/in-falcone` and
 `version` in each changed chart's `Chart.yaml`. The managed-runtime chart must
 never be added as an umbrella dependency.
 
+## External Secrets ownership modes
+
+The umbrella supports two explicit External Secrets topologies:
+
+| Mode | Values | Ownership boundary |
+|---|---|---|
+| Managed (default) | `eso.external-secrets.enabled=true` | Falcone installs and owns the ESO controller, webhook, cert-controller, and CRDs. |
+| Adopted | `eso.external-secrets.enabled=false` plus `global.externalSecrets.operatorNamespace=<namespace>` | An administrator-owned ESO installation keeps its controller, webhook, and CRDs. Falcone renders only its own OpenBao-backed `ClusterSecretStore`, `ExternalSecret` objects, authentication ServiceAccount, and related RBAC. |
+
+Use adopted mode when the cluster already has a compatible External Secrets
+release. The external controller namespace and Falcone's authentication
+namespace must remain distinct. Leave `eso.eso.namespace` and
+`openbao.eso.namespace` at their matching Falcone-owned default (`eso-system`)
+unless the Falcone authentication namespace itself must be renamed; do not
+point either value at the administrator-owned controller namespace.
+
+```yaml
+global:
+  externalSecrets:
+    operatorNamespace: external-secrets
+
+eso:
+  external-secrets:
+    enabled: false
+```
+
+Equivalent command-line overrides are:
+
+```bash
+helm upgrade --install falcone charts/in-falcone \
+  --namespace falcone --create-namespace \
+  --set eso.external-secrets.enabled=false \
+  --set-string global.externalSecrets.operatorNamespace=external-secrets
+```
+
+Before applying the Falcone custom resources, the preflight verifies that the
+configured namespace contains an available ESO controller and that the
+`ClusterSecretStore` and `ExternalSecret` APIs are registered. Adopted mode
+does not render a `Namespace`, controller workload, CRD, webhook-wait resource,
+or blanket egress `NetworkPolicy` into the external namespace. The OpenBao
+policy grants ingress from that namespace without taking ownership of anything
+inside it.
+
+Falcone still owns the cluster-scoped `ClusterSecretStore/openbao-backend`.
+If an object with that name already belongs to another release, the existing
+ownership preflight fails closed; do not use the adopted-controller flag to
+bypass a separate store-ownership conflict. The external ESO controller must
+also retain permission to request a token for the explicit
+`serviceAccountRef` in the Falcone authentication namespace.
+
 ## Managed Knative Serving and Kourier (proposed)
 
 > **Managed mode is proposed and unavailable.** The separate raw-upstream

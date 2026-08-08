@@ -40,6 +40,7 @@
         "knativeRuntime",
         "airgap",
         "privateRegistry",
+        "externalSecrets",
         "webhookSigningKey",
         "webhookDatabase"
       ],
@@ -168,6 +169,21 @@
             }
           },
           "additionalProperties": true
+        },
+        "externalSecrets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operatorNamespace"
+          ],
+          "properties": {
+            "operatorNamespace": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$",
+              "default": ""
+            }
+          }
         },
         "webhookSigningKey": {
           "type": "object",
@@ -2146,6 +2162,10 @@
         "external-secrets": {
           "type": "object",
           "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
             "replicaCount": {
               "type": "integer",
               "minimum": 1

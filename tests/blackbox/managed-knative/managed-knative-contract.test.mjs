@@ -366,12 +366,14 @@ test('umbrella schema exposes exactly managed, external, disabled and defaults t
 })
 
 // bbx-8-003 | fn-managed-knative-default-compatibility | OpenSpec #### Scenario: Disabled mode adds no mount or env change
-test('default umbrella stays at its pre-change baseline and explicit disabled adds no runtime wiring', () => {
+test('default umbrella stays at its approved baseline and explicit disabled adds no runtime wiring', () => {
   const baseline = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/umbrella-default-render.sha256'), 'utf8').trim()
   const defaults = render(umbrellaChart)
   const disabled = render(umbrellaChart, ['--set-string', 'global.knativeRuntime.mode=disabled'])
   const defaultCanonical = JSON.stringify(canonical(defaults.objects))
-  assert.equal(sha256(defaultCanonical), baseline, 'default umbrella render drifted from the pre-change public baseline')
+  const disabledCanonical = JSON.stringify(canonical(disabled.objects))
+  assert.equal(sha256(defaultCanonical), baseline, 'default umbrella render drifted from the approved public baseline')
+  assert.equal(disabledCanonical, defaultCanonical, 'explicit disabled mode must remain identical to the default render')
   assert.equal(runtimeContainers(defaults.objects).length, 0)
   assert.equal(runtimeContainers(disabled.objects).length, 0)
   assert.doesNotMatch(defaults.text, /falcone\.knative-(?:runtime|lifecycle)\/v1/)

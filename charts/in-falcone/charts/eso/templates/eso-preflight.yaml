@@ -1,3 +1,10 @@
+{{- $es := index .Values "external-secrets" | default dict -}}
+{{- /* Helm's default function treats false as empty; preserve an explicit false. */ -}}
+{{- $esoManaged := true -}}
+{{- if hasKey $es "enabled" }}{{- $esoManaged = $es.enabled }}{{- end -}}
+{{- $globalValues := .Values.global | default dict -}}
+{{- $globalExternalSecrets := index $globalValues "externalSecrets" | default dict -}}
+{{- $externalEsoNamespace := $globalExternalSecrets.operatorNamespace | default "" -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -72,9 +79,11 @@ spec:
             - -ec
             - |
               adopt={{ .Values.eso.clusterOwnership.adoptExisting | default false | quote }}
+              eso_managed={{ $esoManaged | quote }}
               release={{ .Release.Name | quote }}
               namespace={{ .Release.Namespace | quote }}
               eso_namespace={{ .Values.eso.namespace | quote }}
+              external_eso_namespace={{ $externalEsoNamespace | quote }}
               openbao_namespace={{ .Values.eso.caProvider.namespace | default "secret-store" | quote }}
               require_adoption() {
                 if [ "$adopt" != "true" ]; then
@@ -99,18 +108,42 @@ spec:
                 fi
               fi
               deployments_json="$(kubectl get deploy -A -l app.kubernetes.io/name=external-secrets -o json)"
-              conflict="$(printf '%s' "$deployments_json" \
-                | jq -r --arg release "$release" --arg namespace "$namespace" '
-                  .items[]?
-                  | select(
-                      .metadata.annotations["meta.helm.sh/release-name"] != $release
-                      or .metadata.annotations["meta.helm.sh/release-namespace"] != $namespace
-                      or .metadata.labels["app.kubernetes.io/managed-by"] != "Helm"
-                      or .metadata.labels["app.kubernetes.io/instance"] != $release
-                    )
-                  | "\(.metadata.namespace)/\(.metadata.name)"
-                ' | head -n1)"
-              if [ -n "$conflict" ]; then
-                require_adoption "external-secrets controller is not owned by ${release}/${namespace}: ${conflict}"
+              if [ "$eso_managed" = "false" ]; then
+                compatible_count="$(printf '%s' "$deployments_json" \
+                  | jq -r --arg namespace "$external_eso_namespace" '
+                    [.items[]?
+                      | select(
+                          .metadata.namespace == $namespace
+                          and ((.status.availableReplicas // 0) >= 1)
+                        )]
+                    | length
+                  ')"
+                if [ "$compatible_count" -lt 1 ]; then
+                  echo "no available External Secrets controller found in configured namespace ${external_eso_namespace}" >&2
+                  exit 1
+                fi
+                api_resources="$(kubectl api-resources --api-group=external-secrets.io -o name)"
+                for required_resource in clustersecretstores.external-secrets.io externalsecrets.external-secrets.io; do
+                  if ! printf '%s\n' "$api_resources" | grep -qx "$required_resource"; then
+                    echo "existing External Secrets installation is incompatible: missing ${required_resource}" >&2
+                    exit 1
+                  fi
+                done
+                echo "using available administrator-owned External Secrets controller in ${external_eso_namespace}"
+              else
+                conflict="$(printf '%s' "$deployments_json" \
+                  | jq -r --arg release "$release" --arg namespace "$namespace" '
+                    .items[]?
+                    | select(
+                        .metadata.annotations["meta.helm.sh/release-name"] != $release
+                        or .metadata.annotations["meta.helm.sh/release-namespace"] != $namespace
+                        or .metadata.labels["app.kubernetes.io/managed-by"] != "Helm"
+                        or .metadata.labels["app.kubernetes.io/instance"] != $release
+                      )
+                    | "\(.metadata.namespace)/\(.metadata.name)"
+                  ' | head -n1)"
+                if [ -n "$conflict" ]; then
+                  require_adoption "external-secrets controller is not owned by ${release}/${namespace}: ${conflict}"
+                fi
               fi
               echo "ESO ownership preflight passed"

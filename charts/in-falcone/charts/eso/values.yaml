@@ -11,9 +11,11 @@ external-secrets:
   #
   # When false, the ClusterSecretStore and every ExternalSecret still render and are
   # reconciled by the existing controller — only the controller/webhook/certController
-  # workloads and the CRDs are skipped. Point `eso.eso.namespace` (and the matching
-  # `openbao.eso.namespace`) at the existing operator's namespace so the OpenBao
-  # Kubernetes-auth ServiceAccount is created where that controller can use it.
+  # workloads and the CRDs are skipped. Set
+  # `global.externalSecrets.operatorNamespace` to the existing controller namespace.
+  # Keep `eso.eso.namespace` separate: it is Falcone-owned and holds only the OpenBao
+  # authentication ServiceAccount; no Falcone object is rendered into the operator's
+  # namespace.
   enabled: true
   installCRDs: true
   fullnameOverride: eso-external-secrets
