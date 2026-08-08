@@ -2600,3 +2600,59 @@ test('chart-release gate identifies top-level packaged charts and accepts the ma
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+// bbx-8-071 | fn-managed-knative-release-artifact-visibility | OpenSpec #### Scenario: Provenance lock is complete and reproducible
+test('chart-release uploads every validated package from one artifact-visible staging directory', () => {
+  const workflow = readYaml(resolve(repoRoot, '.github/workflows/chart-release.yml'))
+  const validateSteps = workflow.jobs?.validate?.steps ?? []
+  const packageSteps = validateSteps.filter((step) => step?.name === 'Package and verify chart provenance inputs')
+  assert.equal(packageSteps.length, 1, 'validate must expose exactly one public package/provenance gate')
+
+  const packageRun = String(packageSteps[0].run ?? '')
+  const assignment = packageRun.match(/(?:^|\n)\s*package_dir=(?:"([^"]+)"|'([^']+)'|(\S+))/)
+  assert.ok(assignment, 'validate package gate does not declare its artifact staging directory')
+  const assignedDirectory = assignment[1] ?? assignment[2] ?? assignment[3]
+  const stagingDirectory = assignedDirectory
+    .replace(/^\$(?:\{GITHUB_WORKSPACE\}|GITHUB_WORKSPACE)\//, '')
+    .replace(/^\.\//, '')
+    .replace(/\/+$/, '')
+  assert.ok(stagingDirectory && !stagingDirectory.includes('$'), 'package staging directory must resolve beneath GITHUB_WORKSPACE')
+
+  const helmPackageLines = packageRun.split('\n').filter((line) => /^\s*helm\s+package\s+/.test(line))
+  assert.equal(helmPackageLines.length, 2, 'validate must package exactly the umbrella and managed Knative charts')
+  for (const line of helmPackageLines) {
+    assert.match(line, /--destination\s+["']?\$package_dir["']?(?:\s|$)/, 'validated chart package is written outside package_dir')
+  }
+  assert.match(packageRun, /(?:^|\n)\s*cd\s+["']?\$package_dir["']?\s*(?:\n|$)/, 'checksum inventory is written outside package_dir')
+
+  const expectedUploads = new Map([
+    ['in-falcone-chart', 'in-falcone-*.tgz'],
+    ['falcone-knative-chart', 'falcone-knative-*.tgz'],
+    ['falcone-chart-checksums', 'SHA256SUMS'],
+  ])
+  const uploadSteps = validateSteps.filter((step) => step?.uses === 'actions/upload-artifact@v4')
+  assert.equal(uploadSteps.length, expectedUploads.size, 'validate must upload both chart archives and their checksum inventory')
+  assert.deepEqual(
+    uploadSteps.map((step) => step.with?.name).sort(),
+    [...expectedUploads.keys()].sort(),
+    'validate artifact names do not identify the two charts and checksum inventory exactly',
+  )
+
+  for (const step of uploadSteps) {
+    const artifactName = step.with?.name
+    const uploadPath = String(step.with?.path ?? '')
+    assert.ok(uploadPath && !uploadPath.includes('\n'), `${artifactName} must expose exactly one upload path`)
+    const pathParts = uploadPath.replace(/\\/g, '/').replace(/^\.\//, '').split('/').filter(Boolean)
+    const uploadLeaf = pathParts.pop()
+    const uploadDirectory = pathParts.join('/')
+    assert.equal(uploadDirectory, stagingDirectory, `${artifactName} upload path is inconsistent with package_dir`)
+    assert.equal(uploadLeaf, expectedUploads.get(artifactName), `${artifactName} uploads the wrong validated release file`)
+
+    const hiddenComponents = pathParts.filter((part) => part.startsWith('.') && part !== '.' && part !== '..')
+    const includesHiddenFiles = String(step.with?.['include-hidden-files'] ?? 'false').toLowerCase() === 'true'
+    assert.ok(
+      hiddenComponents.length === 0 || includesHiddenFiles,
+      `${artifactName} upload path ${uploadPath} contains hidden component ${hiddenComponents.join('/')} but actions/upload-artifact@v4 excludes hidden files unless include-hidden-files is true`,
+    )
+  }
+})

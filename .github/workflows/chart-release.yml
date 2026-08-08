@@ -97,7 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_dir="$GITHUB_WORKSPACE/.chart-packages"
+          package_dir="$GITHUB_WORKSPACE/chart-packages"
           mkdir -p "$package_dir"
 
           helm package charts/in-falcone --destination "$package_dir"
@@ -132,17 +132,17 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: in-falcone-chart
-          path: .chart-packages/in-falcone-*.tgz
+          path: chart-packages/in-falcone-*.tgz
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: falcone-knative-chart
-          path: .chart-packages/falcone-knative-*.tgz
+          path: chart-packages/falcone-knative-*.tgz
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: falcone-chart-checksums
-          path: .chart-packages/SHA256SUMS
+          path: chart-packages/SHA256SUMS
           if-no-files-found: error
 
   publish:
