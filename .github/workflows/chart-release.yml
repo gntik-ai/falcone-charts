@@ -8,6 +8,7 @@ on:
       - 'deploy/kind/values-*.yaml'
       - 'deploy/openshift/values-openshift.yaml'
       - 'helm/**'
+      - 'bin/falcone-knative'
       - 'services/**/helm/**'
       - 'tests/**'
       - '.github/workflows/chart-release.yml'
@@ -19,6 +20,7 @@ on:
       - 'deploy/kind/values-*.yaml'
       - 'deploy/openshift/values-openshift.yaml'
       - 'helm/**'
+      - 'bin/falcone-knative'
       - 'services/**/helm/**'
       - 'tests/**'
       - '.github/workflows/chart-release.yml'
@@ -56,12 +58,92 @@ jobs:
         run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority
         run: sh tests/webhook-database-chart-ci.test.sh
-      - name: Package chart
-        run: helm package charts/in-falcone --destination .chart-packages
+      - name: Lint and render independent Falcone charts
+        shell: bash
+        run: |
+          set -euo pipefail
+          render_dir="$(mktemp -d "$RUNNER_TEMP/falcone-chart-render.XXXXXX")"
+          trap 'rm -rf "$render_dir"' EXIT
+
+          helm lint --strict charts/in-falcone
+          helm template falcone charts/in-falcone \
+            --namespace falcone-ci >"$render_dir/in-falcone.yaml"
+
+          helm lint --strict charts/falcone-knative
+          helm template falcone-knative charts/falcone-knative \
+            --namespace knative-serving \
+            --kube-version 1.34.0 >"$render_dir/falcone-knative.yaml"
+
+          kubeconform -strict -summary -ignore-missing-schemas \
+            "$render_dir/in-falcone.yaml"
+          kubeconform -strict -summary -ignore-missing-schemas \
+            "$render_dir/falcone-knative.yaml"
+      - name: Run offline managed-Knative black-box contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The suite uses an offline kubeconfig and process-isolated fake kubectl,
+          # Helm and curl clients. A fresh network namespace makes an accidental
+          # public-registry or Kubernetes API request fail rather than escape CI.
+          sudo env \
+            PATH="$PATH" \
+            HOME="$HOME" \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            unshare --net -- bash tests/blackbox/run.sh
+      - name: Verify managed bundle provenance lock
+        run: python3 charts/falcone-knative/tools/validate_bundle.py
+      - name: Package and verify chart provenance inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$GITHUB_WORKSPACE/chart-packages"
+          mkdir -p "$package_dir"
+
+          helm package charts/in-falcone --destination "$package_dir"
+          helm package charts/falcone-knative --destination "$package_dir"
+
+          shopt -s nullglob
+          umbrella_packages=("$package_dir"/in-falcone-*.tgz)
+          managed_packages=("$package_dir"/falcone-knative-*.tgz)
+          [[ ${#umbrella_packages[@]} -eq 1 ]]
+          [[ ${#managed_packages[@]} -eq 1 ]]
+
+          [[ "$(helm show chart "${umbrella_packages[0]}" | awk '$0 ~ /^name:/ { print $2; exit }')" == "in-falcone" ]]
+          [[ "$(helm show chart "${managed_packages[0]}" | awk '$0 ~ /^name:/ { print $2; exit }')" == "falcone-knative" ]]
+          [[ "$(helm show chart "${umbrella_packages[0]}" | awk '$0 ~ /^version:/ { print $2; exit }')" == \
+             "$(helm show chart charts/in-falcone | awk '$0 ~ /^version:/ { print $2; exit }')" ]]
+          [[ "$(helm show chart "${managed_packages[0]}" | awk '$0 ~ /^version:/ { print $2; exit }')" == \
+             "$(helm show chart charts/falcone-knative | awk '$0 ~ /^version:/ { print $2; exit }')" ]]
+
+          managed_inventory="$RUNNER_TEMP/falcone-knative-package-files.txt"
+          tar -tzf "${managed_packages[0]}" >"$managed_inventory"
+          grep -Eq '/provenance[^/]*\.(json|ya?ml)$' "$managed_inventory"
+          grep -Eq '/image[^/]*lock[^/]*\.(json|ya?ml)$' "$managed_inventory"
+          grep -Eqi '/sbom[^/]*\.(json|spdx|cdx)' "$managed_inventory"
+          grep -Eqi '/(licenses?|license-inventory)(/|[^/]*)' "$managed_inventory"
+
+          (
+            cd "$package_dir"
+            sha256sum "$(basename "${umbrella_packages[0]}")" \
+              "$(basename "${managed_packages[0]}")" >SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
       - uses: actions/upload-artifact@v4
         with:
           name: in-falcone-chart
-          path: .chart-packages/*.tgz
+          path: chart-packages/in-falcone-*.tgz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: falcone-knative-chart
+          path: chart-packages/falcone-knative-*.tgz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: falcone-chart-checksums
+          path: chart-packages/SHA256SUMS
+          if-no-files-found: error
 
   publish:
     if: github.event_name == 'push'
@@ -74,9 +156,25 @@ jobs:
           version: v4.1.4
       - name: Verify vendored dependencies
         run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
-      - name: Package chart
-        run: helm package charts/in-falcone --destination .chart-packages
+      - name: Package coordinated charts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .chart-packages
+          helm package charts/in-falcone --destination .chart-packages
+          helm package charts/falcone-knative --destination .chart-packages
+          (
+            cd .chart-packages
+            sha256sum in-falcone-*.tgz falcone-knative-*.tgz >SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
       - name: Log in to GHCR
         run: echo "${{ github.token }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
-      - name: Publish OCI chart
-        run: helm push .chart-packages/in-falcone-*.tgz oci://ghcr.io/gntik-ai/charts
+      - name: Publish coordinated OCI charts
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Publish the shared runtime first; publish the consuming umbrella only
+          # after the matching runtime chart has succeeded.
+          helm push .chart-packages/falcone-knative-*.tgz oci://ghcr.io/gntik-ai/charts
+          helm push .chart-packages/in-falcone-*.tgz oci://ghcr.io/gntik-ai/charts

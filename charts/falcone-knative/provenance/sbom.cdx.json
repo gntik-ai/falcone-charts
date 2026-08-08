@@ -1,0 +1,47 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:6c9c170d-64c8-4fcb-a3cb-7fbc2a030008",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-08-07T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:helm/falcone-knative@0.1.0",
+      "name": "falcone-knative",
+      "version": "0.1.0",
+      "properties": [
+        {"name": "falcone:bundleVersion", "value": "1.22.1"},
+        {"name": "falcone:supportBoundary", "value": "Falcone-supported patched upstream; not Red Hat OpenShift Serverless"}
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "application",
+      "bom-ref": "pkg:github/knative/serving@3bd82a6177c278b1192abee1b3ca39daf25c3f35",
+      "name": "knative-serving",
+      "version": "1.22.1",
+      "purl": "pkg:github/knative/serving@3bd82a6177c278b1192abee1b3ca39daf25c3f35",
+      "licenses": [{"license": {"id": "Apache-2.0"}}]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:github/knative-extensions/net-kourier@0f143a69791e6f3c0fdd14ea16933cc1a3fd6f10",
+      "name": "net-kourier",
+      "version": "1.22.1",
+      "purl": "pkg:github/knative-extensions/net-kourier@0f143a69791e6f3c0fdd14ea16933cc1a3fd6f10",
+      "licenses": [{"license": {"id": "Apache-2.0"}}]
+    },
+    {"type": "container", "name": "serving-queue", "version": "sha256:b1af8bda6c1d32b1cf5fbf8f1f6068c5007a5cebf091039fdea83b88b1fd87f4", "purl": "pkg:oci/queue@sha256%3Ab1af8bda6c1d32b1cf5fbf8f1f6068c5007a5cebf091039fdea83b88b1fd87f4"},
+    {"type": "container", "name": "serving-activator", "version": "sha256:5deaef961fef8d1417f6d4a4dfae2fc338f2d30d72c4ad58c3ab392b2c04705b", "purl": "pkg:oci/activator@sha256%3A5deaef961fef8d1417f6d4a4dfae2fc338f2d30d72c4ad58c3ab392b2c04705b"},
+    {"type": "container", "name": "serving-autoscaler", "version": "sha256:5bae38655d87df86b041083fbe51791816473245f752432ba9b85a7b12f73cd5", "purl": "pkg:oci/autoscaler@sha256%3A5bae38655d87df86b041083fbe51791816473245f752432ba9b85a7b12f73cd5"},
+    {"type": "container", "name": "serving-controller", "version": "sha256:94329d85200c2fc31ed1166a26568ca1357376c149c147e71f400cf28be3c816", "purl": "pkg:oci/controller@sha256%3A94329d85200c2fc31ed1166a26568ca1357376c149c147e71f400cf28be3c816"},
+    {"type": "container", "name": "serving-webhook", "version": "sha256:8470456be214e93a84e3c7b79a632aa9978bd8ecda553feaa47878a2c24ab84d", "purl": "pkg:oci/webhook@sha256%3A8470456be214e93a84e3c7b79a632aa9978bd8ecda553feaa47878a2c24ab84d"},
+    {"type": "container", "name": "net-kourier-controller", "version": "sha256:01abd2070ccf8680885c47990e42c05c09e30bc8595d9246f4dcd37f2220a2a2", "purl": "pkg:oci/kourier@sha256%3A01abd2070ccf8680885c47990e42c05c09e30bc8595d9246f4dcd37f2220a2a2"},
+    {"type": "container", "name": "envoy-gateway", "version": "sha256:1c2b79776c6e3b38e8b0113b825e6a599f9bfc08d680c199d80bf8964856c529", "purl": "pkg:oci/envoy@sha256%3A1c2b79776c6e3b38e8b0113b825e6a599f9bfc08d680c199d80bf8964856c529"},
+    {"type": "container", "name": "status-projector", "version": "sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922", "purl": "pkg:oci/curl@sha256%3A4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922"},
+    {"type": "container", "name": "status-projector-metrics", "version": "sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0", "purl": "pkg:oci/busybox@sha256%3A9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"}
+  ]
+}
+

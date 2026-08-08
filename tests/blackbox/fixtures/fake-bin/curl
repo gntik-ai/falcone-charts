@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+import { appendFileSync } from 'node:fs'
+
+const args = process.argv.slice(2)
+const scenario = process.env.FALCONE_BBX_SCENARIO ?? ''
+if (process.env.FALCONE_BBX_CURL_LOG) appendFileSync(process.env.FALCONE_BBX_CURL_LOG, `${JSON.stringify({ args, stdin: '' })}\n`)
+if (scenario === 'external-canary-invoke-fail' || scenario === 'stage-smoke-fail') {
+  process.stderr.write('offline fake: invocation failed\n')
+  process.exit(22)
+}
+process.stdout.write('falcone-knative-bbx-ok\n')

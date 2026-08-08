@@ -1,0 +1,16 @@
+#!/usr/bin/env node
+import { appendFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+
+const args = process.argv.slice(2)
+if (process.env.FALCONE_BBX_HELM_LOG) {
+  appendFileSync(process.env.FALCONE_BBX_HELM_LOG, `${JSON.stringify({ args, stdin: '' })}\n`)
+}
+const verb = args.find((arg) => /^[a-z][a-z-]+$/.test(arg)) ?? ''
+if (['template', 'lint', 'package', 'show', 'dependency', 'version'].includes(verb)) {
+  const result = spawnSync(process.env.FALCONE_BBX_REAL_HELM || '/usr/local/bin/helm', args, { encoding: 'utf8' })
+  process.stdout.write(result.stdout ?? '')
+  process.stderr.write(result.stderr ?? '')
+  process.exit(result.status ?? 1)
+}
+process.stdout.write(`${verb || 'helm'} simulated by offline black-box harness\n`)

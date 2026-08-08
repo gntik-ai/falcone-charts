@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "owner", "platform", "lifecycle", "supplyChain", "status", "projector"],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["managed", "external", "disabled"]
+    },
+    "owner": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$",
+      "maxLength": 63
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "kubernetesVersion", "openshiftVersion", "securityProfile"],
+      "properties": {
+        "type": {"type": "string", "enum": ["kubernetes", "openshift"]},
+        "kubernetesVersion": {"type": "string", "pattern": "^1\\.34(?:\\..*)?$"},
+        "openshiftVersion": {"type": "string", "pattern": "^(?:|4\\.21(?:\\..*)?)$"},
+        "securityProfile": {"type": "string", "const": "restricted-v2"}
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installStage", "smokeVerified"],
+      "properties": {
+        "installStage": {
+          "type": "string",
+          "enum": ["all", "crds", "foundation", "webhook-backend", "admissionregistration", "serving-controllers", "kourier", "status", "projector", "complete"]
+        },
+        "smokeVerified": {"type": "boolean", "default": false}
+      }
+    },
+    "supplyChain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "disconnected"],
+      "properties": {
+        "registry": {
+          "type": "string",
+          "pattern": "^(?:|[a-zA-Z0-9.-]+(?::[0-9]+)?(?:/[a-zA-Z0-9._-]+)*)$"
+        },
+        "disconnected": {"type": "boolean", "default": false}
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "namespace", "name", "state", "runId", "clusterIdentity", "lifecycleExecutable"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "namespace": {"type": "string", "const": "knative-serving"},
+        "name": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"},
+        "state": {"type": "string", "enum": ["installing", "incompatible", "failed", "compatible", "retained", "quiesced", "unverified"]},
+        "runId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "clusterIdentity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["apiUrl", "infrastructureName", "infrastructureId", "clusterUid"],
+          "properties": {
+            "apiUrl": {"type": "string", "minLength": 1, "maxLength": 512},
+            "infrastructureName": {"type": "string", "minLength": 1, "maxLength": 128},
+            "infrastructureId": {"type": "string", "minLength": 1, "maxLength": 128},
+            "clusterUid": {"type": "string", "minLength": 1, "maxLength": 128}
+          }
+        },
+        "lifecycleExecutable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "sha256"],
+          "properties": {
+            "name": {"type": "string", "const": "falcone-knative"},
+            "version": {"type": "string", "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].*)?$"},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+          }
+        }
+      }
+    },
+    "projector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "metricsImage", "serviceAccountName", "runtimeConfigMapName", "runtimeDataKey", "registrationLabel", "registrationValue", "ownerLabel", "refreshSeconds", "leaseSeconds", "metricsPort", "resources"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/image"},
+        "metricsImage": {"$ref": "#/definitions/image"},
+        "serviceAccountName": {"type": "string", "maxLength": 63, "pattern": "^(?:|[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)$"},
+        "runtimeConfigMapName": {"type": "string", "const": "falcone-knative-runtime"},
+        "runtimeDataKey": {"type": "string", "const": "status.json"},
+        "registrationLabel": {"type": "string", "const": "falcone.io/knative-runtime-projection"},
+        "registrationValue": {"type": "string", "const": "enabled"},
+        "ownerLabel": {"type": "string", "const": "falcone.io/knative-owner"},
+        "refreshSeconds": {"type": "integer", "minimum": 10, "maximum": 300},
+        "leaseSeconds": {"type": "integer", "minimum": 30, "maximum": 900},
+        "metricsPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
+        "resources": {"type": "object"}
+      }
+    }
+  },
+  "definitions": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    }
+  }
+}

@@ -1,0 +1,169 @@
+{{- if and .Values.projector.enabled (ne .Values.mode "disabled") (or (eq .Values.lifecycle.installStage "all") (eq .Values.lifecycle.installStage "projector") (eq .Values.lifecycle.installStage "complete")) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-status-projector-script" .Release.Name | quote }}
+  namespace: {{ .Values.status.namespace | quote }}
+  labels:
+    {{- include "falcone-knative.labels" . | nindent 4 }}
+data:
+  projector.sh: |
+    #!/bin/sh
+    set -eu
+
+    api="https://kubernetes.default.svc"
+    service_account=/var/run/secrets/kubernetes.io/serviceaccount
+    bearer="$(cat "$service_account/token")"
+    ca="$service_account/ca.crt"
+    owner={{ .Values.owner | quote }}
+    mode={{ .Values.mode | quote }}
+    status_namespace={{ .Values.status.namespace | quote }}
+    lifecycle_name={{ .Values.status.name | quote }}
+    runtime_name={{ .Values.projector.runtimeConfigMapName | quote }}
+    registration_key={{ .Values.projector.registrationLabel | quote }}
+    registration_value={{ .Values.projector.registrationValue | quote }}
+    owner_key={{ .Values.projector.ownerLabel | quote }}
+    refresh={{ .Values.projector.refreshSeconds }}
+    lease={{ .Values.projector.leaseSeconds }}
+
+    get() {
+      curl --fail --silent --show-error --cacert "$ca" \
+        -H "Authorization: Bearer $bearer" "$api$1"
+    }
+
+    put_file() {
+      curl --fail --silent --show-error --cacert "$ca" \
+        -H "Authorization: Bearer $bearer" \
+        -H 'Content-Type: application/json' \
+        --request PUT --data-binary "@$2" "$api$1" >/dev/null
+    }
+
+    compact() {
+      tr -d '\n\r\t '
+    }
+
+    deployment_available() {
+      compacted="$(printf '%s' "$1" | compact)"
+      printf '%s' "$compacted" | grep -Eq '"availableReplicas":[1-9][0-9]*'
+    }
+
+    endpoint_ready() {
+      compacted="$(printf '%s' "$1" | compact)"
+      printf '%s' "$compacted" | grep -Eq '"addresses":\[\{' \
+        && printf '%s' "$compacted" | grep -Eq '"(ip|hostname)":"[^"]+"'
+    }
+
+    write_metrics() {
+      timestamp="$1"
+      successes="$2"
+      failures="$3"
+      temporary=/metrics/metrics.tmp
+      {
+        echo '# HELP falcone_knative_projector_last_refresh_timestamp_seconds Last completed projection refresh.'
+        echo '# TYPE falcone_knative_projector_last_refresh_timestamp_seconds gauge'
+        echo "falcone_knative_projector_last_refresh_timestamp_seconds $timestamp"
+        echo '# HELP falcone_knative_projector_namespaces Refreshed or refused namespaces in the last pass.'
+        echo '# TYPE falcone_knative_projector_namespaces gauge'
+        echo "falcone_knative_projector_namespaces{result=\"updated\"} $successes"
+        echo "falcone_knative_projector_namespaces{result=\"refused\"} $failures"
+      } >"$temporary"
+      mv "$temporary" /metrics/metrics
+    }
+
+    while true; do
+      epoch="$(date -u +%s)"
+      observed="$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ)"
+      valid_until="$(date -u -d "@$((epoch + lease))" +%Y-%m-%dT%H:%M:%SZ)"
+      lifecycle="$(get "/api/v1/namespaces/$status_namespace/configmaps/$lifecycle_name" 2>/dev/null || true)"
+      serving_controller="$(get '/apis/apps/v1/namespaces/knative-serving/deployments/controller' 2>/dev/null || true)"
+      kourier_controller="$(get '/apis/apps/v1/namespaces/knative-serving/deployments/net-kourier-controller' 2>/dev/null || true)"
+      kourier_gateway="$(get '/apis/apps/v1/namespaces/kourier-system/deployments/3scale-kourier-gateway' 2>/dev/null || true)"
+      webhook_endpoints="$(get '/api/v1/namespaces/knative-serving/endpoints/webhook' 2>/dev/null || true)"
+      lifecycle_compact="$(printf '%s' "$lifecycle" | compact)"
+
+      compatibility=unverified
+      state=unavailable
+      stage=unknown
+      reason=STATUS_UNVERIFIED
+      if ! printf '%s' "$lifecycle_compact" | grep -Eq '(\\"status\\":\\"compatible\\"|"status":"compatible"|"lifecycle.json":"compatible")'; then
+        reason=STATUS_UNVERIFIED
+      elif ! deployment_available "$serving_controller"; then
+        stage=serving
+        reason=SERVING_CONTROLLER_UNAVAILABLE
+      elif ! deployment_available "$kourier_controller"; then
+        stage=kourier
+        reason=KOURIER_CONTROLLER_UNAVAILABLE
+      elif ! deployment_available "$kourier_gateway"; then
+        stage=kourier
+        reason=KOURIER_GATEWAY_UNAVAILABLE
+      elif ! endpoint_ready "$webhook_endpoints"; then
+        stage=webhook
+        reason=WEBHOOK_ENDPOINT_UNAVAILABLE
+      else
+        compatibility=compatible
+        state=ready
+        stage=ready
+        reason=RUNTIME_READY
+      fi
+
+      external=''
+      if [ "$mode" = external ]; then
+        external=',"externalCanary":{"state":"unreadable"}'
+      fi
+      document="{\"schemaVersion\":\"falcone.knative-runtime/v1\",\"mode\":\"$mode\",\"owner\":\"$owner\",\"version\":\"1.22.1\",\"compatibility\":\"$compatibility\",\"readiness\":{\"state\":\"$state\",\"stage\":\"$stage\",\"reason\":\"$reason\",\"lastTransitionAt\":\"$observed\"},\"observedAt\":\"$observed\",\"validUntil\":\"$valid_until\"$external}"
+      escaped="$(printf '%s' "$document" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+
+      selector="falcone.io%2Fknative-runtime-projection%3Denabled%2Cfalcone.io%2Fknative-owner%3D$owner"
+      namespaces="$(get "/api/v1/namespaces?labelSelector=$selector" 2>/dev/null || printf '%s' '{"items":[]}')"
+      names="$(printf '%s' "$namespaces" | grep -o '"name":"[^"]*"' | sed 's/^"name":"//; s/"$//' | sort -u || true)"
+      successes=0
+      failures=0
+      for namespace in $names; do
+        namespace_object="$(get "/api/v1/namespaces/$namespace" 2>/dev/null || true)"
+        namespace_compact="$(printf '%s' "$namespace_object" | compact)"
+        namespace_resource_version="$(printf '%s' "$namespace_compact" | sed -n 's/.*"resourceVersion":"\([^"]*\)".*/\1/p')"
+        if ! printf '%s' "$namespace_compact" | grep -q "\"$registration_key\":\"$registration_value\"" \
+            || ! printf '%s' "$namespace_compact" | grep -q "\"$owner_key\":\"$owner\""; then
+          failures=$((failures + 1))
+          continue
+        fi
+        current="$(get "/api/v1/namespaces/$namespace/configmaps/$runtime_name" 2>/dev/null || true)"
+        current_compact="$(printf '%s' "$current" | compact)"
+        current_labels="$(printf '%s' "$current_compact" | sed -n 's/.*"labels":{\([^}]*\)}.*/\1/p')"
+        runtime_owner="$(printf '%s' "$current_labels" | sed -n 's/.*"falcone.io\/knative-owner":"\([^"]*\)".*/\1/p')"
+        resource_version="$(printf '%s' "$current_compact" | sed -n 's/.*"resourceVersion":"\([^"]*\)".*/\1/p')"
+        if [ "$runtime_owner" != "$owner" ] || [ -z "$resource_version" ]; then
+          # Creation and RBAC mutation belong to the client-side lifecycle CLI.
+          # Missing or foreign ownership is never adopted by the projector.
+          failures=$((failures + 1))
+          continue
+        fi
+        # Fence the namespace-to-ConfigMap authorization relationship. A
+        # revocation, owner transfer, or re-registration between the Namespace
+        # and ConfigMap reads must prevent this refresh from committing.
+        latest_namespace="$(get "/api/v1/namespaces/$namespace" 2>/dev/null || true)"
+        latest_namespace_compact="$(printf '%s' "$latest_namespace" | compact)"
+        latest_namespace_resource_version="$(printf '%s' "$latest_namespace_compact" | sed -n 's/.*"resourceVersion":"\([^"]*\)".*/\1/p')"
+        if ! printf '%s' "$latest_namespace_compact" | grep -q "\"$registration_key\":\"$registration_value\"" \
+            || ! printf '%s' "$latest_namespace_compact" | grep -q "\"$owner_key\":\"$owner\"" \
+            || [ "$latest_namespace_resource_version" != "$namespace_resource_version" ]; then
+          failures=$((failures + 1))
+          continue
+        fi
+        request=/tmp/projection-request.json
+        printf '%s' "{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"$runtime_name\",\"namespace\":\"$namespace\",\"resourceVersion\":\"$resource_version\",\"labels\":{\"falcone.io/knative-runtime-projection\":\"projected\",\"falcone.io/knative-owner\":\"$owner\"}},\"data\":{\"{{ .Values.projector.runtimeDataKey }}\":\"$escaped\"}}" >"$request"
+        if [ "$(wc -c <"$request")" -gt 16384 ]; then
+          failures=$((failures + 1))
+          continue
+        fi
+        if put_file "/api/v1/namespaces/$namespace/configmaps/$runtime_name" "$request" 2>/dev/null; then
+          successes=$((successes + 1))
+        else
+          failures=$((failures + 1))
+        fi
+      done
+      write_metrics "$epoch" "$successes" "$failures"
+      touch /tmp/heartbeat
+      sleep "$refresh"
+    done
+{{- end }}

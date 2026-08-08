@@ -1,0 +1,1855 @@
+#!/usr/bin/env node
+'use strict'
+
+const { spawnSync } = require('node:child_process')
+const { createHash, randomUUID } = require('node:crypto')
+const { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
+const { tmpdir } = require('node:os')
+const { basename, resolve } = require('node:path')
+
+const CLI_NAME = 'falcone-knative'
+const CLI_VERSION = '0.1.0'
+const BUNDLE_VERSION = '1.22.1'
+const KOURIER_VERSION = '1.22.1'
+const KUBERNETES_MINOR = '1.34'
+const OPENSHIFT_MINOR = '4.21'
+const OPENSHIFT_SCC = 'restricted-v2'
+const DEFAULT_RELEASE = 'falcone-knative'
+const DEFAULT_STATUS_NAMESPACE = 'knative-serving'
+const DEFAULT_STATUS_CONFIGMAP = 'falcone-knative-status'
+const RUNTIME_CONFIGMAP = 'falcone-knative-runtime'
+const RUNTIME_DATA_KEY = 'status.json'
+const REGISTRATION_LABEL = 'falcone.io/knative-runtime-projection'
+const OWNER_LABEL = 'falcone.io/knative-owner'
+const MAX_OUTPUT = 16 * 1024
+const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
+const REPO_ROOT = [resolve(__dirname, '..'), resolve(__dirname, '../..'), process.cwd()]
+  .find((candidate) => existsSync(resolve(candidate, 'charts/falcone-knative')))
+  ?? resolve(__dirname, '..')
+const DEFAULT_CHART = resolve(REPO_ROOT, 'charts/falcone-knative')
+const SMOKE_SOURCE = 'docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0'
+const SMOKE_MIRROR_REPOSITORY = 'library/busybox'
+const SMOKE_DIGEST = 'sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0'
+const MANAGED_SELECTOR = 'app.kubernetes.io/part-of=falcone-knative'
+const ADMISSION_CONFIGURATIONS = [
+  ['validatingwebhookconfiguration', 'config.webhook.serving.knative.dev'],
+  ['mutatingwebhookconfiguration', 'webhook.serving.knative.dev'],
+  ['validatingwebhookconfiguration', 'validation.webhook.serving.knative.dev'],
+]
+
+const SECRET_WORDS = /(?:^|[^a-z])(token|kubeconfig|credential|pull\s+secret|tenant\s+name)(?:[^a-z]|$)/i
+const SAFE_NAME = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]{0,126}[a-zA-Z0-9])?$/
+const SAFE_KUBE_NAME = /^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/
+const SAFE_ID = /^[a-zA-Z0-9](?:[a-zA-Z0-9._:@/-]{0,254}[a-zA-Z0-9])?$/
+const SHA256 = /^[a-f0-9]{64}$/
+
+const TOP_HELP = `${CLI_NAME} ${CLI_VERSION}
+
+Versioned, client-side lifecycle for Falcone-managed Knative Serving + Kourier.
+
+Usage:
+  falcone-knative <command> [options]
+
+Commands:
+  preflight   Read-only compatibility, authority, inventory, and ownership checks
+  install     Install managed Knative in readiness-gated stages
+  upgrade     Upgrade by at most one Knative minor with a recovery record
+  rollback    Roll back only when stored CRD versions remain compatible
+  uninstall   Remove safe Falcone-owned components while retaining durable state
+  purge       Separately-confirmed destructive removal of retained state
+  handoff     Quiesce and transfer exclusive ownership to or from an Operator
+  acceptance  Disposable-target outage, restart, recover, or replacement hook
+
+Global options:
+  -h, --help       Show help
+  -V, --version    Show version
+  --output json    Emit bounded, secret-safe JSON evidence (default: json)
+
+Run "falcone-knative <command> --help" for command-specific options.
+`
+
+const COMMAND_HELP = {
+  preflight: `Usage: falcone-knative preflight --mode <managed|external|disabled> [options]
+
+Options:
+  --mode MODE                 Runtime mode (required)
+  --owner NAME                Exclusive owner (required for managed/external)
+  --bundle-version VERSION    Must be ${BUNDLE_VERSION} for managed mode
+  --external-canary NS/NAME   Existing canary to read and invoke in external mode
+  --registry-mirror HOST/PATH Digest-preserving mirror used by disconnected installs
+  --disconnected              Require a private registry mirror
+  --reviewed-migration ID     Explicit reviewed managed-migration record
+  --output json               Emit JSON evidence
+`,
+  install: `Usage: falcone-knative install --mode <managed|external> --owner NAME [options]
+
+Options:
+  --release NAME              Helm release (default: ${DEFAULT_RELEASE})
+  --chart PATH                falcone-knative chart root (default: repository chart)
+  --bundle-version VERSION    Must be ${BUNDLE_VERSION}
+  --registry-mirror HOST/PATH Digest-preserving private registry mirror
+  --disconnected              Reject installation without --registry-mirror
+  --status-namespace NAME     Fixed lifecycle status namespace (${DEFAULT_STATUS_NAMESPACE})
+  --status-configmap NAME     Lifecycle status ConfigMap (default: ${DEFAULT_STATUS_CONFIGMAP})
+  --run-id ID                 Bounded acceptance/run correlation
+  --reviewed-migration ID     Explicit reviewed managed-migration record
+  --external-canary NS/NAME   Existing canary to read/invoke for an external status refresh
+  --output json               Emit JSON evidence
+`,
+  upgrade: `Usage: falcone-knative upgrade --from-version VERSION --to-version VERSION --owner NAME [options]
+
+Options:
+  --release NAME              Helm release (default: ${DEFAULT_RELEASE})
+  --chart PATH                falcone-knative chart root
+  --recovery-point ID         Recovery record name (generated when omitted)
+  --status-namespace NAME     Fixed lifecycle status namespace (${DEFAULT_STATUS_NAMESPACE})
+  --status-configmap NAME     Lifecycle status ConfigMap
+  --registry-mirror HOST/PATH Digest-preserving private registry mirror
+  --disconnected              Require a private registry mirror
+  --output json               Emit JSON evidence
+`,
+  rollback: `Usage: falcone-knative rollback --to-version VERSION --owner NAME --recovery-point ID [options]
+
+Options:
+  --release NAME              Helm release (default: ${DEFAULT_RELEASE})
+  --chart PATH                falcone-knative chart root
+  --status-namespace NAME     Fixed lifecycle status namespace (${DEFAULT_STATUS_NAMESPACE})
+  --output json               Emit JSON evidence
+`,
+  uninstall: `Usage: falcone-knative uninstall --owner NAME [options]
+
+Options:
+  --release NAME              Helm release (default: ${DEFAULT_RELEASE})
+  --status-namespace NAME     Fixed lifecycle status namespace (${DEFAULT_STATUS_NAMESPACE})
+  --output json               Emit retained CRDs and workload classes
+`,
+  purge: `Usage: falcone-knative purge --owner NAME [options]
+
+Options:
+  --release NAME              Helm release (default: ${DEFAULT_RELEASE})
+  --status-namespace NAME     Fixed lifecycle status namespace (${DEFAULT_STATUS_NAMESPACE})
+  --backup-evidence ID        Reviewed backup evidence identifier
+  --confirm-purge PHRASE      Exact separate phrase PURGE-<release>-<owner>
+  --output json               Emit impact before any destructive action
+`,
+  handoff: `Usage: falcone-knative handoff --from <falcone|operator> --to <falcone|operator> --owner NAME [options]
+
+Options:
+  --release NAME              Helm release (default: ${DEFAULT_RELEASE})
+  --status-namespace NAME     Fixed lifecycle status namespace (${DEFAULT_STATUS_NAMESPACE})
+  --recovery-point ID         Recovery record name (generated when omitted)
+  --backup-evidence ID        Existing reviewed backup identifier
+  --output json               Emit quiesce/ownership evidence
+`,
+  acceptance: `Usage: falcone-knative acceptance <outage|restart|recover|replacement-conflict> VERIFIED_TARGET_FLAGS
+
+Required verified-target flags, in this order for the #933 argv contract:
+  --api-server URL
+  --cluster-uid UID
+  --infrastructure-name NAME
+  --infrastructure-id ID
+  --run-id ID
+  --release NAME
+  --status-namespace NAME
+  --status-configmap NAME
+
+replacement-conflict also accepts the chart-owned private fixture flags:
+  --namespace NAME --resource-name NAME --tenant-id ID --workspace-id ID --server-id ID
+`,
+}
+
+class LifecycleError extends Error {
+  constructor(stage, reason, detail, extras = {}) {
+    super(detail)
+    this.name = 'LifecycleError'
+    this.stage = stage
+    this.reason = reason
+    this.detail = detail
+    this.extras = extras
+  }
+}
+
+class CommandError extends LifecycleError {
+  constructor(stage, reason, label, result) {
+    super(stage, reason, `${label} failed`, { commandExit: result?.status ?? 'unknown' })
+  }
+}
+
+function parseArgs(argv) {
+  if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') return { help: 'top' }
+  if (argv[0] === '--version' || argv[0] === '-V') return { version: true }
+  const command = argv[0]
+  if (!Object.hasOwn(COMMAND_HELP, command)) {
+    throw new LifecycleError('arguments', 'UNKNOWN_COMMAND', `unknown command; use ${CLI_NAME} --help`)
+  }
+  if (argv[1] === '--help' || argv[1] === '-h') return { help: command }
+
+  let operation = null
+  let cursor = 1
+  if (command === 'acceptance') {
+    operation = argv[cursor++] ?? ''
+    if (!['outage', 'restart', 'recover', 'replacement-conflict'].includes(operation)) {
+      throw new LifecycleError('arguments', 'INVALID_ACCEPTANCE_OPERATION', 'acceptance requires outage, restart, recover, or replacement-conflict')
+    }
+  }
+
+  const booleanOptions = new Set(['disconnected'])
+  const options = Object.create(null)
+  while (cursor < argv.length) {
+    const raw = argv[cursor++]
+    if (raw === '--help' || raw === '-h') return { help: command }
+    if (!raw.startsWith('--') || raw === '--') {
+      throw new LifecycleError('arguments', 'INVALID_ARGUMENT', 'positional or empty arguments are not accepted')
+    }
+    const key = raw.slice(2)
+    if (!KNOWN_OPTIONS.has(key)) throw new LifecycleError('arguments', 'UNKNOWN_OPTION', `unknown option --${key}`)
+    if (Object.hasOwn(options, key)) throw new LifecycleError('arguments', 'DUPLICATE_OPTION', `duplicate option --${key}`)
+    if (booleanOptions.has(key)) {
+      options[key] = true
+      continue
+    }
+    const value = argv[cursor++]
+    if (value === undefined || value.length === 0 || value.startsWith('--')) {
+      throw new LifecycleError('arguments', 'MISSING_OPTION_VALUE', `option --${key} requires a value`)
+    }
+    options[key] = value
+  }
+  return { command, operation, options }
+}
+
+const KNOWN_OPTIONS = new Set([
+  'mode', 'owner', 'bundle-version', 'external-canary', 'registry-mirror', 'disconnected',
+  'reviewed-migration', 'output', 'release', 'chart', 'status-namespace', 'status-configmap',
+  'run-id', 'from-version', 'to-version', 'recovery-point', 'backup-evidence', 'confirm-purge',
+  'from', 'to', 'api-server', 'cluster-uid', 'infrastructure-name', 'infrastructure-id',
+  'namespace', 'resource-name', 'tenant-id', 'workspace-id', 'server-id',
+])
+
+function requireOption(options, key, message = `--${key} is required`) {
+  const value = options[key]
+  if (typeof value !== 'string' || value.length === 0) throw new LifecycleError('arguments', 'MISSING_REQUIRED_OPTION', message)
+  return value
+}
+
+function safeName(value, flag, kube = false) {
+  const matcher = kube ? SAFE_KUBE_NAME : SAFE_NAME
+  if (!matcher.test(value)) throw new LifecycleError('arguments', 'INVALID_SAFE_NAME', `--${flag} is not a bounded safe name`)
+  return value
+}
+
+function safeId(value, flag) {
+  if (!SAFE_ID.test(value)) throw new LifecycleError('arguments', 'INVALID_IDENTIFIER', `--${flag} is not a bounded identifier`)
+  return value
+}
+
+function commonOptions(options) {
+  const output = options.output ?? 'json'
+  if (output !== 'json') throw new LifecycleError('arguments', 'INVALID_OUTPUT', '--output accepts only json')
+  const release = safeName(options.release ?? DEFAULT_RELEASE, 'release', true)
+  const statusNamespace = safeName(options['status-namespace'] ?? DEFAULT_STATUS_NAMESPACE, 'status-namespace', true)
+  if (statusNamespace !== DEFAULT_STATUS_NAMESPACE) {
+    throw new LifecycleError('arguments', 'UNSUPPORTED_STATUS_NAMESPACE', `--status-namespace is fixed to ${DEFAULT_STATUS_NAMESPACE} for the pinned managed bundle`)
+  }
+  const statusConfigMap = safeName(options['status-configmap'] ?? DEFAULT_STATUS_CONFIGMAP, 'status-configmap', true)
+  const chart = resolve(options.chart ?? process.env.FALCONE_KNATIVE_CHART ?? DEFAULT_CHART)
+  return { output, release, statusNamespace, statusConfigMap, chart }
+}
+
+function invoke(file, args, { input, stage = 'command', reason = 'COMMAND_FAILED', label = basename(file), allowFailure = false } = {}) {
+  const result = spawnSync(file, args, {
+    encoding: 'utf8',
+    input,
+    maxBuffer: 1024 * 1024,
+    timeout: COMMAND_TIMEOUT_MS,
+    env: process.env,
+  })
+  if (!allowFailure && (result.error || result.status !== 0)) throw new CommandError(stage, reason, label, result)
+  return result
+}
+
+function kubectl(args, options = {}) {
+  return invoke('kubectl', args, { label: options.label ?? 'cluster operation', ...options })
+}
+
+function helm(args, options = {}) {
+  return invoke('helm', args, { label: options.label ?? 'Helm lifecycle operation', ...options })
+}
+
+function curl(args, options = {}) {
+  return invoke('curl', args, { label: options.label ?? 'bounded canary invocation', ...options })
+}
+
+function jsonFrom(result, stage, reason, label) {
+  try {
+    return JSON.parse(String(result.stdout ?? ''))
+  } catch {
+    throw new LifecycleError(stage, reason, `${label} returned an invalid bounded response`)
+  }
+}
+
+function kubectlJson(args, options = {}) {
+  const result = kubectl(args, options)
+  return jsonFrom(result, options.stage ?? 'discovery', options.reason ?? 'INVALID_DISCOVERY_RESPONSE', options.label ?? 'cluster discovery')
+}
+
+function serverArgs(apiServer) {
+  return apiServer ? ['--server', apiServer] : []
+}
+
+function normalizeVersion(value) {
+  return String(value ?? '').trim().replace(/^v/, '').replace(/\+.*/, '')
+}
+
+function minorOf(value) {
+  const match = normalizeVersion(value).match(/^(\d+)\.(\d+)(?:\.(\d+))?$/)
+  return match ? `${match[1]}.${match[2]}` : null
+}
+
+function semver(value, flag) {
+  const match = normalizeVersion(value).match(/^(\d+)\.(\d+)\.(\d+)$/)
+  if (!match) throw new LifecycleError('arguments', 'INVALID_VERSION', `--${flag} must be a complete semantic version`)
+  return { raw: `${match[1]}.${match[2]}.${match[3]}`, major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) }
+}
+
+function commandSubject() {
+  return process.env.FALCONE_KNATIVE_ACTOR && SAFE_NAME.test(process.env.FALCONE_KNATIVE_ACTOR)
+    ? process.env.FALCONE_KNATIVE_ACTOR
+    : 'cluster-administrator'
+}
+
+function managedSelector(owner) {
+  return `${MANAGED_SELECTOR},${OWNER_LABEL}=${safeName(owner, 'owner')}`
+}
+
+function evidence({ action, mode = 'managed', owner = 'unverified', stage, result, correlationId, ...extra }) {
+  const value = {
+    actor: commandSubject(),
+    action,
+    mode,
+    owner,
+    bundle: `knative-serving-kourier-${BUNDLE_VERSION}`,
+    stage,
+    result,
+    correlationId: correlationId ?? randomUUID(),
+    ...extra,
+  }
+  const text = JSON.stringify(value)
+  if (Buffer.byteLength(text) > MAX_OUTPUT || SECRET_WORDS.test(text)) {
+    return {
+      actor: 'cluster-administrator', action, mode, owner: 'redacted',
+      bundle: BUNDLE_VERSION, stage: 'evidence', result: 'failed',
+      reason: 'EVIDENCE_REDACTED', correlationId: correlationId ?? randomUUID(),
+    }
+  }
+  return value
+}
+
+function emit(value, stream = process.stdout) {
+  let text = `${JSON.stringify(value)}\n`
+  if (Buffer.byteLength(text) > MAX_OUTPUT) {
+    text = `${JSON.stringify({ result: 'failed', reason: 'EVIDENCE_TOO_LARGE' })}\n`
+  }
+  stream.write(text)
+}
+
+function matrixFailure(detected) {
+  throw new LifecycleError('compatibility', 'UNSUPPORTED_MATRIX', 'detected platform is outside the supported fixed matrix', {
+    detected,
+    supported: {
+      knative: BUNDLE_VERSION,
+      kourier: KOURIER_VERSION,
+      kubernetes: KUBERNETES_MINOR,
+      openshift: OPENSHIFT_MINOR,
+      securityConstraint: OPENSHIFT_SCC,
+    },
+  })
+}
+
+function validateMode(options) {
+  const mode = requireOption(options, 'mode')
+  if (!['managed', 'external', 'disabled'].includes(mode)) {
+    throw new LifecycleError('arguments', 'INVALID_MODE', '--mode must be managed, external, or disabled')
+  }
+  return mode
+}
+
+function validateBundleOptions(options) {
+  const bundleVersion = options['bundle-version'] ?? BUNDLE_VERSION
+  if (bundleVersion !== BUNDLE_VERSION) {
+    matrixFailure({ knative: bundleVersion, kourier: bundleVersion, kubernetes: 'not-probed', openshift: 'not-probed' })
+  }
+  const mirror = options['registry-mirror']
+  if (options.disconnected && !mirror) {
+    throw new LifecycleError('bundle', 'MIRROR_REQUIRED', 'disconnected mode requires --registry-mirror before installation')
+  }
+  if (mirror && (!SAFE_ID.test(mirror) || /^(?:https?:\/\/)?(?:docker\.io|gcr\.io|quay\.io)(?:\/|$)/i.test(mirror))) {
+    throw new LifecycleError('bundle', 'INVALID_PRIVATE_MIRROR', '--registry-mirror must be a bounded private registry path')
+  }
+  return { bundleVersion, mirror: mirror ?? null, disconnected: Boolean(options.disconnected) }
+}
+
+function discoverPlatform(apiServer = null) {
+  const prefix = serverArgs(apiServer)
+  const kubernetes = kubectlJson([...prefix, 'version', '-o', 'json'], {
+    stage: 'compatibility', reason: 'KUBERNETES_DISCOVERY_FAILED', label: 'Kubernetes version discovery',
+  })
+  const clusterVersion = kubectlJson([...prefix, 'get', 'clusterversion', 'version', '-o', 'json'], {
+    stage: 'compatibility', reason: 'OPENSHIFT_DISCOVERY_FAILED', label: 'OpenShift version discovery',
+  })
+  const infrastructure = kubectlJson([...prefix, 'get', 'infrastructure', 'cluster', '-o', 'json'], {
+    stage: 'identity', reason: 'INFRASTRUCTURE_DISCOVERY_FAILED', label: 'cluster infrastructure discovery',
+  })
+  const kubernetesVersion = normalizeVersion(kubernetes?.serverVersion?.gitVersion)
+  const openShiftVersion = normalizeVersion(clusterVersion?.status?.desired?.version ?? clusterVersion?.status?.history?.[0]?.version)
+  const detected = {
+    knative: BUNDLE_VERSION,
+    kourier: KOURIER_VERSION,
+    kubernetes: kubernetesVersion || 'unknown',
+    openshift: openShiftVersion || 'unknown',
+    securityConstraint: OPENSHIFT_SCC,
+  }
+  if (minorOf(kubernetesVersion) !== KUBERNETES_MINOR || minorOf(openShiftVersion) !== OPENSHIFT_MINOR) matrixFailure(detected)
+  return { detected, infrastructure }
+}
+
+function checkAuthority(apiServer = null) {
+  const prefix = serverArgs(apiServer)
+  const checks = [
+    ['create', 'customresourcedefinitions.apiextensions.k8s.io'],
+    ['create', 'clusterroles.rbac.authorization.k8s.io'],
+    ['create', 'vwc'],
+    ['create', 'mwc'],
+    ['create', 'validatingadmissionpolicies.admissionregistration.k8s.io'],
+    ['create', 'validatingadmissionpolicybindings.admissionregistration.k8s.io'],
+    ['create', 'namespaces'],
+  ]
+  for (const [verb, resource] of checks) {
+    const result = kubectl([...prefix, 'auth', 'can-i', verb, resource, '--all-namespaces'], {
+      stage: 'authority', reason: 'AUTHORITY_PROBE_FAILED', label: `cluster-scoped permission probe for ${resource}`,
+    })
+    if (String(result.stdout).trim().toLowerCase() !== 'yes') {
+      throw new LifecycleError('authority', 'MISSING_CLUSTER_PERMISSION', `missing cluster-scoped ${verb} permission for ${resource}`)
+    }
+  }
+  const scc = kubectl([...prefix, 'auth', 'can-i', 'use', `securitycontextconstraints.security.openshift.io/${OPENSHIFT_SCC}`, '--all-namespaces'], {
+    stage: 'authority', reason: 'SCC_AUTHORITY_PROBE_FAILED', label: `${OPENSHIFT_SCC} authority probe`,
+  })
+  if (String(scc.stdout).trim().toLowerCase() !== 'yes') {
+    throw new LifecycleError('authority', 'MISSING_RESTRICTED_V2_PERMISSION', `cluster authority cannot use ${OPENSHIFT_SCC}`)
+  }
+}
+
+function readInventory(apiServer = null, statusNamespace = DEFAULT_STATUS_NAMESPACE, chart = DEFAULT_CHART) {
+  const prefix = serverArgs(apiServer)
+  const bundleIdentities = stagedBundleIdentities(chart)
+  const apiGroups = kubectl([...prefix, 'get', '--raw', '/apis'], {
+    stage: 'admission', reason: 'ADMISSION_UNREACHABLE', label: 'admission API reachability probe',
+  })
+  try {
+    const groups = JSON.parse(String(apiGroups.stdout ?? ''))?.groups ?? []
+    if (Array.isArray(groups) && !groups.some((group) => group?.name === 'admissionregistration.k8s.io')) {
+      throw new LifecycleError('admission', 'ADMISSION_UNREACHABLE', 'required admission API group is not reachable')
+    }
+  } catch (error) {
+    if (error instanceof LifecycleError) throw error
+    // Some API proxies expose a successful bounded health response without the discovery body.
+  }
+  const namespaces = kubectlJson([...prefix, 'get', 'namespaces', '-o', 'json'], {
+    stage: 'inventory', reason: 'NAMESPACE_INVENTORY_FAILED', label: 'namespace inventory',
+  })
+  const rbac = kubectlJson([...prefix, 'get', 'clusterroles.rbac.authorization.k8s.io,clusterrolebindings.rbac.authorization.k8s.io', '-o', 'json'], {
+    stage: 'inventory', reason: 'RBAC_INVENTORY_FAILED', label: 'cluster RBAC inventory',
+  })
+  const admission = kubectlJson([...prefix, 'get', 'vwc,mwc', '-o', 'json'], {
+    stage: 'inventory', reason: 'WEBHOOK_INVENTORY_FAILED', label: 'admission configuration inventory',
+  })
+  const crds = kubectlJson([...prefix, 'get', 'customresourcedefinitions.apiextensions.k8s.io', '-o', 'json'], {
+    stage: 'ownership', reason: 'CRD_INVENTORY_FAILED', label: 'Knative CRD and stored-version inventory',
+  })
+  const runtime = kubectlJson([...prefix, 'get', 'deployments.apps,statefulsets.apps,daemonsets.apps,services', '-A', '-o', 'json'], {
+    stage: 'inventory', reason: 'RUNTIME_INVENTORY_FAILED', label: 'managed runtime resource inventory',
+  })
+  const namespaced = kubectlJson([...prefix, 'get', 'configmaps,secrets,serviceaccounts,roles.rbac.authorization.k8s.io,rolebindings.rbac.authorization.k8s.io,horizontalpodautoscalers.autoscaling,poddisruptionbudgets.policy', '-A', '-o', 'json'], {
+    stage: 'inventory', reason: 'NAMESPACED_INVENTORY_FAILED', label: 'complete namespaced bundle collision inventory',
+  })
+  const internal = optionalInventory([...prefix, 'get', 'certificates.networking.internal.knative.dev,images.caching.internal.knative.dev', '-A', '-o', 'json'], {
+    stage: 'inventory', reason: 'INTERNAL_RESOURCE_INVENTORY_FAILED', label: 'Knative internal resource collision inventory',
+  })
+  const ownerMarkerResult = kubectl([...prefix, 'get', 'configmaps', '-n', statusNamespace, '-o', 'json'], {
+    stage: 'ownership', reason: 'OWNER_MARKER_INVENTORY_FAILED', label: 'exclusive owner marker inventory', allowFailure: true,
+  })
+  let ownerMarker = { apiVersion: 'v1', kind: 'List', items: [] }
+  if (ownerMarkerResult.error) throw new LifecycleError('ownership', 'OWNER_MARKER_INVENTORY_FAILED', 'exclusive owner marker inventory failed')
+  if (ownerMarkerResult.status === 0) {
+    ownerMarker = jsonFrom(ownerMarkerResult, 'ownership', 'OWNER_MARKER_INVENTORY_FAILED', 'exclusive owner marker inventory')
+  } else if (!/notfound|not found|does not exist/i.test(String(ownerMarkerResult.stderr ?? ''))) {
+    throw new CommandError('ownership', 'OWNER_MARKER_INVENTORY_FAILED', 'exclusive owner marker inventory', ownerMarkerResult)
+  }
+  const all = [namespaces, rbac, admission, crds, runtime, namespaced, internal, ownerMarker].flatMap(inventoryItems)
+  const seen = new Set()
+  const items = all.filter((item) => isRelevantManagedInventory(item, bundleIdentities)).filter((item) => {
+    const key = `${item?.apiVersion ?? ''}/${item?.kind ?? ''}/${item?.metadata?.namespace ?? ''}/${item?.metadata?.name ?? ''}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  return { apiVersion: 'v1', kind: 'List', items }
+}
+
+function optionalInventory(args, options) {
+  const result = kubectl(args, { ...options, allowFailure: true })
+  if (result.error) throw new LifecycleError(options.stage, options.reason, `${options.label} failed`)
+  if (result.status === 0) return jsonFrom(result, options.stage, options.reason, options.label)
+  if (/the server doesn't have a resource type|not found|could not find the requested resource/i.test(String(result.stderr ?? ''))) {
+    return { apiVersion: 'v1', kind: 'List', items: [] }
+  }
+  throw new CommandError(options.stage, options.reason, options.label, result)
+}
+
+function stagedBundleIdentities(chart) {
+  const root = resolve(chart, 'bundle/stages')
+  const identities = new Set()
+  for (const name of ['01-crds.yaml', '02-foundation.yaml', '03-webhook-backend.yaml', '04-admissionregistration.yaml', '05-serving-controllers.yaml', '06-kourier.yaml']) {
+    const file = resolve(root, name)
+    if (!existsSync(file)) throw new LifecycleError('bundle', 'MISSING_STAGED_BUNDLE', `managed bundle is missing staged inventory ${name}`)
+    for (const document of readFileSync(file, 'utf8').split(/^---\s*$/m)) {
+      const kind = document.match(/^kind:\s*([^\s#]+)/m)?.[1]
+      const metadata = document.match(/^metadata:\s*\n((?:^[ \t]+.*(?:\n|$))*)/m)?.[1] ?? ''
+      const objectName = metadata.match(/^[ \t]+name:\s*([^\s#]+)/m)?.[1]
+      const namespace = metadata.match(/^[ \t]+namespace:\s*([^\s#]+)/m)?.[1] ?? ''
+      if (kind && objectName) identities.add(`${kind}/${namespace}/${objectName}`)
+    }
+  }
+  return identities
+}
+
+function inventoryItems(value) {
+  if (Array.isArray(value?.items)) return value.items
+  return value?.kind && value.kind !== 'List' ? [value] : []
+}
+
+function isRelevantManagedInventory(item, bundleIdentities = new Set()) {
+  const kind = String(item?.kind ?? '')
+  const name = String(item?.metadata?.name ?? '')
+  const namespace = String(item?.metadata?.namespace ?? '')
+  const markers = { ...(item?.metadata?.labels ?? {}), ...(item?.metadata?.annotations ?? {}) }
+  const markerText = JSON.stringify(markers).toLowerCase()
+  if (bundleIdentities.has(`${kind}/${namespace}/${name}`)) return true
+  if (kind === 'Namespace') return ['knative-serving', 'kourier-system'].includes(name)
+  if (kind === 'CustomResourceDefinition') return /(?:^|\.)knative\.dev$/.test(String(item?.spec?.group ?? '')) || /\.knative\.dev$/.test(name) || /\.serving\.knative\.dev$/.test(name)
+  if (['ClusterRole', 'ClusterRoleBinding'].includes(kind)) return /knative|kourier|serverless/i.test(name) || /olm|serverless|knative|kourier/.test(markerText)
+  if (['ValidatingWebhookConfiguration', 'MutatingWebhookConfiguration'].includes(kind)) {
+    return ADMISSION_CONFIGURATIONS.some(([, expected]) => expected === name) || /partial|olm|serverless|knative|kourier/.test(markerText)
+  }
+  if (kind === 'ConfigMap') return name === 'falcone-knative-ownership'
+  if (['Deployment', 'StatefulSet', 'DaemonSet', 'Service'].includes(kind)) {
+    return ['controller', 'webhook', 'net-kourier-controller', '3scale-kourier-gateway'].includes(name)
+      || markers[OWNER_LABEL] !== undefined || markers['app.kubernetes.io/part-of'] === 'falcone-knative'
+  }
+  return false
+}
+
+function ownershipKind(item, requestedOwner) {
+  const metadata = item?.metadata ?? {}
+  const markers = { ...(metadata.labels ?? {}), ...(metadata.annotations ?? {}) }
+  const flattened = JSON.stringify(markers).toLowerCase()
+  const markedOwner = markers[OWNER_LABEL] ?? markers['falcone.io/knative-owner']
+  if (/olm|serverless-operator|knativeserving/.test(flattened)) return 'Operator/OLM ownership'
+  if (/raw-manifest/.test(flattened)) return 'another raw-manifest owner'
+  if (/partial/.test(flattened)) return 'partial ownership'
+  if (/existing-undecided/.test(flattened)) return 'existing installation without a decision'
+  if (markedOwner && markedOwner !== requestedOwner) return 'different Falcone owner'
+  if (markedOwner === requestedOwner) return 'same Falcone owner'
+  return 'unknown existing owner'
+}
+
+function checkOwnership(inventory, owner, reviewedMigration) {
+  const items = Array.isArray(inventory?.items) ? inventory.items : (inventory?.kind && inventory.kind !== 'List' ? [inventory] : [])
+  if (items.length === 0) return { state: 'clean', owner }
+  const kinds = [...new Set(items.map((item) => ownershipKind(item, owner)))]
+  const onlySameOwner = kinds.length === 1 && kinds[0] === 'same Falcone owner'
+  if (onlySameOwner) {
+    return { state: reviewedMigration ? 'reviewed-managed-migration' : 'existing-same-owner', owner, record: reviewedMigration ?? null }
+  }
+  throw new LifecycleError('ownership', 'EXISTING_OWNER_NOT_ADOPTED', 'existing Knative owner is not adopted; select external or disabled, or perform a reviewed handoff/migration decision', {
+    ownership: kinds,
+  })
+}
+
+function managedPreflight(options, { forInstall = false } = {}) {
+  const owner = safeName(requireOption(options, 'owner'), 'owner')
+  const bundle = validateBundleOptions(options)
+  const { detected, infrastructure } = discoverPlatform()
+  checkAuthority()
+  const statusNamespace = safeName(options['status-namespace'] ?? DEFAULT_STATUS_NAMESPACE, 'status-namespace', true)
+  const chart = resolve(options.chart ?? process.env.FALCONE_KNATIVE_CHART ?? DEFAULT_CHART)
+  const inventory = readInventory(null, statusNamespace, chart)
+  const ownership = checkOwnership(inventory, owner, options['reviewed-migration'])
+  return { owner, bundle, detected, infrastructure, inventory, ownership, forInstall }
+}
+
+function externalPreflight(options) {
+  const owner = safeName(requireOption(options, 'owner'), 'owner')
+  const canary = requireOption(options, 'external-canary', '--external-canary NS/NAME is required for observational external validation')
+  const parts = canary.split('/')
+  if (parts.length !== 2) throw new LifecycleError('external_validation', 'INVALID_EXTERNAL_CANARY', '--external-canary must be namespace/name')
+  const namespace = safeName(parts[0], 'external-canary namespace', true)
+  const name = safeName(parts[1], 'external-canary name', true)
+  const { detected } = discoverPlatform()
+  const result = kubectl(['get', 'services.serving.knative.dev', name, '-n', namespace, '-o', 'json'], {
+    stage: 'external_validation', reason: 'EXTERNAL_CANARY_MISSING', label: 'existing external canary read', allowFailure: true,
+  })
+  if (result.error || result.status !== 0) {
+    throw new LifecycleError('external_validation', 'EXTERNAL_CANARY_MISSING', 'existing external canary is missing or unreadable; readiness remains unverified')
+  }
+  const document = jsonFrom(result, 'external_validation', 'EXTERNAL_CANARY_UNREADABLE', 'external canary')
+  const ready = (document?.status?.conditions ?? []).some((condition) => condition?.type === 'Ready' && condition?.status === 'True')
+  if (!ready) throw new LifecycleError('external_validation', 'EXTERNAL_CANARY_UNREADY', 'existing external canary is unverified and not Ready')
+  let url
+  try { url = new URL(document?.status?.url) } catch { throw new LifecycleError('external_validation', 'EXTERNAL_CANARY_URL_INVALID', 'existing external canary has no verifiable invocation URL') }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new LifecycleError('external_validation', 'EXTERNAL_CANARY_URL_INVALID', 'existing external canary invocation URL is unsupported')
+  const invoked = curl(['--fail', '--silent', '--show-error', '--max-time', '15', url.toString()], {
+    stage: 'external_validation', reason: 'EXTERNAL_CANARY_INVOKE_FAILED', label: 'existing external canary invocation', allowFailure: true,
+  })
+  if (invoked.error || invoked.status !== 0) {
+    throw new LifecycleError('external_validation', 'EXTERNAL_CANARY_INVOKE_FAILED', 'existing external canary invocation failed; readiness remains unverified')
+  }
+  return { owner, detected, canaryState: 'verified' }
+}
+
+function preflight(options) {
+  const mode = validateMode(options)
+  commonOptions(options)
+  const correlationId = randomUUID()
+  if (mode === 'disabled') {
+    return evidence({ action: 'preflight', mode, owner: options.owner ?? 'none', stage: 'disabled', result: 'accepted', correlationId,
+      reason: 'RUNTIME_DISABLED', mutationCount: 0 })
+  }
+  if (mode === 'external') {
+    const state = externalPreflight(options)
+    return evidence({ action: 'preflight', mode, owner: state.owner, stage: 'external_validation', result: 'accepted', correlationId,
+      externalCanary: { state: state.canaryState }, detected: state.detected, supported: supportedMatrix(), mutationCount: 0 })
+  }
+  const state = managedPreflight(options)
+  return evidence({ action: 'preflight', mode, owner: state.owner, stage: 'preflight', result: 'accepted', correlationId,
+    detected: state.detected, supported: supportedMatrix(), ownership: state.ownership.state, mutationCount: 0,
+    support: 'Falcone-supported patched upstream bundle; not the Red Hat OpenShift Serverless product path' })
+}
+
+function supportedMatrix() {
+  return { knative: BUNDLE_VERSION, kourier: KOURIER_VERSION, kubernetes: KUBERNETES_MINOR, openshift: OPENSHIFT_MINOR, securityConstraint: OPENSHIFT_SCC }
+}
+
+function materializeStageFiles(chart, owner, bundle) {
+  const sourceRoot = resolve(chart, 'bundle/stages')
+  const names = {
+    crds: '01-crds.yaml',
+    foundation: '02-foundation.yaml',
+    webhook: '03-webhook-backend.yaml',
+    admission: '04-admissionregistration.yaml',
+    serving: '05-serving-controllers.yaml',
+    kourier: '06-kourier.yaml',
+  }
+  const lockPath = resolve(chart, 'provenance/image-lock.json')
+  if (!existsSync(lockPath)) throw new LifecycleError('bundle', 'IMAGE_LOCK_MISSING', 'managed bundle image lock is missing')
+  let imageLock
+  try { imageLock = JSON.parse(readFileSync(lockPath, 'utf8')) } catch { throw new LifecycleError('bundle', 'IMAGE_LOCK_INVALID', 'managed bundle image lock is invalid') }
+  if (!Array.isArray(imageLock.images)) throw new LifecycleError('bundle', 'IMAGE_LOCK_INVALID', 'managed bundle image inventory is incomplete')
+
+  const temporaryRoot = mkdtempSync(resolve(tmpdir(), 'falcone-knative-materialized-'))
+  const outputRoot = resolve(temporaryRoot, 'bundle/stages')
+  mkdirSync(outputRoot, { recursive: true, mode: 0o700 })
+  const files = {}
+  try {
+    for (const [stage, name] of Object.entries(names)) {
+      const source = resolve(sourceRoot, name)
+      if (!existsSync(source)) throw new LifecycleError('bundle', 'MISSING_STAGED_BUNDLE', `managed bundle is missing the ${stage} staged manifest`)
+      let content = readFileSync(source, 'utf8').split('__FALCONE_OWNER__').join(owner)
+      const lockedForStage = imageLock.images.filter((entry) => (
+        Array.isArray(entry.locations) && entry.locations.some((location) => location.startsWith(`bundle/stages/${name}:`))
+      ))
+      for (const entry of lockedForStage) {
+        if (typeof entry.source !== 'string' || typeof entry.mirrorRepository !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(entry.digest ?? '')) {
+          throw new LifecycleError('bundle', 'IMAGE_LOCK_INVALID', `image lock entry for ${stage} is incomplete`)
+        }
+        const replacement = bundle.mirror ? `${bundle.mirror}/${entry.mirrorRepository}@${entry.digest}` : entry.source
+        if (!content.includes(entry.source)) throw new LifecycleError('bundle', 'IMAGE_LOCK_DRIFT', `staged ${stage} manifest does not resolve locked image ${entry.name}`)
+        content = content.split(entry.source).join(replacement)
+        if (!content.includes(replacement)) throw new LifecycleError('bundle', 'IMAGE_REWRITE_FAILED', `staged ${stage} image rewrite did not preserve its digest`)
+      }
+      if (content.includes('__FALCONE_OWNER__')) throw new LifecycleError('bundle', 'OWNER_PLACEHOLDER_REMAINS', `staged ${stage} manifest retains an owner placeholder`)
+      if (bundle.disconnected && /(?:docker|gcr|ghcr|quay)\.io\/|registry\.k8s\.io\//i.test(content)) {
+        throw new LifecycleError('bundle', 'PUBLIC_REGISTRY_REMAINS', `staged ${stage} manifest retains a public registry in disconnected mode`)
+      }
+      const output = resolve(outputRoot, name)
+      writeFileSync(output, content, { encoding: 'utf8', mode: 0o600 })
+      files[stage] = output
+    }
+    return { files, cleanup: () => rmSync(temporaryRoot, { recursive: true, force: true }) }
+  } catch (error) {
+    rmSync(temporaryRoot, { recursive: true, force: true })
+    throw error
+  }
+}
+
+function executableSha256() {
+  const invokedExecutable = resolve(process.argv[1] || resolve(REPO_ROOT, 'bin/falcone-knative'))
+  return createHash('sha256').update(readFileSync(invokedExecutable)).digest('hex')
+}
+
+function chartVersion(chart) {
+  const text = readFileSync(resolve(chart, 'Chart.yaml'), 'utf8')
+  const match = text.match(/^version:\s*["']?([^\s"']+)/m)
+  if (!match) throw new LifecycleError('bundle', 'CHART_VERSION_MISSING', 'managed chart has no version')
+  return match[1]
+}
+
+function clusterIdentity(infrastructure) {
+  const metaName = String(infrastructure?.metadata?.name ?? '')
+  const statusName = String(infrastructure?.status?.infrastructureName ?? '')
+  const statusId = String(infrastructure?.status?.infrastructureId ?? '')
+  const apiUrl = String(infrastructure?.status?.apiServerURL ?? '')
+  const kubeSystem = kubectlJson(['get', 'namespace', 'kube-system', '-o', 'json'], {
+    stage: 'identity', reason: 'CLUSTER_UID_DISCOVERY_FAILED', label: 'cluster UID discovery',
+  })
+  return {
+    apiUrl,
+    infrastructureName: metaName || statusName,
+    infrastructureId: statusName || statusId,
+    clusterUid: String(kubeSystem?.metadata?.uid ?? ''),
+  }
+}
+
+function readOwnerMarker(common) {
+  const prefix = serverArgs(common.apiServer)
+  const result = kubectl([...prefix, 'get', 'configmap', 'falcone-knative-ownership', '-n', common.statusNamespace, '-o', 'json'], {
+    stage: 'ownership', reason: 'OWNER_MARKER_READ_FAILED', label: 'exclusive owner marker verification', allowFailure: true,
+  })
+  if (result.error) throw new LifecycleError('ownership', 'OWNER_MARKER_READ_FAILED', 'exclusive owner marker verification failed')
+  if (result.status !== 0) {
+    if (/notfound|not found|does not exist/i.test(String(result.stderr ?? ''))) return null
+    throw new CommandError('ownership', 'OWNER_MARKER_READ_FAILED', 'exclusive owner marker verification', result)
+  }
+  const response = jsonFrom(result, 'ownership', 'OWNER_MARKER_READ_FAILED', 'exclusive owner marker verification')
+  return inventoryItems(response).find((item) => item?.kind === 'ConfigMap' && item?.metadata?.name === 'falcone-knative-ownership')
+    ?? (response?.kind === 'ConfigMap' && response?.metadata?.name === 'falcone-knative-ownership' ? response : null)
+}
+
+function markerOwner(marker) {
+  const dataOwner = marker?.data?.owner
+  const labelOwner = marker?.metadata?.labels?.[OWNER_LABEL]
+  return typeof dataOwner === 'string' && dataOwner.length > 0 && dataOwner === labelOwner ? dataOwner : null
+}
+
+function markerRelease(marker) {
+  const dataRelease = marker?.data?.release
+  const labelRelease = marker?.metadata?.labels?.['app.kubernetes.io/instance']
+  return typeof dataRelease === 'string' && dataRelease.length > 0 && dataRelease === labelRelease ? dataRelease : null
+}
+
+function markerIsExclusive(marker) {
+  return marker?.data?.state === 'exclusive'
+    && marker?.metadata?.annotations?.['falcone.io/ownership-state'] === 'exclusive'
+}
+
+function markerMatches(marker, common, owner) {
+  return markerOwner(marker) === owner
+    && markerRelease(marker) === common.release
+    && markerIsExclusive(marker)
+}
+
+function ensureStatusNamespace(common, owner) {
+  const result = kubectl(['get', 'namespace', common.statusNamespace, '-o', 'json'], {
+    stage: 'ownership', reason: 'STATUS_NAMESPACE_READ_FAILED', label: 'status namespace ownership verification', allowFailure: true,
+  })
+  if (result.error) throw new LifecycleError('ownership', 'STATUS_NAMESPACE_READ_FAILED', 'status namespace ownership verification failed')
+  if (result.status === 0) return { created: false }
+  if (!/notfound|not found|does not exist/i.test(String(result.stderr ?? ''))) {
+    throw new CommandError('ownership', 'STATUS_NAMESPACE_READ_FAILED', 'status namespace ownership verification', result)
+  }
+  const namespace = {
+    apiVersion: 'v1', kind: 'Namespace',
+    metadata: {
+      name: common.statusNamespace,
+      labels: { [OWNER_LABEL]: owner, 'app.kubernetes.io/part-of': 'falcone-knative' },
+    },
+  }
+  kubectl(['create', '-f', '-'], {
+    input: JSON.stringify(namespace), stage: 'ownership', reason: 'STATUS_NAMESPACE_CREATE_FAILED', label: 'owned status namespace creation',
+  })
+  return { created: true }
+}
+
+function acquireOwner(common, owner, correlationId, { reuseRequired = false } = {}) {
+  const existing = readOwnerMarker(common)
+  if (existing) {
+    if (!markerMatches(existing, common, owner)) {
+      throw new LifecycleError('ownership', 'EXCLUSIVE_OWNER_MISMATCH', 'existing exclusive owner marker is missing, contradictory, foreign, or does not match the requested release')
+    }
+    return { reused: true }
+  }
+  if (reuseRequired) throw new LifecycleError('ownership', 'EXCLUSIVE_OWNER_MISSING', 'same-owner upgrade requires the existing exclusive owner marker')
+  ensureStatusNamespace(common, owner)
+  const marker = {
+    apiVersion: 'v1', kind: 'ConfigMap',
+    metadata: {
+      name: 'falcone-knative-ownership', namespace: common.statusNamespace,
+      labels: { [OWNER_LABEL]: owner, 'app.kubernetes.io/managed-by': 'falcone-knative', 'app.kubernetes.io/instance': common.release },
+      annotations: { 'falcone.io/ownership-state': 'exclusive', 'falcone.io/acquisition-id': correlationId },
+    },
+    data: { owner, state: 'exclusive', release: common.release },
+  }
+  kubectl(['create', '-f', '-'], { input: JSON.stringify(marker), stage: 'ownership', reason: 'OWNER_ACQUISITION_FAILED', label: 'exclusive owner acquisition' })
+  return { reused: false }
+}
+
+function verifyMutationOwner(common, owner) {
+  const existing = readOwnerMarker(common)
+  if (!existing) {
+    throw new LifecycleError('ownership', 'EXCLUSIVE_OWNER_MISSING', 'matching exclusive owner marker is absent; refusing lifecycle mutation')
+  }
+  if (!markerMatches(existing, common, owner)) {
+    throw new LifecycleError('ownership', 'MUTATION_OWNER_MISMATCH', 'mutating lifecycle command refused a missing, contradictory, foreign, wrong-release, or non-exclusive owner marker')
+  }
+  return existing
+}
+
+function applyFile(file, stage, label) {
+  kubectl(['apply', '-f', file], { stage, reason: `${stage.toUpperCase()}_APPLY_FAILED`, label })
+}
+
+function waitFor(args, stage, reason, label) {
+  kubectl(['wait', '--timeout=5m', ...args], { stage, reason, label })
+}
+
+function smokeImage(bundle = {}) {
+  return bundle.mirror ? `${bundle.mirror}/${SMOKE_MIRROR_REPOSITORY}@${SMOKE_DIGEST}` : SMOKE_SOURCE
+}
+
+function smokeService(namespace, correlationId, bundle = {}) {
+  return {
+    apiVersion: 'serving.knative.dev/v1', kind: 'Service',
+    metadata: {
+      name: `falcone-knative-smoke-${correlationId.slice(0, 8)}`, namespace,
+      labels: { 'falcone.io/lifecycle-smoke': correlationId },
+    },
+    spec: {
+      template: {
+        metadata: { annotations: { 'autoscaling.knative.dev/min-scale': '1' } },
+        spec: {
+          containerConcurrency: 1,
+          timeoutSeconds: 30,
+          containers: [{
+            image: smokeImage(bundle),
+            command: ['sh', '-ec'],
+            args: ["printf 'falcone-knative-smoke-ok\\n' > /www/index.html; exec httpd -f -p 8080 -h /www"],
+            ports: [{ containerPort: 8080 }],
+            volumeMounts: [{ name: 'www', mountPath: '/www' }],
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              capabilities: { drop: ['ALL'] },
+              readOnlyRootFilesystem: true,
+              runAsNonRoot: true,
+              seccompProfile: { type: 'RuntimeDefault' },
+            },
+            resources: { requests: { cpu: '5m', memory: '8Mi' }, limits: { cpu: '50m', memory: '32Mi' } },
+          }],
+          volumes: [{ name: 'www', emptyDir: {} }],
+        },
+      },
+    },
+  }
+}
+
+function runSmoke(namespace, correlationId, apiServer = null, bundle = {}) {
+  const prefix = serverArgs(apiServer)
+  const service = smokeService(namespace, correlationId, bundle)
+  const clientName = `${service.metadata.name}-client`
+  kubectl([...prefix, 'apply', '-f', '-'], { input: JSON.stringify(service), stage: 'smoke', reason: 'SMOKE_CREATE_FAILED', label: 'isolated smoke ksvc create' })
+  let completed = false
+  let clientCreated = false
+  try {
+    kubectl([...prefix, 'wait', '--timeout=5m', '--for=condition=Ready', `ksvc/${service.metadata.name}`, '-n', namespace], {
+      stage: 'smoke', reason: 'SMOKE_READY_FAILED', label: 'isolated smoke ksvc readiness',
+    })
+    const current = kubectlJson([...prefix, 'get', 'ksvc', service.metadata.name, '-n', namespace, '-o', 'json'], {
+      stage: 'smoke', reason: 'SMOKE_DISCOVERY_FAILED', label: 'isolated smoke ksvc discovery',
+    })
+    let host
+    try { host = new URL(current?.status?.url).hostname } catch { throw new LifecycleError('smoke', 'SMOKE_URL_INVALID', 'isolated smoke ksvc has no valid invocation host') }
+    const client = {
+      apiVersion: 'v1', kind: 'Pod',
+      metadata: { name: clientName, namespace, labels: { 'falcone.io/lifecycle-smoke-client': correlationId } },
+      spec: {
+        automountServiceAccountToken: false,
+        restartPolicy: 'Never',
+        containers: [{
+          name: 'client', image: smokeImage(bundle), command: ['sleep', '300'],
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] }, readOnlyRootFilesystem: true, runAsNonRoot: true, seccompProfile: { type: 'RuntimeDefault' } },
+          resources: { requests: { cpu: '5m', memory: '8Mi' }, limits: { cpu: '50m', memory: '32Mi' } },
+        }],
+      },
+    }
+    kubectl([...prefix, 'apply', '-f', '-'], { input: JSON.stringify(client), stage: 'smoke', reason: 'SMOKE_CLIENT_CREATE_FAILED', label: 'isolated cluster-internal smoke client create' })
+    clientCreated = true
+    kubectl([...prefix, 'wait', '--timeout=2m', '--for=condition=Ready', `pod/${clientName}`, '-n', namespace], {
+      stage: 'smoke', reason: 'SMOKE_CLIENT_READY_FAILED', label: 'isolated cluster-internal smoke client readiness',
+    })
+    const invocation = kubectl([...prefix, 'exec', `pod/${clientName}`, '-n', namespace, '--', 'wget', '-qO-', `--header=Host: ${host}`, 'http://kourier-internal.kourier-system.svc.cluster.local'], {
+      stage: 'smoke', reason: 'SMOKE_INVOKE_FAILED', label: 'cluster-internal Kourier smoke invocation', allowFailure: true,
+    })
+    if (invocation.error || invocation.status !== 0) throw new LifecycleError('smoke', 'SMOKE_INVOKE_FAILED', 'isolated smoke ksvc invocation failed')
+    completed = true
+  } finally {
+    if (clientCreated) {
+      const clientCleanup = kubectl([...prefix, 'delete', 'pod', clientName, '-n', namespace, '--wait=true', '--ignore-not-found=true'], {
+        stage: 'smoke', reason: 'SMOKE_CLIENT_DELETE_FAILED', label: 'isolated smoke client cleanup', allowFailure: true,
+      })
+      if (completed && (clientCleanup.error || clientCleanup.status !== 0)) throw new LifecycleError('smoke', 'SMOKE_CLIENT_DELETE_FAILED', 'isolated smoke client cleanup failed')
+    }
+    const cleanup = kubectl([...prefix, 'delete', 'ksvc', service.metadata.name, '-n', namespace, '--wait=true', '--ignore-not-found=true'], {
+      stage: 'smoke', reason: 'SMOKE_DELETE_FAILED', label: 'isolated smoke ksvc delete', allowFailure: !completed,
+    })
+    if (completed && (cleanup.error || cleanup.status !== 0)) throw new LifecycleError('smoke', 'SMOKE_DELETE_FAILED', 'isolated smoke ksvc cleanup failed')
+  }
+}
+
+function runtimeDocument({ mode, owner, state, stage, reason, externalCanary, at = new Date() }) {
+  const observedAt = at.toISOString()
+  const validUntil = new Date(at.getTime() + 4 * 60 * 1000).toISOString()
+  const document = {
+    schemaVersion: 'falcone.knative-runtime/v1',
+    mode,
+    owner,
+    version: BUNDLE_VERSION,
+    compatibility: state === 'ready' ? 'compatible' : 'unverified',
+    readiness: { state, stage, reason, lastTransitionAt: observedAt },
+    observedAt,
+    validUntil,
+  }
+  if (mode === 'external') document.externalCanary = { state: externalCanary ?? 'unreadable' }
+  return document
+}
+
+function projectRuntime({ mode = 'managed', owner, state, stage, reason, externalCanary, apiServer = null }) {
+  const prefix = serverArgs(apiServer)
+  const namespaces = kubectlJson([...prefix, 'get', 'namespaces', '-o', 'json'], {
+    stage: 'projection', reason: 'NAMESPACE_PROJECTION_DISCOVERY_FAILED', label: 'registered namespace discovery',
+  })
+  const matching = (namespaces?.items ?? []).filter((namespace) => {
+    const labels = namespace?.metadata?.labels ?? {}
+    return ['enabled', 'true', 'registered'].includes(String(labels[REGISTRATION_LABEL]).toLowerCase()) && labels[OWNER_LABEL] === owner
+  })
+  const writable = []
+  let refused = 0
+  for (const namespace of matching) {
+    const namespaceName = namespace?.metadata?.name
+    const observedNamespaceVersion = String(namespace?.metadata?.resourceVersion ?? '')
+    const currentNamespace = readProjectionNamespace(prefix, namespaceName)
+    if (!observedNamespaceVersion || !projectionNamespaceMatches(currentNamespace, owner, observedNamespaceVersion)) {
+      refused += 1
+      continue
+    }
+    const existingResult = kubectl([...prefix, 'get', 'configmap', RUNTIME_CONFIGMAP, '-n', namespace.metadata.name, '-o', 'json'], {
+      stage: 'projection', reason: 'RUNTIME_PROJECTION_INSPECTION_FAILED', label: 'existing runtime status ownership inspection', allowFailure: true,
+    })
+    if (existingResult.error) { refused += 1; continue }
+    if (existingResult.status !== 0) {
+      if (/notfound|not found/i.test(String(existingResult.stderr ?? ''))) writable.push({ namespace: currentNamespace, existingResourceVersion: null })
+      else refused += 1
+      continue
+    }
+    const response = jsonFrom(existingResult, 'projection', 'RUNTIME_PROJECTION_INSPECTION_FAILED', 'existing runtime status')
+    const existing = inventoryItems(response).find((item) => item?.kind === 'ConfigMap' && item?.metadata?.name === RUNTIME_CONFIGMAP)
+      ?? (response?.kind === 'ConfigMap' && response?.metadata?.name === RUNTIME_CONFIGMAP ? response : null)
+    if (existing && existing?.metadata?.labels?.[OWNER_LABEL] !== owner) {
+      refused += 1
+      continue
+    }
+    writable.push({ namespace: currentNamespace, existingResourceVersion: String(existing?.metadata?.resourceVersion ?? '') || null })
+  }
+  const document = runtimeDocument({ mode, owner, state, stage, reason, externalCanary })
+  const serialized = JSON.stringify(document)
+  if (Buffer.byteLength(serialized) > MAX_OUTPUT || SECRET_WORDS.test(serialized)) {
+    throw new LifecycleError('projection', 'UNSAFE_RUNTIME_DOCUMENT', 'runtime projection failed bounded secret-safe validation')
+  }
+  let updated = 0
+  for (const entry of writable) {
+    const namespace = entry.namespace
+    const namespaceVersion = String(namespace?.metadata?.resourceVersion ?? '')
+    const currentNamespace = readProjectionNamespace(prefix, namespace.metadata.name)
+    if (!projectionNamespaceMatches(currentNamespace, owner, namespaceVersion)) {
+      refused += 1
+      continue
+    }
+    const configMap = {
+      apiVersion: 'v1', kind: 'ConfigMap',
+      metadata: {
+        name: RUNTIME_CONFIGMAP, namespace: namespace.metadata.name,
+        labels: { [OWNER_LABEL]: owner, 'falcone.io/runtime-schema': 'v1' },
+        annotations: { 'falcone.io/namespace-resource-version': namespaceVersion },
+      },
+      data: { [RUNTIME_DATA_KEY]: serialized },
+    }
+    if (entry.existingResourceVersion) configMap.metadata.resourceVersion = entry.existingResourceVersion
+    const result = kubectl([...prefix, entry.existingResourceVersion ? 'replace' : 'create', '-f', '-'], {
+      input: JSON.stringify(configMap), stage: 'projection', reason: 'RUNTIME_PROJECTION_FAILED', label: 'owner-checked runtime status projection', allowFailure: true,
+    })
+    if (result.error || result.status !== 0) refused += 1
+    else updated += 1
+  }
+  return { namespaces: updated, refused, document }
+}
+
+function readProjectionNamespace(prefix, name) {
+  const response = kubectlJson([...prefix, 'get', 'namespace', safeName(String(name ?? ''), 'projection-namespace', true), '-o', 'json'], {
+    stage: 'projection', reason: 'NAMESPACE_PROJECTION_INSPECTION_FAILED', label: 'registered namespace concurrency inspection',
+  })
+  return inventoryItems(response).find((item) => item?.kind === 'Namespace' && item?.metadata?.name === name)
+    ?? (response?.kind === 'Namespace' && response?.metadata?.name === name ? response : null)
+}
+
+function projectionNamespaceMatches(namespace, owner, resourceVersion) {
+  const labels = namespace?.metadata?.labels ?? {}
+  return namespace?.kind === 'Namespace'
+    && String(namespace?.metadata?.resourceVersion ?? '') === resourceVersion
+    && labels[REGISTRATION_LABEL] === 'enabled'
+    && labels[OWNER_LABEL] === owner
+}
+
+function helmStatusArgs(common, options, state, identity, correlationId) {
+  const version = CLI_VERSION
+  const digest = executableSha256()
+  const args = [
+    'upgrade', '--install', common.release, common.chart,
+    '--namespace', common.statusNamespace, '--create-namespace', '--take-ownership',
+    '--set-string', 'mode=managed',
+    '--set-string', `owner=${safeName(requireOption(options, 'owner'), 'owner')}`,
+    '--set-string', `lifecycle.installStage=${state === 'compatible' ? 'complete' : 'status'}`,
+    '--set', `lifecycle.smokeVerified=${state === 'compatible' ? 'true' : 'false'}`,
+    '--set-string', `status.state=${state}`,
+    '--set-string', `status.namespace=${common.statusNamespace}`,
+    '--set-string', `status.name=${common.statusConfigMap}`,
+    '--set-string', `status.runId=${options['run-id'] ?? correlationId}`,
+    '--set-string', `status.clusterIdentity.apiUrl=${identity.apiUrl}`,
+    '--set-string', `status.clusterIdentity.infrastructureName=${identity.infrastructureName}`,
+    '--set-string', `status.clusterIdentity.infrastructureId=${identity.infrastructureId}`,
+    '--set-string', `status.clusterIdentity.clusterUid=${identity.clusterUid}`,
+    '--set-string', `status.lifecycleExecutable.version=${version}`,
+    '--set-string', `status.lifecycleExecutable.sha256=${digest}`,
+  ]
+  if (options['registry-mirror']) args.push('--set-string', `supplyChain.registry=${options['registry-mirror']}`)
+  if (options.disconnected) args.push('--set', 'supplyChain.disconnected=true')
+  return args
+}
+
+function requireWebhookEndpoints(common) {
+  const endpoints = kubectlJson(['get', 'endpoints', 'webhook', '-n', common.statusNamespace, '-o', 'json'], {
+    stage: 'webhook', reason: 'WEBHOOK_ENDPOINT_FAILED', label: 'webhook endpoint address readiness',
+  })
+  const addresses = (endpoints?.subsets ?? []).flatMap((subset) => subset?.addresses ?? []).filter((address) => address?.ip || address?.hostname)
+  if (addresses.length === 0) throw new LifecycleError('webhook', 'WEBHOOK_ENDPOINTS_EMPTY', 'webhook endpoint has no ready address')
+}
+
+function requireWebhookTls(common) {
+  const secret = kubectlJson(['get', 'secret', 'webhook-certs', '-n', common.statusNamespace, '-o', 'json'], {
+    stage: 'webhook', reason: 'WEBHOOK_TLS_FAILED', label: 'webhook TLS Secret readiness',
+  })
+  if (!secret?.data?.['tls.crt'] || !secret?.data?.['tls.key']) {
+    throw new LifecycleError('webhook', 'WEBHOOK_TLS_EMPTY', 'webhook TLS Secret has empty certificate data')
+  }
+}
+
+function requireAdmissionCaBundles() {
+  for (const [resource, name] of ADMISSION_CONFIGURATIONS) {
+    const configuration = kubectlJson(['get', resource, name, '-o', 'json'], {
+      stage: 'admission', reason: 'ADMISSION_CA_BUNDLE_FAILED', label: `AdmissionRegistration caBundle gate for ${name}`,
+    })
+    const webhooks = Array.isArray(configuration?.webhooks) ? configuration.webhooks : []
+    if (webhooks.length === 0 || webhooks.some((webhook) => !String(webhook?.clientConfig?.caBundle ?? '').trim())) {
+      throw new LifecycleError('admission', 'ADMISSION_CA_BUNDLE_EMPTY', `AdmissionRegistration ${name} has an empty caBundle certificate authority`)
+    }
+  }
+}
+
+function dryRunAdmissionProbe(namespace, bundle) {
+  const probe = {
+    apiVersion: 'serving.knative.dev/v1', kind: 'Service',
+    metadata: { name: 'falcone-knative-admission-probe', namespace, labels: { 'falcone.io/admission-probe': 'true' } },
+    spec: { template: { spec: { containers: [{ image: smokeImage(bundle) }] } } },
+  }
+  kubectl(['create', '--dry-run=server', '-f', '-'], {
+    input: JSON.stringify(probe), stage: 'admission', reason: 'ADMISSION_DRY_RUN_FAILED', label: 'server-side dry-run Knative Service admission probe',
+  })
+}
+
+function stagedInstall(options, correlationId, preflightState, common, { reuseOwner = false } = {}) {
+  const materialized = materializeStageFiles(common.chart, preflightState.owner, preflightState.bundle)
+  const files = materialized.files
+  const identity = clusterIdentity(preflightState.infrastructure)
+  try {
+    acquireOwner(common, preflightState.owner, correlationId, { reuseRequired: reuseOwner })
+
+    applyFile(files.crds, 'crds', 'managed customresourcedefinition CRDs')
+    waitFor(['--for=condition=Established', 'customresourcedefinition/services.serving.knative.dev'], 'crds', 'CRD_ESTABLISHED_FAILED', 'CRD Established gate')
+
+    applyFile(files.foundation, 'foundation', 'namespaces serviceaccounts cluster RBAC configuration Services foundation')
+
+    applyFile(files.webhook, 'webhook', 'Knative webhook backend without AdmissionRegistration')
+    waitFor(['--for=condition=Available', 'deployment/webhook', '-n', common.statusNamespace], 'webhook', 'WEBHOOK_BACKEND_FAILED', 'webhook backend readiness')
+    requireWebhookEndpoints(common)
+    requireWebhookTls(common)
+
+    applyFile(files.admission, 'admission', 'validatingwebhookconfiguration mutatingwebhookconfiguration AdmissionRegistration')
+    requireAdmissionCaBundles()
+    dryRunAdmissionProbe(common.statusNamespace, preflightState.bundle)
+
+    applyFile(files.serving, 'serving', 'remaining Serving controller resources')
+    waitFor(['--for=condition=Available', 'deployment/controller', '-n', common.statusNamespace], 'serving', 'SERVING_CONTROLLER_FAILED', 'Serving controller readiness')
+
+    applyFile(files.kourier, 'kourier', 'Kourier controller and gateway resources')
+    waitFor(['--for=condition=Available', 'deployment/net-kourier-controller', '-n', common.statusNamespace], 'kourier', 'KOURIER_CONTROLLER_FAILED', 'Kourier controller readiness')
+    waitFor(['--for=condition=Available', 'deployment/3scale-kourier-gateway', '-n', 'kourier-system'], 'kourier', 'KOURIER_GATEWAY_FAILED', 'Kourier gateway readiness')
+
+    runSmoke(common.statusNamespace, correlationId, null, preflightState.bundle)
+    helm(helmStatusArgs(common, options, 'compatible', identity, correlationId), {
+      stage: 'ready', reason: 'LIFECYCLE_STATUS_PUBLISH_FAILED', label: 'Helm compatible lifecycle status publication',
+    })
+    const projection = projectRuntime({ owner: preflightState.owner, state: 'ready', stage: 'ready', reason: 'READY' })
+    return { identity, projection }
+  } finally {
+    materialized.cleanup()
+  }
+}
+
+function install(options) {
+  const mode = validateMode(options)
+  if (mode === 'disabled') throw new LifecycleError('arguments', 'INSTALL_MODE_INVALID', 'install accepts managed or external mode; disabled mutates nothing')
+  const common = commonOptions(options)
+  const correlationId = randomUUID()
+  if (mode === 'external') {
+    const state = externalPreflight(options)
+    const projection = projectRuntime({
+      mode: 'external', owner: state.owner, state: 'ready', stage: 'external_validation',
+      reason: 'EXTERNAL_CANARY_VERIFIED', externalCanary: state.canaryState,
+    })
+    return evidence({
+      action: 'install', mode, owner: state.owner, stage: 'external_validation', result: 'compatible', correlationId,
+      state: 'ready', externalCanary: { state: state.canaryState }, projectedNamespaces: projection.namespaces,
+      refusedNamespaces: projection.refused,
+    })
+  }
+  let state
+  try {
+    state = managedPreflight(options, { forInstall: true })
+    const reuseOwner = state.ownership.state !== 'clean'
+    if (reuseOwner) verifyMutationOwner(common, state.owner)
+    const result = stagedInstall(options, correlationId, state, common, { reuseOwner })
+    return evidence({ action: 'install', mode, owner: state.owner, stage: 'ready', result: 'compatible', correlationId,
+      state: 'ready', version: BUNDLE_VERSION, projectedNamespaces: result.projection.namespaces,
+      refusedNamespaces: result.projection.refused,
+      lifecycleExecutable: { name: CLI_NAME, version: CLI_VERSION, sha256: executableSha256() } })
+  } catch (error) {
+    if (state?.owner && !['arguments', 'compatibility', 'authority', 'inventory', 'ownership', 'bundle'].includes(error.stage)) {
+      try { projectRuntime({ owner: state.owner, state: 'unavailable', stage: allowedStage(error.stage), reason: reasonCode(error.reason ?? 'INSTALL_FAILED') }) } catch {}
+    }
+    throw error
+  }
+}
+
+function allowedStage(stage) {
+  return ['configured', 'preflight', 'crds', 'webhook', 'serving', 'kourier', 'smoke', 'ready', 'disabled', 'external_validation', 'unknown'].includes(stage) ? stage : 'unknown'
+}
+
+function reasonCode(value) {
+  const candidate = String(value ?? 'LIFECYCLE_FAILED').toUpperCase().replace(/[^A-Z0-9_]/g, '_').slice(0, 64)
+  return /^[A-Z][A-Z0-9_]{0,63}$/.test(candidate) ? candidate : 'LIFECYCLE_FAILED'
+}
+
+function recoveryRecord(common, owner, recoveryPoint, action) {
+  const inventory = kubectlJson(['get', 'customresourcedefinitions.apiextensions.k8s.io,deployments.apps,configmaps', '-A', '-o', 'json'], {
+    stage: 'recovery', reason: 'RECOVERY_INVENTORY_FAILED', label: 'pre-mutation resource and stored-version inventory',
+  })
+  const items = Array.isArray(inventory?.items) ? inventory.items : []
+  const record = {
+    apiVersion: 'v1', kind: 'ConfigMap',
+    metadata: { name: recoveryPoint, namespace: common.statusNamespace, labels: { [OWNER_LABEL]: owner, 'falcone.io/recovery-action': action } },
+    data: {
+      inventory: JSON.stringify({ schemaVersion: 'falcone.knative-recovery/v1', resourceCount: items.length, action }),
+      storedVersions: JSON.stringify(items.filter((item) => item?.kind === 'CustomResourceDefinition').map((item) => ({ name: item.metadata?.name, versions: item.status?.storedVersions ?? [] }))),
+      imageConfigState: JSON.stringify({ bundle: BUNDLE_VERSION, state: 'recorded-before-mutation' }),
+    },
+  }
+  kubectl(['apply', '-f', '-'], { input: JSON.stringify(record), stage: 'recovery', reason: 'RECOVERY_RECORD_FAILED', label: 'recovery-point backup record' })
+}
+
+function targetCrdVersionMap(chart) {
+  const file = resolve(chart, 'bundle/stages/01-crds.yaml')
+  if (!existsSync(file)) throw new LifecycleError('storage', 'TARGET_CRD_BUNDLE_MISSING', 'target CRD bundle is missing before storage-version validation')
+  const map = new Map()
+  for (const document of readFileSync(file, 'utf8').split(/^---\s*$/m)) {
+    if (!/^kind:\s*CustomResourceDefinition\s*$/m.test(document)) continue
+    const name = document.match(/^metadata:\s*\n(?:^[ \t]+.*\n)*?^[ \t]+name:\s*([^\s#]+)/m)?.[1]
+    if (!name) continue
+    const versions = new Set()
+    let inVersions = false
+    for (const line of document.split('\n')) {
+      if (/^  versions:\s*$/.test(line)) { inVersions = true; continue }
+      if (inVersions && /^  [a-zA-Z]/.test(line) && !/^  -/.test(line)) { inVersions = false; continue }
+      const version = inVersions ? line.match(/^  - name:\s*([^\s#]+)/)?.[1] : null
+      if (version) versions.add(version)
+    }
+    map.set(name, versions)
+  }
+  return map
+}
+
+function assertStoredVersionCompatibility(inventory, chart) {
+  const targets = targetCrdVersionMap(chart)
+  if (targets.size === 0) throw new LifecycleError('storage', 'TARGET_STORAGE_MAP_EMPTY', 'target CRD storage-version map is empty')
+  const incompatible = []
+  for (const crd of inventoryItems(inventory).filter((item) => item?.kind === 'CustomResourceDefinition')) {
+    const name = crd?.metadata?.name
+    const stored = Array.isArray(crd?.status?.storedVersions) ? crd.status.storedVersions : []
+    const supported = targets.get(name)
+    for (const version of stored) if (!supported?.has(version)) incompatible.push(`${name}:${version}`)
+  }
+  if (incompatible.length > 0) {
+    throw new LifecycleError('storage', 'INCOMPATIBLE_STORED_VERSIONS', `stored CRD versions are incompatible with target ${BUNDLE_VERSION}: ${incompatible.join(', ')}`, {
+      incompatibleStoredVersions: incompatible,
+    })
+  }
+  return { checked: true }
+}
+
+function upgrade(options) {
+  const owner = safeName(requireOption(options, 'owner'), 'owner')
+  const from = semver(requireOption(options, 'from-version'), 'from-version')
+  const to = semver(requireOption(options, 'to-version'), 'to-version')
+  const common = commonOptions(options)
+  validateBundleOptions(options)
+  if (from.major === to.major && from.minor === to.minor && to.patch < from.patch) {
+    throw new LifecycleError('upgrade', 'PATCH_DOWNGRADE_REQUIRES_ROLLBACK', `upgrade cannot downgrade from ${from.raw} to ${to.raw}; use compatibility-gated rollback instead`)
+  }
+  if (from.major !== to.major || to.minor < from.minor || to.minor - from.minor > 1) {
+    const sequence = []
+    for (let minor = from.minor + 1; minor <= to.minor; minor += 1) sequence.push(`${from.major}.${minor}.x`)
+    throw new LifecycleError('upgrade', 'ONE_MINOR_SEQUENCE_REQUIRED', `one-minor upgrade policy requires intermediate sequence ${sequence.join(' then ') || 'forward one minor at a time'}`, {
+      requiredIntermediateSequence: sequence,
+    })
+  }
+  if (to.raw !== BUNDLE_VERSION) matrixFailure({ knative: to.raw, kourier: to.raw, kubernetes: 'not-probed', openshift: 'not-probed' })
+  const correlationId = randomUUID()
+  const recoveryPoint = safeName(options['recovery-point'] ?? `falcone-knative-recovery-${correlationId.slice(0, 8)}`, 'recovery-point', true)
+  const state = managedPreflight({ ...options, mode: 'managed', owner, 'reviewed-migration': options['reviewed-migration'] ?? recoveryPoint })
+  assertStoredVersionCompatibility(state.inventory, common.chart)
+  verifyMutationOwner(common, owner)
+  recoveryRecord(common, owner, recoveryPoint, 'upgrade')
+  const result = stagedInstall(options, correlationId, state, common, { reuseOwner: true })
+  return evidence({ action: 'upgrade', owner, stage: 'ready', result: 'compatible', correlationId,
+    fromVersion: from.raw, toVersion: to.raw, recoveryPoint, projectedNamespaces: result.projection.namespaces })
+}
+
+function rollback(options) {
+  const owner = safeName(requireOption(options, 'owner'), 'owner')
+  const to = semver(requireOption(options, 'to-version'), 'to-version')
+  const recoveryPoint = safeName(requireOption(options, 'recovery-point'), 'recovery-point', true)
+  const common = commonOptions(options)
+  if (to.raw !== BUNDLE_VERSION) {
+    throw new LifecycleError('rollback', 'INCOMPATIBLE_STORED_VERSION_MIGRATION', `stored CRD versions are not proven compatible with ${to.raw}; restore from recovery point ${recoveryPoint} or perform forward repair`, {
+      recoveryPoint, requiredAction: 'restore-or-forward-repair', storedVersionCompatibility: 'unverified',
+    })
+  }
+  const state = managedPreflight({ ...options, mode: 'managed', owner, 'reviewed-migration': recoveryPoint })
+  const correlationId = randomUUID()
+  assertStoredVersionCompatibility(state.inventory, common.chart)
+  verifyMutationOwner(common, owner)
+  recoveryRecord(common, owner, recoveryPoint, 'rollback')
+  helm(['rollback', common.release, '0', '--namespace', common.statusNamespace, '--wait', '--timeout', '10m'], {
+    stage: 'rollback', reason: 'ROLLBACK_FAILED', label: 'compatibility-bounded Helm rollback',
+  })
+  const projection = projectRuntime({ owner: state.owner, state: 'ready', stage: 'ready', reason: 'READY' })
+  return evidence({ action: 'rollback', owner, stage: 'ready', result: 'compatible', correlationId, toVersion: to.raw, recoveryPoint, projectedNamespaces: projection.namespaces })
+}
+
+function uninstall(options) {
+  const owner = safeName(requireOption(options, 'owner'), 'owner')
+  const common = commonOptions(options)
+  const correlationId = randomUUID()
+  verifyMutationOwner(common, owner)
+  projectRuntime({ owner, state: 'unavailable', stage: 'configured', reason: 'RUNTIME_UNINSTALLED' })
+  helm(['uninstall', common.release, '--namespace', common.statusNamespace, '--keep-history'], {
+    stage: 'uninstall', reason: 'UNINSTALL_FAILED', label: 'retain-by-default Helm uninstall',
+  })
+  return evidence({ action: 'uninstall', owner, stage: 'uninstall', result: 'retained', correlationId,
+    retained: ['CustomResourceDefinitions (CRDs)', 'tenant Knative Service workloads', 'stored CRD versions'],
+    guidance: 'use a separate purge invocation with reviewed backup evidence and distinct confirmation for destructive removal' })
+}
+
+function purge(options) {
+  const owner = safeName(requireOption(options, 'owner'), 'owner')
+  const common = commonOptions(options)
+  const phrase = `PURGE-${common.release}-${owner}`
+  const impact = ['CustomResourceDefinitions (CRDs)', 'tenant Knative Service workloads', 'stored CRD versions']
+  if (options['confirm-purge'] !== phrase || !options['backup-evidence']) {
+    throw new LifecycleError('purge', 'DESTRUCTIVE_PURGE_CONFIRMATION_REQUIRED', `destructive purge impact includes CRDs and tenant workloads; verify backup evidence and provide a separate distinct confirmation --confirm-purge ${phrase}`, {
+      impact, backup: 'required', confirmation: 'separate-distinct-invocation',
+    })
+  }
+  const backupEvidence = safeId(options['backup-evidence'], 'backup-evidence')
+  verifyMutationOwner(common, owner)
+  verifyBackupEvidence(common, owner, backupEvidence)
+  verifyPurgeIsolation(owner, common.chart)
+  const fence = establishPurgeWriteFence(owner, common.release)
+  let purgeInventory
+  try {
+    purgeInventory = verifyPurgeIsolation(owner, common.chart)
+    for (const entry of purgeInventory.crds) {
+      for (const item of entry.items) {
+        deleteExactObject(entry.resource, item, {
+          stage: 'purge', reason: 'WORKLOAD_PURGE_FAILED', label: `exact re-inventoried ${entry.resource} purge under admission fence`,
+        }, {
+          group: entry.crd.spec.group,
+          version: (entry.crd.spec.versions ?? []).find((version) => version.storage)?.name
+            ?? (entry.crd.spec.versions ?? []).find((version) => version.served)?.name,
+          plural: entry.crd.spec.names.plural,
+        })
+      }
+    }
+    for (const entry of purgeInventory.crds) {
+      kubectl(['delete', 'customresourcedefinitions.apiextensions.k8s.io', entry.crd.metadata.name, '--wait=true', '--cascade=foreground'], {
+        stage: 'purge', reason: 'CRD_PURGE_FAILED', label: `exact re-inventoried CRD purge for ${entry.crd.metadata.name}`,
+      })
+    }
+  } finally {
+    removePurgeWriteFence(fence)
+  }
+  return evidence({ action: 'purge', owner, stage: 'purge', result: 'purged', impact, backup: 'verified', backupEvidence,
+    verifiedCustomResources: purgeInventory.itemCount, confirmation: 'distinct', correlationId: randomUUID() })
+}
+
+function purgeWriteFenceName(owner, release) {
+  const identity = createHash('sha256').update(`${owner}\n${release}`).digest('hex').slice(0, 20)
+  return `falcone-knative-purge-${identity}`
+}
+
+function purgeWriteRules() {
+  return [
+    'autoscaling.internal.knative.dev',
+    'caching.internal.knative.dev',
+    'networking.internal.knative.dev',
+    'serving.knative.dev',
+  ].map((group) => ({
+    apiGroups: [group], apiVersions: ['*'], operations: ['CREATE', 'UPDATE'], resources: ['*'],
+  }))
+}
+
+function establishPurgeWriteFence(owner, release) {
+  const policyName = purgeWriteFenceName(owner, release)
+  const bindingName = `${policyName}-binding`
+  const labels = { 'app.kubernetes.io/part-of': 'falcone-knative', 'falcone.io/purge-fence': policyName }
+  const policy = {
+    apiVersion: 'admissionregistration.k8s.io/v1', kind: 'ValidatingAdmissionPolicy',
+    metadata: { name: policyName, labels },
+    spec: {
+      failurePolicy: 'Fail',
+      matchConstraints: { resourceRules: purgeWriteRules() },
+      validations: [{ expression: 'false', message: 'Falcone managed Knative purge write fence is active' }],
+    },
+  }
+  const binding = {
+    apiVersion: 'admissionregistration.k8s.io/v1', kind: 'ValidatingAdmissionPolicyBinding',
+    metadata: { name: bindingName, labels },
+    spec: {
+      policyName, validationActions: ['Deny'],
+      matchResources: { resourceRules: purgeWriteRules() },
+    },
+  }
+  kubectl(['create', '-f', '-'], {
+    input: JSON.stringify(policy), stage: 'purge', reason: 'PURGE_WRITE_FENCE_FAILED',
+    label: 'create fail-closed Knative purge admission policy',
+  })
+  try {
+    kubectl(['create', '-f', '-'], {
+      input: JSON.stringify(binding), stage: 'purge', reason: 'PURGE_WRITE_FENCE_FAILED',
+      label: 'bind fail-closed Knative purge admission policy',
+    })
+  } catch (error) {
+    kubectl(['delete', 'validatingadmissionpolicy', policyName, '--ignore-not-found=true', '--wait=true'], {
+      stage: 'purge', reason: 'PURGE_WRITE_FENCE_CLEANUP_FAILED', label: 'cleanup partial Knative purge admission policy', allowFailure: true,
+    })
+    throw error
+  }
+  return { policyName, bindingName }
+}
+
+function removePurgeWriteFence({ policyName, bindingName }) {
+  const binding = kubectl(['delete', 'validatingadmissionpolicybinding', bindingName, '--ignore-not-found=true', '--wait=true'], {
+    stage: 'purge', reason: 'PURGE_WRITE_FENCE_CLEANUP_FAILED', label: 'remove exact Knative purge admission binding', allowFailure: true,
+  })
+  const policy = kubectl(['delete', 'validatingadmissionpolicy', policyName, '--ignore-not-found=true', '--wait=true'], {
+    stage: 'purge', reason: 'PURGE_WRITE_FENCE_CLEANUP_FAILED', label: 'remove exact Knative purge admission policy', allowFailure: true,
+  })
+  if (binding.error || binding.status !== 0 || policy.error || policy.status !== 0) {
+    throw new LifecycleError('purge', 'PURGE_WRITE_FENCE_CLEANUP_FAILED', 'failed to remove one or more exact purge admission fence objects')
+  }
+}
+
+function verifyBackupEvidence(common, owner, backupEvidence) {
+  const result = kubectl(['get', 'configmap', backupEvidence, '-n', common.statusNamespace, '-o', 'json'], {
+    stage: 'backup', reason: 'BACKUP_EVIDENCE_READ_FAILED', label: 'reviewed backup evidence verification', allowFailure: true,
+  })
+  if (result.error || result.status !== 0) {
+    throw new LifecycleError('backup', 'BACKUP_EVIDENCE_MISSING', 'reviewed backup evidence is missing or unreadable before lifecycle mutation')
+  }
+  const response = jsonFrom(result, 'backup', 'BACKUP_EVIDENCE_INVALID', 'reviewed backup evidence')
+  const record = inventoryItems(response).find((item) => item?.kind === 'ConfigMap' && item?.metadata?.name === backupEvidence)
+    ?? (response?.kind === 'ConfigMap' && response?.metadata?.name === backupEvidence ? response : null)
+  const labels = record?.metadata?.labels ?? {}
+  if (!record || (labels[OWNER_LABEL] ?? record?.data?.owner) !== owner
+    || labels['falcone.io/backup-verified'] !== 'true' || record?.data?.state !== 'verified'
+    || record?.data?.schemaVersion !== 'falcone.knative-recovery/v1'
+    || !/^sha256:[a-f0-9]{64}$/.test(String(record?.data?.inventoryDigest ?? ''))) {
+    throw new LifecycleError('backup', 'BACKUP_EVIDENCE_MISMATCH', 'backup evidence is missing, unverified, or does not match the exclusive owner')
+  }
+  return record
+}
+
+function verifyPurgeIsolation(owner, chart) {
+  const targetNames = new Set(targetCrdVersionMap(chart).keys())
+  const crdResponse = kubectlJson(['get', 'customresourcedefinitions.apiextensions.k8s.io', '-o', 'json'], {
+    stage: 'purge', reason: 'PURGE_CRD_INVENTORY_FAILED', label: 'managed CRD purge inventory',
+  })
+  const allCrds = inventoryItems(crdResponse).filter((item) => item?.kind === 'CustomResourceDefinition')
+  const unexpectedOwned = allCrds.filter((item) => (
+    item?.metadata?.labels?.[OWNER_LABEL] === owner && !targetNames.has(item?.metadata?.name)
+  ))
+  if (unexpectedOwned.length > 0) {
+    throw new LifecycleError('purge', 'PURGE_NON_BUNDLE_CRD', 'owner-labelled non-bundle CRD exists; refusing a deletion set broader than the pinned bundle inventory')
+  }
+  const crds = allCrds.filter((item) => targetNames.has(item?.metadata?.name))
+  if (crds.length === 0) throw new LifecycleError('purge', 'PURGE_CRD_INVENTORY_EMPTY', 'no owner-matched managed CRDs were found for destructive purge')
+  const verifiedCrds = []
+  let itemCount = 0
+  for (const crd of crds) {
+    const resource = `${crd?.spec?.names?.plural ?? ''}.${crd?.spec?.group ?? ''}`
+    if (!SAFE_KUBE_NAME.test(resource) || crd?.metadata?.labels?.[OWNER_LABEL] !== owner) {
+      throw new LifecycleError('purge', 'PURGE_CRD_OWNER_MISMATCH', 'managed CRD inventory contains an unowned or foreign ownership boundary')
+    }
+    const response = kubectlJson(['get', resource, '-A', '-o', 'json'], {
+      stage: 'purge', reason: 'PURGE_RESOURCE_INVENTORY_FAILED', label: `cluster-wide ${resource} purge inventory`,
+    })
+    const items = inventoryItems(response)
+    for (const item of items) {
+      const itemOwner = item?.metadata?.labels?.[OWNER_LABEL]
+      if (!itemOwner) throw new LifecycleError('purge', 'PURGE_UNOWNED_RESOURCE', `unowned ${resource} exists; refusing CRD cascade before mutation`)
+      if (itemOwner !== owner) throw new LifecycleError('purge', 'PURGE_FOREIGN_RESOURCE', `foreign-owned ${resource} exists; refusing CRD cascade before mutation`)
+    }
+    verifiedCrds.push({ crd, resource, items })
+    itemCount += items.length
+  }
+  return { crds: verifiedCrds, itemCount }
+}
+
+function deleteExactObject(resource, item, options, apiResource = null) {
+  const name = safeName(String(item?.metadata?.name ?? ''), 'resource-name', true)
+  const namespace = item?.metadata?.namespace ? safeName(String(item.metadata.namespace), 'namespace', true) : null
+  const uid = String(item?.metadata?.uid ?? '')
+  const resourceVersion = String(item?.metadata?.resourceVersion ?? '')
+  if (uid && resourceVersion) {
+    const namespacePath = namespace ? `/namespaces/${namespace}` : ''
+    const base = resource === 'customresourcedefinitions.apiextensions.k8s.io'
+      ? '/apis/apiextensions.k8s.io/v1/customresourcedefinitions'
+      : apiResource?.group && apiResource?.version && apiResource?.plural
+        ? `/apis/${apiResource.group}/${apiResource.version}${namespacePath}/${apiResource.plural}`
+        : null
+    if (base) {
+      const path = `${base}/${name}`
+      kubectl(['delete', `--raw=${path}`, '-f', '-'], {
+        ...options,
+        input: JSON.stringify({
+          apiVersion: 'v1', kind: 'DeleteOptions', propagationPolicy: 'Foreground',
+          preconditions: { uid, resourceVersion },
+        }),
+      })
+      return
+    }
+  }
+  const args = ['delete', resource, name]
+  if (namespace) args.push('-n', namespace)
+  args.push('--wait=true', '--cascade=foreground')
+  kubectl(args, options)
+}
+
+function handoff(options) {
+  const owner = safeName(requireOption(options, 'owner'), 'owner')
+  const from = requireOption(options, 'from')
+  const to = requireOption(options, 'to')
+  if (!['falcone', 'operator'].includes(from) || !['falcone', 'operator'].includes(to) || from === to) {
+    throw new LifecycleError('arguments', 'INVALID_HANDOFF', '--from and --to must name different falcone/operator owners')
+  }
+  const common = commonOptions(options)
+  const correlationId = randomUUID()
+  const recoveryPoint = safeName(options['recovery-point'] ?? `falcone-knative-handoff-${correlationId.slice(0, 8)}`, 'recovery-point', true)
+  const backupEvidence = safeId(requireOption(options, 'backup-evidence'), 'backup-evidence')
+  const sourceMarker = verifyHandoffSource(common, owner, from)
+  verifyBackupEvidence(common, owner, backupEvidence)
+  const writers = from === 'falcone' ? verifyHandoffWriterInventory(owner, common.release) : []
+  recoveryRecord(common, owner, recoveryPoint, 'handoff-backup')
+  if (from === 'falcone') quiesceHandoffWriters(owner, common.release, writers)
+  projectRuntime({ owner, state: 'unavailable', stage: 'configured', reason: 'HANDOFF_QUIESCED' })
+  releaseHandoffSource(common, sourceMarker, owner, from, to, backupEvidence)
+  kubectl(['apply', '-f', '-'], {
+    input: JSON.stringify({ apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'falcone-knative-handoff-target', namespace: common.statusNamespace, labels: { 'falcone.io/target-owner': to } }, data: { owner: to, state: 'enabling', previousOwner: owner, backupEvidence } }),
+    stage: 'handoff', reason: 'TARGET_OWNER_ENABLE_FAILED', label: 'enable exactly one target owner',
+  })
+  const target = kubectlJson(['get', 'configmaps', '-n', common.statusNamespace, '-l', `falcone.io/active-owner=${to}`, '-o', 'json'], {
+    stage: 'handoff', reason: 'TARGET_OWNER_NOT_READY', label: 'target owner readiness verification',
+  })
+  const targetItems = Array.isArray(target?.items) ? target.items : []
+  const acquired = targetItems[0]
+  if (targetItems.length !== 1 || acquired?.metadata?.labels?.['falcone.io/active-owner'] !== to
+    || acquired?.metadata?.labels?.[OWNER_LABEL] !== to || acquired?.data?.owner !== to
+    || acquired?.metadata?.annotations?.['falcone.io/ownership-state'] !== 'exclusive'
+    || acquired?.data?.state !== 'exclusive' || acquired?.data?.previousOwner !== owner
+    || acquired?.data?.backupEvidence !== backupEvidence) {
+    throw new LifecycleError('handoff', 'TARGET_OWNER_NOT_READY', `target owner failed after ownership release; installation remains quiesced for restore from recovery point ${recoveryPoint} or forward repair`, {
+      recoveryPoint, quiesced: true, previousOwnerRestarted: false,
+    })
+  }
+  return evidence({ action: 'handoff', owner, stage: 'handoff', result: 'transferred', correlationId, from, to,
+    targetOwner: to, targetState: 'exclusive', backupEvidence, recoveryPoint, quiesced: true })
+}
+
+function verifyHandoffSource(common, owner, from) {
+  if (from === 'falcone') return verifyMutationOwner(common, owner)
+  const response = kubectlJson(['get', 'configmaps', '-n', common.statusNamespace, '-l', 'falcone.io/active-owner=operator', '-o', 'json'], {
+    stage: 'handoff', reason: 'SOURCE_OWNER_NOT_EXCLUSIVE', label: 'active Operator owner marker inventory',
+  })
+  const items = inventoryItems(response)
+  if (items.length !== 1) {
+    throw new LifecycleError('handoff', 'SOURCE_OWNER_AMBIGUOUS', 'Operator-to-Falcone handoff requires exactly one active exclusive Operator marker')
+  }
+  const marker = items[0]
+  if (marker?.metadata?.labels?.['falcone.io/active-owner'] !== 'operator'
+    || marker?.metadata?.labels?.[OWNER_LABEL] !== owner || marker?.data?.owner !== owner
+    || !markerIsExclusive(marker)) {
+    throw new LifecycleError('handoff', 'SOURCE_OWNER_NOT_EXCLUSIVE', 'active Operator marker is foreign, contradictory, or not exclusive')
+  }
+  return marker
+}
+
+function expectedHandoffWriters(release) {
+  return [
+    ['knative-serving', 'webhook'],
+    ['knative-serving', 'activator'],
+    ['knative-serving', 'autoscaler'],
+    ['knative-serving', 'controller'],
+    ['knative-serving', 'net-kourier-controller'],
+    ['kourier-system', '3scale-kourier-gateway'],
+    ['knative-serving', `${release}-status-projector`],
+  ].map(([namespace, name]) => ({ namespace, name }))
+}
+
+function verifyHandoffWriterInventory(owner, release, { quiesced = false } = {}) {
+  const response = kubectlJson(['get', 'deployments.apps', '-A', '-o', 'json'], {
+    stage: 'handoff', reason: 'HANDOFF_WRITER_INVENTORY_FAILED', label: quiesced ? 'post-scale writer inventory' : 'complete writer inventory',
+  })
+  const deployments = inventoryItems(response).filter((item) => item?.kind === 'Deployment')
+  const expectedKeys = new Set(expectedHandoffWriters(release).map((item) => `${item.namespace}/${item.name}`))
+  const unexpectedOwned = deployments.filter((item) => (
+    item?.metadata?.labels?.[OWNER_LABEL] === owner
+    && item?.metadata?.labels?.['app.kubernetes.io/part-of'] === 'falcone-knative'
+    && !expectedKeys.has(`${item?.metadata?.namespace ?? ''}/${item?.metadata?.name ?? ''}`)
+  ))
+  if (unexpectedOwned.length > 0) {
+    throw new LifecycleError('handoff', 'HANDOFF_WRITER_INVENTORY_UNEXPECTED', 'complete writer inventory contains an unexpected owner-labelled deployment')
+  }
+  const verified = []
+  for (const expected of expectedHandoffWriters(release)) {
+    const matches = deployments.filter((item) => item?.metadata?.namespace === expected.namespace && item?.metadata?.name === expected.name)
+    if (matches.length !== 1 || matches[0]?.metadata?.labels?.[OWNER_LABEL] !== owner
+      || matches[0]?.metadata?.labels?.['app.kubernetes.io/part-of'] !== 'falcone-knative') {
+      throw new LifecycleError('handoff', 'HANDOFF_WRITER_OWNER_MISMATCH', 'complete writer inventory is missing or contains a foreign/unlabelled deployment')
+    }
+    if (quiesced) {
+      const deployment = matches[0]
+      const counts = [deployment?.spec?.replicas, deployment?.status?.replicas, deployment?.status?.readyReplicas, deployment?.status?.availableReplicas]
+      if (counts.some((value) => Number(value ?? 0) !== 0)) {
+        throw new LifecycleError('handoff', 'HANDOFF_WRITER_STILL_LIVE', 'a managed writer deployment still reports live replicas after scale-to-zero')
+      }
+    }
+    verified.push(matches[0])
+  }
+  return verified
+}
+
+function quiesceHandoffWriters(owner, release, writers) {
+  for (const [namespace, name] of [
+    ['knative-serving', 'webhook'], ['knative-serving', 'activator'], ['kourier-system', '3scale-kourier-gateway'],
+  ]) {
+    kubectl(['delete', 'horizontalpodautoscaler', name, '-n', namespace, '--wait=true', '--ignore-not-found=true'], {
+      stage: 'handoff', reason: 'HANDOFF_AUTOSCALER_QUIESCE_FAILED', label: `exact autoscaler quiesce for ${namespace}/${name}`,
+    })
+  }
+  for (const deployment of writers) {
+    kubectl(['scale', `deployment/${deployment.metadata.name}`, '-n', deployment.metadata.namespace, '--replicas=0'], {
+      stage: 'handoff', reason: 'HANDOFF_QUIESCE_FAILED', label: `quiesce writer ${deployment.metadata.namespace}/${deployment.metadata.name}`,
+    })
+  }
+  verifyHandoffWriterInventory(owner, release, { quiesced: true })
+  const pods = kubectlJson(['get', 'pods', '-A', '-l', managedSelector(owner), '-o', 'json'], {
+    stage: 'handoff', reason: 'HANDOFF_POD_QUIESCE_FAILED', label: 'post-scale writer pod inventory',
+  })
+  if (inventoryItems(pods).some((item) => item?.kind === 'Pod')) {
+    throw new LifecycleError('handoff', 'HANDOFF_WRITER_PODS_STILL_LIVE', 'managed writer pods remain live after deployment scale-to-zero')
+  }
+}
+
+function releaseHandoffSource(common, marker, owner, from, to, backupEvidence) {
+  const resourceVersion = String(marker?.metadata?.resourceVersion ?? '')
+  const name = safeName(String(marker?.metadata?.name ?? ''), 'source-owner-marker', true)
+  if (!resourceVersion) {
+    throw new LifecycleError('handoff', 'SOURCE_OWNER_FENCE_MISSING', 'source owner marker lacks a resourceVersion concurrency fence')
+  }
+  const patch = [
+    { op: 'test', path: '/metadata/resourceVersion', value: resourceVersion },
+    { op: 'test', path: `/metadata/labels/${OWNER_LABEL.replace('/', '~1')}`, value: owner },
+    { op: 'test', path: '/metadata/annotations/falcone.io~1ownership-state', value: 'exclusive' },
+    { op: 'test', path: '/data/owner', value: owner },
+    { op: 'test', path: '/data/state', value: 'exclusive' },
+    { op: 'replace', path: '/metadata/annotations/falcone.io~1ownership-state', value: 'released' },
+    { op: 'add', path: '/metadata/annotations/falcone.io~1target-owner', value: to },
+    { op: 'replace', path: '/data/state', value: 'released' },
+    { op: 'add', path: '/data/targetOwner', value: to },
+    { op: 'add', path: '/data/backupEvidence', value: backupEvidence },
+  ]
+  if (from === 'falcone') patch.splice(5, 0, { op: 'test', path: '/data/release', value: common.release })
+  kubectl(['patch', `configmap/${name}`, '-n', common.statusNamespace, '--type=json', '-p', JSON.stringify(patch)], {
+    stage: 'handoff', reason: 'OWNER_RELEASE_FAILED', label: 'resourceVersion-fenced source owner release after quiesce',
+  })
+}
+
+function verifyApiServer(value) {
+  let url
+  try { url = new URL(value) } catch { throw new LifecycleError('verified_target', 'INVALID_API_SERVER', '--api-server must be a valid remote HTTPS URL') }
+  const host = url.hostname.toLowerCase()
+  if (url.protocol !== 'https:' || ['localhost', '127.0.0.1', '::1'].includes(host) || host.endsWith('.localhost')) {
+    throw new LifecycleError('verified_target', 'INVALID_API_SERVER', '--api-server must identify a non-local remote HTTPS verified target')
+  }
+  url.pathname = url.pathname.replace(/\/$/, '')
+  return url.toString().replace(/\/$/, '')
+}
+
+function verifiedTarget(options) {
+  const apiServer = verifyApiServer(requireOption(options, 'api-server', 'verified target requires --api-server'))
+  const clusterUid = safeId(requireOption(options, 'cluster-uid', 'verified target requires --cluster-uid'), 'cluster-uid')
+  const infrastructureName = safeName(requireOption(options, 'infrastructure-name', 'verified target requires --infrastructure-name'), 'infrastructure-name')
+  const infrastructureId = safeId(requireOption(options, 'infrastructure-id', 'verified target requires --infrastructure-id'), 'infrastructure-id')
+  const runId = safeId(requireOption(options, 'run-id', 'verified target requires --run-id'), 'run-id')
+  const common = commonOptions(options)
+  const prefix = serverArgs(apiServer)
+  const platform = discoverPlatform(apiServer)
+  checkAuthority(apiServer)
+  const infrastructure = platform.infrastructure
+  const liveApi = String(infrastructure?.status?.apiServerURL ?? '').replace(/\/$/, '')
+  const nameCandidates = new Set([infrastructure?.metadata?.name, infrastructure?.status?.infrastructureName].filter(Boolean).map(String))
+  const idCandidates = new Set([infrastructure?.status?.infrastructureName, infrastructure?.status?.infrastructureId].filter(Boolean).map(String))
+  if ((liveApi && liveApi !== apiServer) || !nameCandidates.has(infrastructureName) || !idCandidates.has(infrastructureId)) {
+    throw new LifecycleError('verified_target', 'INFRASTRUCTURE_IDENTITY_MISMATCH', 'infrastructure name, ID, or API server does not match the live verified target')
+  }
+  const kubeSystem = kubectlJson([...prefix, 'get', 'namespace', 'kube-system', '-o', 'json'], {
+    stage: 'verified_target', reason: 'CLUSTER_IDENTITY_FAILED', label: 'live cluster identity verification',
+  })
+  if (String(kubeSystem?.metadata?.uid ?? '') !== clusterUid) {
+    throw new LifecycleError('verified_target', 'CLUSTER_UID_MISMATCH', '--cluster-uid does not match the live cluster identity for the verified target')
+  }
+  return { apiServer, clusterUid, infrastructureName, infrastructureId, runId, detected: platform.detected, ...common }
+}
+
+function discoverRegisteredOwner(apiServer, statusNamespace) {
+  const prefix = serverArgs(apiServer)
+  const markerResult = kubectl([...prefix, 'get', 'configmap', 'falcone-knative-ownership', '-n', statusNamespace, '-o', 'json'], {
+    stage: 'verified_target', reason: 'OWNER_DISCOVERY_FAILED', label: 'exclusive runtime owner marker discovery', allowFailure: true,
+  })
+  if (!markerResult.error && markerResult.status === 0) {
+    try {
+      const marker = JSON.parse(String(markerResult.stdout ?? ''))
+      const markedOwner = marker?.data?.owner ?? marker?.metadata?.labels?.[OWNER_LABEL]
+      if (typeof markedOwner === 'string') return safeName(markedOwner, 'registered owner')
+    } catch {}
+  }
+  const namespaces = kubectlJson([...prefix, 'get', 'namespaces', '-o', 'json'], {
+    stage: 'verified_target', reason: 'OWNER_DISCOVERY_FAILED', label: 'registered runtime owner discovery',
+  })
+  const counts = new Map()
+  for (const owner of (namespaces?.items ?? []).flatMap((namespace) => {
+    const labels = namespace?.metadata?.labels ?? {}
+    const registered = ['enabled', 'true', 'registered'].includes(String(labels[REGISTRATION_LABEL]).toLowerCase())
+    return registered && typeof labels[OWNER_LABEL] === 'string' ? [labels[OWNER_LABEL]] : []
+  })) counts.set(owner, (counts.get(owner) ?? 0) + 1)
+  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1])
+  if (ranked.length === 0 || (ranked[1] && ranked[0][1] === ranked[1][1])) {
+    throw new LifecycleError('verified_target', 'AMBIGUOUS_RUNTIME_OWNER', 'verified target must expose exactly one registered runtime owner before mutation')
+  }
+  return safeName(ranked[0][0], 'registered owner')
+}
+
+function replacementConflict(options, target) {
+  const privateFlags = ['namespace', 'resource-name', 'tenant-id', 'workspace-id', 'server-id']
+  const present = privateFlags.filter((key) => options[key])
+  if (present.length === 0) return { armed: false }
+  if (present.length !== privateFlags.length) throw new LifecycleError('replacement', 'INCOMPLETE_REPLACEMENT_TARGET', 'replacement fixture requires its complete owner-scoped private target')
+  const namespace = safeName(options.namespace, 'namespace', true)
+  const resourceName = safeName(options['resource-name'], 'resource-name', true)
+  const tenantId = safeId(options['tenant-id'], 'tenant-id')
+  const workspaceId = safeId(options['workspace-id'], 'workspace-id')
+  const serverId = safeId(options['server-id'], 'server-id')
+  const prefix = serverArgs(target.apiServer)
+  const current = kubectlJson([...prefix, 'get', 'services.serving.knative.dev', resourceName, '-n', namespace, '-o', 'json'], {
+    stage: 'replacement', reason: 'REPLACEMENT_SOURCE_MISSING', label: 'owner-scoped replacement source verification',
+  })
+  const labels = current?.metadata?.labels ?? {}
+  if (current?.metadata?.name !== resourceName || current?.metadata?.namespace !== namespace
+    || labels['in-falcone.io/tenant'] !== tenantId || labels['in-falcone.io/workspace'] !== workspaceId
+    || labels['in-falcone.io/mcp-server'] !== serverId) {
+    throw new LifecycleError('replacement', 'REPLACEMENT_OWNER_MISMATCH', 'replacement source ownership does not match the private verified fixture')
+  }
+  const sourceUid = String(current?.metadata?.uid ?? '')
+  const sourceResourceVersion = String(current?.metadata?.resourceVersion ?? '')
+  if (!sourceUid || !sourceResourceVersion) {
+    throw new LifecycleError('replacement', 'REPLACEMENT_PRECONDITION_MISSING', 'replacement source lacks the UID/resourceVersion required for a bounded delete')
+  }
+  const replacement = {
+    apiVersion: 'serving.knative.dev/v1', kind: 'Service',
+    metadata: { name: resourceName, namespace, labels: current.metadata.labels, annotations: current.metadata.annotations ?? {} },
+    spec: current.spec,
+  }
+  const deletion = kubectl([...prefix, 'delete', `--raw=/apis/serving.knative.dev/v1/namespaces/${namespace}/services/${resourceName}`, '-f', '-'], {
+    input: JSON.stringify({
+      apiVersion: 'v1', kind: 'DeleteOptions', propagationPolicy: 'Foreground',
+      preconditions: { uid: sourceUid, resourceVersion: sourceResourceVersion },
+    }),
+    stage: 'replacement', reason: 'REPLACEMENT_PRECONDITION_CONFLICT', label: 'UID/resourceVersion-bounded disposable replacement delete', allowFailure: true,
+  })
+  if (deletion.error || deletion.status !== 0) {
+    throw new LifecycleError('replacement', 'REPLACEMENT_PRECONDITION_CONFLICT', 'replacement aborted because the observed UID/resourceVersion precondition conflicted with the live same-name object')
+  }
+  kubectl([...prefix, 'create', '-f', '-'], {
+    input: JSON.stringify(replacement), stage: 'replacement', reason: 'REPLACEMENT_CREATE_FAILED', label: 'create same-name replacement with a new identity',
+  })
+  return { armed: true }
+}
+
+function acceptance(operation, options) {
+  const target = verifiedTarget(options)
+  const owner = discoverRegisteredOwner(target.apiServer, target.statusNamespace)
+  if (owner === 'operator') {
+    throw new LifecycleError('ownership', 'MUTATION_OWNER_MISMATCH', 'runtime ownership was transferred to the Operator; the previous Falcone lifecycle may not mutate it')
+  }
+  verifyMutationOwner({ ...target, apiServer: target.apiServer }, owner)
+  const prefix = serverArgs(target.apiServer)
+  let stage
+  let state
+  let reason
+  if (operation === 'outage') {
+    kubectl([...prefix, 'scale', 'deployment', '-n', target.statusNamespace, '-l', managedSelector(owner), '--replicas=0'], {
+      stage: 'outage', reason: 'OUTAGE_APPLY_FAILED', label: 'disposable managed runtime outage',
+    })
+    kubectl([...prefix, 'scale', 'deployment/3scale-kourier-gateway', '-n', 'kourier-system', '--replicas=0'], {
+      stage: 'outage', reason: 'OUTAGE_APPLY_FAILED', label: 'disposable Kourier gateway outage',
+    })
+    stage = 'kourier'; state = 'unavailable'; reason = 'ACCEPTANCE_OUTAGE'
+  } else if (operation === 'restart') {
+    kubectl([...prefix, 'rollout', 'restart', `deployment/${target.release}-status-projector`, '-n', target.statusNamespace], {
+      stage: 'restart', reason: 'RESTART_FAILED', label: 'disposable status projector restart',
+    })
+    stage = 'configured'; state = 'unavailable'; reason = 'ACCEPTANCE_RESTART'
+  } else if (operation === 'recover') {
+    kubectl([...prefix, 'scale', 'deployment', '-n', target.statusNamespace, '-l', managedSelector(owner), '--replicas=1'], {
+      stage: 'recover', reason: 'RECOVERY_SCALE_FAILED', label: 'managed runtime recovery',
+    })
+    kubectl([...prefix, 'scale', 'deployment/3scale-kourier-gateway', '-n', 'kourier-system', '--replicas=1'], {
+      stage: 'recover', reason: 'RECOVERY_SCALE_FAILED', label: 'Kourier gateway recovery',
+    })
+    kubectl([...prefix, 'wait', '--timeout=5m', '--for=condition=Available', 'deployment/controller', '-n', target.statusNamespace], {
+      stage: 'recover', reason: 'RECOVERY_READINESS_FAILED', label: 'Serving recovery readiness',
+    })
+    kubectl([...prefix, 'wait', '--timeout=5m', '--for=condition=Available', 'deployment/net-kourier-controller', '-n', target.statusNamespace], {
+      stage: 'recover', reason: 'RECOVERY_READINESS_FAILED', label: 'Kourier controller recovery readiness',
+    })
+    kubectl([...prefix, 'wait', '--timeout=5m', '--for=condition=Available', 'deployment/3scale-kourier-gateway', '-n', 'kourier-system'], {
+      stage: 'recover', reason: 'RECOVERY_READINESS_FAILED', label: 'Kourier recovery readiness',
+    })
+    runSmoke(target.statusNamespace, randomUUID(), target.apiServer)
+    stage = 'ready'; state = 'ready'; reason = 'READY'
+  } else {
+    replacementConflict(options, target)
+    stage = 'configured'; state = 'ready'; reason = 'REPLACEMENT_CONFLICT_ARMED'
+  }
+  const projection = projectRuntime({ owner, state, stage, reason, apiServer: target.apiServer })
+  return evidence({ action: operation, owner, stage, result: operation === 'recover' ? 'ready' : 'completed', correlationId: randomUUID(),
+    state, transition: projection.document.readiness.lastTransitionAt, projectedNamespaces: projection.namespaces,
+    refusedNamespaces: projection.refused,
+    projectionReason: projection.refused > 0 ? 'FOREIGN_OWNER_REFUSED' : 'NONE' })
+}
+
+function dispatch(parsed) {
+  const { command, operation, options } = parsed
+  if (command === 'preflight') return preflight(options)
+  if (command === 'install') return install(options)
+  if (command === 'upgrade') return upgrade(options)
+  if (command === 'rollback') return rollback(options)
+  if (command === 'uninstall') return uninstall(options)
+  if (command === 'purge') return purge(options)
+  if (command === 'handoff') return handoff(options)
+  return acceptance(operation, options)
+}
+
+function errorEvidence(error, parsed) {
+  const lifecycle = error instanceof LifecycleError
+    ? error
+    : new LifecycleError('internal', 'UNEXPECTED_FAILURE', 'unexpected lifecycle failure')
+  const options = parsed?.options ?? {}
+  const owner = options.owner && SAFE_NAME.test(options.owner) ? options.owner : 'unverified'
+  const action = parsed?.operation ?? parsed?.command ?? 'falcone-knative'
+  return evidence({
+    action,
+    mode: options.mode ?? 'managed',
+    owner,
+    stage: lifecycle.stage,
+    result: 'failed',
+    reason: lifecycle.reason,
+    detail: lifecycle.detail,
+    ...lifecycle.extras,
+  })
+}
+
+function main(argv) {
+  let parsed
+  try {
+    parsed = parseArgs(argv)
+    if (parsed.version) {
+      process.stdout.write(`${CLI_NAME} ${CLI_VERSION}\n`)
+      return
+    }
+    if (parsed.help) {
+      process.stdout.write(parsed.help === 'top' ? TOP_HELP : COMMAND_HELP[parsed.help])
+      return
+    }
+    emit(dispatch(parsed))
+  } catch (error) {
+    emit(errorEvidence(error, parsed), process.stderr)
+    process.exitCode = 1
+  }
+}
+
+module.exports = {
+  CLI_VERSION,
+  main,
+  parseArgs,
+  runtimeDocument,
+  supportedMatrix,
+}
+
+main(process.argv.slice(2))

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "falcone.license-inventory/v1",
+  "bundleVersion": "1.22.1",
+  "components": [
+    {
+      "name": "knative-serving",
+      "version": "1.22.1",
+      "revision": "3bd82a6177c278b1192abee1b3ca39daf25c3f35",
+      "license": "Apache-2.0",
+      "licenseFile": "provenance/licenses/knative-serving-LICENSE",
+      "licenseSha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "net-kourier",
+      "version": "1.22.1",
+      "revision": "0f143a69791e6f3c0fdd14ea16933cc1a3fd6f10",
+      "license": "Apache-2.0",
+      "licenseFile": "provenance/licenses/net-kourier-LICENSE",
+      "licenseSha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "envoy",
+      "version": "1.37",
+      "license": "Apache-2.0",
+      "evidence": "https://github.com/envoyproxy/envoy/blob/v1.37.0/LICENSE"
+    },
+    {
+      "name": "curl",
+      "version": "8.15.0",
+      "license": "curl",
+      "evidence": "https://github.com/curl/curl/blob/curl-8_15_0/COPYING"
+    },
+    {
+      "name": "busybox",
+      "version": "1.37.0",
+      "license": "GPL-2.0-only",
+      "evidence": "https://git.busybox.net/busybox/tree/LICENSE?h=1_37_0"
+    }
+  ]
+}
+

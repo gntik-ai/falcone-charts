@@ -1,0 +1,89 @@
+{
+  "schemaVersion": "falcone.image-lock/v1",
+  "bundleVersion": "1.22.1",
+  "digestAlgorithm": "sha256",
+  "rewrite": {
+    "strategy": "strip-source-registry-and-prepend-configured-prefix",
+    "digestPreserved": true,
+    "tagsAllowed": false
+  },
+  "images": [
+    {
+      "name": "serving-queue",
+      "source": "gcr.io/knative-releases/knative.dev/serving/cmd/queue@sha256:b1af8bda6c1d32b1cf5fbf8f1f6068c5007a5cebf091039fdea83b88b1fd87f4",
+      "repository": "gcr.io/knative-releases/knative.dev/serving/cmd/queue",
+      "mirrorRepository": "knative.dev/serving/cmd/queue",
+      "digest": "sha256:b1af8bda6c1d32b1cf5fbf8f1f6068c5007a5cebf091039fdea83b88b1fd87f4",
+      "locations": ["bundle/stages/02-foundation.yaml:Image/queue-proxy", "bundle/stages/02-foundation.yaml:ConfigMap/config-deployment"]
+    },
+    {
+      "name": "serving-activator",
+      "source": "gcr.io/knative-releases/knative.dev/serving/cmd/activator@sha256:5deaef961fef8d1417f6d4a4dfae2fc338f2d30d72c4ad58c3ab392b2c04705b",
+      "repository": "gcr.io/knative-releases/knative.dev/serving/cmd/activator",
+      "mirrorRepository": "knative.dev/serving/cmd/activator",
+      "digest": "sha256:5deaef961fef8d1417f6d4a4dfae2fc338f2d30d72c4ad58c3ab392b2c04705b",
+      "locations": ["bundle/stages/05-serving-controllers.yaml:Deployment/activator"]
+    },
+    {
+      "name": "serving-autoscaler",
+      "source": "gcr.io/knative-releases/knative.dev/serving/cmd/autoscaler@sha256:5bae38655d87df86b041083fbe51791816473245f752432ba9b85a7b12f73cd5",
+      "repository": "gcr.io/knative-releases/knative.dev/serving/cmd/autoscaler",
+      "mirrorRepository": "knative.dev/serving/cmd/autoscaler",
+      "digest": "sha256:5bae38655d87df86b041083fbe51791816473245f752432ba9b85a7b12f73cd5",
+      "locations": ["bundle/stages/05-serving-controllers.yaml:Deployment/autoscaler"]
+    },
+    {
+      "name": "serving-controller",
+      "source": "gcr.io/knative-releases/knative.dev/serving/cmd/controller@sha256:94329d85200c2fc31ed1166a26568ca1357376c149c147e71f400cf28be3c816",
+      "repository": "gcr.io/knative-releases/knative.dev/serving/cmd/controller",
+      "mirrorRepository": "knative.dev/serving/cmd/controller",
+      "digest": "sha256:94329d85200c2fc31ed1166a26568ca1357376c149c147e71f400cf28be3c816",
+      "locations": ["bundle/stages/05-serving-controllers.yaml:Deployment/controller"]
+    },
+    {
+      "name": "serving-webhook",
+      "source": "gcr.io/knative-releases/knative.dev/serving/cmd/webhook@sha256:8470456be214e93a84e3c7b79a632aa9978bd8ecda553feaa47878a2c24ab84d",
+      "repository": "gcr.io/knative-releases/knative.dev/serving/cmd/webhook",
+      "mirrorRepository": "knative.dev/serving/cmd/webhook",
+      "digest": "sha256:8470456be214e93a84e3c7b79a632aa9978bd8ecda553feaa47878a2c24ab84d",
+      "locations": ["bundle/stages/03-webhook-backend.yaml:Deployment/webhook"]
+    },
+    {
+      "name": "net-kourier-controller",
+      "source": "gcr.io/knative-releases/knative.dev/net-kourier/cmd/kourier@sha256:01abd2070ccf8680885c47990e42c05c09e30bc8595d9246f4dcd37f2220a2a2",
+      "repository": "gcr.io/knative-releases/knative.dev/net-kourier/cmd/kourier",
+      "mirrorRepository": "knative.dev/net-kourier/cmd/kourier",
+      "digest": "sha256:01abd2070ccf8680885c47990e42c05c09e30bc8595d9246f4dcd37f2220a2a2",
+      "locations": ["bundle/stages/06-kourier.yaml:Deployment/net-kourier-controller"]
+    },
+    {
+      "name": "envoy-gateway",
+      "source": "docker.io/envoyproxy/envoy@sha256:1c2b79776c6e3b38e8b0113b825e6a599f9bfc08d680c199d80bf8964856c529",
+      "upstreamMutableReference": "docker.io/envoyproxy/envoy:v1.37-latest",
+      "resolvedAt": "2026-08-07T00:00:00Z",
+      "repository": "docker.io/envoyproxy/envoy",
+      "mirrorRepository": "envoyproxy/envoy",
+      "digest": "sha256:1c2b79776c6e3b38e8b0113b825e6a599f9bfc08d680c199d80bf8964856c529",
+      "locations": ["bundle/stages/06-kourier.yaml:Deployment/3scale-kourier-gateway"]
+    },
+    {
+      "name": "status-projector",
+      "source": "docker.io/curlimages/curl@sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922",
+      "resolvedTag": "8.15.0",
+      "repository": "docker.io/curlimages/curl",
+      "mirrorRepository": "curlimages/curl",
+      "digest": "sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922",
+      "locations": ["templates/32-projector-deployment.yaml:Deployment/projector"]
+    },
+    {
+      "name": "status-projector-metrics",
+      "source": "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0",
+      "resolvedTag": "1.37.0",
+      "repository": "docker.io/library/busybox",
+      "mirrorRepository": "library/busybox",
+      "digest": "sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0",
+      "locations": ["templates/32-projector-deployment.yaml:Deployment/metrics"]
+    }
+  ]
+}
+

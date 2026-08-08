@@ -1,0 +1,356 @@
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: activator
+  namespace: knative-serving
+  labels:
+    app.kubernetes.io/component: activator
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: serving-controllers
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+spec:
+  minReplicas: 1
+  maxReplicas: 20
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: activator
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 100
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: activator-pdb
+  namespace: knative-serving
+  labels:
+    app.kubernetes.io/component: activator
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: serving-controllers
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+spec:
+  minAvailable: 80%
+  selector:
+    matchLabels:
+      app: activator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: activator
+  namespace: knative-serving
+  labels:
+    app.kubernetes.io/component: activator
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: serving-controllers
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+spec:
+  selector:
+    matchLabels:
+      app: activator
+      role: activator
+  template:
+    metadata:
+      labels:
+        app: activator
+        role: activator
+        app.kubernetes.io/component: activator
+        app.kubernetes.io/name: knative-serving
+        app.kubernetes.io/version: 1.22.1
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: activator
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+      serviceAccountName: activator
+      containers:
+      - name: activator
+        image: gcr.io/knative-releases/knative.dev/serving/cmd/activator@sha256:5deaef961fef8d1417f6d4a4dfae2fc338f2d30d72c4ad58c3ab392b2c04705b
+        resources:
+          requests:
+            cpu: 300m
+            memory: 60Mi
+          limits:
+            cpu: 1000m
+            memory: 600Mi
+        env:
+        - name: GOGC
+          value: '500'
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: SYSTEM_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CONFIG_LOGGING_NAME
+          value: config-logging
+        - name: CONFIG_OBSERVABILITY_NAME
+          value: config-observability
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - name: metrics
+          containerPort: 9090
+        - name: profiling
+          containerPort: 8008
+        - name: http1
+          containerPort: 8012
+        - name: h2c
+          containerPort: 8013
+        readinessProbe:
+          httpGet:
+            port: 8012
+          periodSeconds: 5
+          failureThreshold: 5
+        livenessProbe:
+          httpGet:
+            port: 8012
+          periodSeconds: 10
+          failureThreshold: 12
+          initialDelaySeconds: 15
+      terminationGracePeriodSeconds: 600
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autoscaler
+  namespace: knative-serving
+  labels:
+    app.kubernetes.io/component: autoscaler
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: serving-controllers
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: autoscaler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: autoscaler
+        app.kubernetes.io/component: autoscaler
+        app.kubernetes.io/name: knative-serving
+        app.kubernetes.io/version: 1.22.1
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: autoscaler
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+      serviceAccountName: controller
+      containers:
+      - name: autoscaler
+        image: gcr.io/knative-releases/knative.dev/serving/cmd/autoscaler@sha256:5bae38655d87df86b041083fbe51791816473245f752432ba9b85a7b12f73cd5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 1000m
+            memory: 1000Mi
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: SYSTEM_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CONFIG_LOGGING_NAME
+          value: config-logging
+        - name: CONFIG_OBSERVABILITY_NAME
+          value: config-observability
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - name: metrics
+          containerPort: 9090
+        - name: profiling
+          containerPort: 8008
+        - name: websocket
+          containerPort: 8080
+        readinessProbe:
+          httpGet:
+            port: 8080
+        livenessProbe:
+          httpGet:
+            port: 8080
+          failureThreshold: 6
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller
+  namespace: knative-serving
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/version: 1.22.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: falcone-knative
+    falcone.io/knative-bundle-version: 1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+    falcone.io/install-stage: serving-controllers
+  annotations:
+    falcone.io/upstream-release: knative-v1.22.1
+    falcone.io/knative-owner: __FALCONE_OWNER__
+spec:
+  selector:
+    matchLabels:
+      app: controller
+  template:
+    metadata:
+      labels:
+        app: controller
+        app.kubernetes.io/component: controller
+        app.kubernetes.io/name: knative-serving
+        app.kubernetes.io/version: 1.22.1
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: controller
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+      serviceAccountName: controller
+      containers:
+      - name: controller
+        image: gcr.io/knative-releases/knative.dev/serving/cmd/controller@sha256:94329d85200c2fc31ed1166a26568ca1357376c149c147e71f400cf28be3c816
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 1000m
+            memory: 1000Mi
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: SYSTEM_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CONFIG_LOGGING_NAME
+          value: config-logging
+        - name: CONFIG_OBSERVABILITY_NAME
+          value: config-observability
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: probes
+            scheme: HTTP
+          periodSeconds: 5
+          failureThreshold: 6
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: probes
+            scheme: HTTP
+          periodSeconds: 5
+          failureThreshold: 3
+        ports:
+        - name: metrics
+          containerPort: 9090
+        - name: profiling
+          containerPort: 8008
+        - name: probes
+          containerPort: 8080
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault

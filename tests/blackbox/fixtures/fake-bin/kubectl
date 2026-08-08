@@ -1,0 +1,837 @@
+#!/usr/bin/env node
+import { appendFileSync, readFileSync } from 'node:fs'
+
+const args = process.argv.slice(2)
+const scenario = process.env.FALCONE_BBX_SCENARIO ?? 'clean-supported'
+const owner = process.env.FALCONE_BBX_OWNER ?? 'bbx-owner'
+let stdin = ''
+try { stdin = readFileSync(0, 'utf8') } catch {}
+let submitted = stdin
+const fileIndex = args.indexOf('-f')
+if (!submitted && fileIndex >= 0 && args[fileIndex + 1] && args[fileIndex + 1] !== '-') {
+  try { submitted = readFileSync(args[fileIndex + 1], 'utf8') } catch {}
+}
+// A real kubectl consumes -f files. Recording that public mutation input lets the suite assert what
+// the CLI actually submitted, rather than merely trusting an opaque repository path.
+const record = {
+  args,
+  stdin: stdin.slice(0, 1024 * 1024),
+  fileInput: submitted === stdin ? '' : submitted.slice(0, 1024 * 1024),
+}
+if (process.env.FALCONE_BBX_KUBECTL_LOG) {
+  appendFileSync(process.env.FALCONE_BBX_KUBECTL_LOG, `${JSON.stringify(record)}\n`)
+}
+
+const knownVerbs = new Set([
+  'annotate', 'api-resources', 'apply', 'auth', 'create', 'delete', 'describe', 'edit', 'exec',
+  'get', 'label', 'logs', 'patch', 'replace', 'rollout', 'scale', 'set', 'taint', 'version', 'wait',
+])
+const verbIndex = args.findIndex((arg) => knownVerbs.has(arg))
+const verb = verbIndex >= 0 ? args[verbIndex] : args[0]
+const tail = verbIndex >= 0 ? args.slice(verbIndex + 1) : args.slice(1)
+const mutationVerbs = new Set(['annotate', 'apply', 'create', 'delete', 'edit', 'label', 'patch', 'replace', 'rollout', 'scale', 'set', 'taint'])
+
+function output(value) {
+  if (typeof value === 'string') process.stdout.write(value)
+  else process.stdout.write(`${JSON.stringify(value)}\n`)
+}
+
+function fail(message, code = 1) {
+  process.stderr.write(`${message}\n`)
+  process.exit(code)
+}
+
+function object(kind, name, extra = {}) {
+  return { apiVersion: 'v1', kind, metadata: { name, ...extra.metadata }, ...extra, metadata: { name, ...(extra.metadata ?? {}) } }
+}
+
+function ownershipMarker(markerOwner = owner, state = 'exclusive', version = '1.22.1') {
+  return object('ConfigMap', 'falcone-knative-ownership', {
+    metadata: {
+      namespace: 'knative-serving',
+      uid: '00000000-0000-4000-8000-000000000108',
+      resourceVersion: '108',
+      labels: { 'falcone.io/knative-owner': markerOwner, 'app.kubernetes.io/instance': 'falcone-knative' },
+      annotations: { 'falcone.io/ownership-state': state },
+    },
+    data: { owner: markerOwner, release: 'falcone-knative', state, version },
+  })
+}
+
+function ownershipMarkerVariant(variant) {
+  const marker = ownershipMarker()
+  if (variant === 'owner-mismatch') marker.data.owner = 'foreign-owner'
+  if (variant === 'owner-label-missing') delete marker.metadata.labels['falcone.io/knative-owner']
+  if (variant === 'release-missing') delete marker.data.release
+  if (variant === 'release-mismatch') marker.data.release = 'foreign-release'
+  if (variant === 'release-label-missing') delete marker.metadata.labels['app.kubernetes.io/instance']
+  if (variant === 'state-mismatch') marker.data.state = 'released'
+  if (variant === 'state-data-missing') delete marker.data.state
+  if (variant === 'state-annotation-missing') delete marker.metadata.annotations['falcone.io/ownership-state']
+  return marker
+}
+
+function backupRecord(name = 'bbx-backup-8', action = 'purge-backup', recordOwner = owner) {
+  return object('ConfigMap', name, {
+    metadata: {
+      namespace: 'knative-serving',
+      labels: {
+        'falcone.io/knative-owner': recordOwner,
+        'falcone.io/recovery-action': action,
+        'falcone.io/backup-verified': 'true',
+      },
+    },
+    data: {
+      schemaVersion: 'falcone.knative-recovery/v1',
+      owner: recordOwner,
+      state: 'verified',
+      inventoryDigest: 'sha256:0000000000000000000000000000000000000000000000000000000000000008',
+    },
+  })
+}
+
+function managedCrd(storedVersions = ['v1']) {
+  return {
+    apiVersion: 'apiextensions.k8s.io/v1',
+    kind: 'CustomResourceDefinition',
+    metadata: {
+      name: 'services.serving.knative.dev',
+      labels: { 'falcone.io/knative-owner': owner },
+      annotations: { 'falcone.io/knative-owner': owner, 'falcone.io/ownership-state': 'exclusive' },
+    },
+    spec: { group: 'serving.knative.dev', names: { plural: 'services' }, versions: [{ name: 'v1', served: true, storage: true }] },
+    status: { storedVersions },
+  }
+}
+
+function runtimePlaceholder(runtimeOwner = owner) {
+  const labels = runtimeOwner ? { 'falcone.io/knative-owner': runtimeOwner, 'falcone.io/runtime-schema': 'v1' } : {}
+  const document = {
+    schemaVersion: 'falcone.knative-runtime/v1',
+    mode: 'managed',
+    owner: runtimeOwner || undefined,
+    compatibility: 'unverified',
+    readiness: {
+      state: 'unavailable', stage: 'configured', reason: 'AWAITING_INITIAL_PROJECTION',
+      lastTransitionAt: '1970-01-01T00:00:00Z',
+    },
+    observedAt: '1970-01-01T00:00:00Z',
+    validUntil: '1970-01-01T00:00:00Z',
+  }
+  return object('ConfigMap', 'falcone-knative-runtime', {
+    metadata: { namespace: 'falcone-bbx', resourceVersion: '89', labels },
+    data: { 'status.json': JSON.stringify(document) },
+  })
+}
+
+function operatorOwnershipMarker(markerOwner = 'operator', name = 'operator-knative-ownership') {
+  return object('ConfigMap', name, {
+    metadata: {
+      namespace: 'knative-serving',
+      uid: '00000000-0000-4000-8000-000000000208',
+      resourceVersion: '208',
+      labels: { 'falcone.io/active-owner': 'operator', 'falcone.io/knative-owner': markerOwner },
+      annotations: { 'falcone.io/ownership-state': 'exclusive' },
+    },
+    data: { owner: markerOwner, state: 'exclusive', backupEvidence: 'bbx-operator-backup' },
+  })
+}
+
+function falconeTargetOwnershipMarker() {
+  return object('ConfigMap', 'falcone-knative-ownership', {
+    metadata: {
+      namespace: 'knative-serving',
+      uid: '00000000-0000-4000-8000-000000000308',
+      resourceVersion: '308',
+      labels: { 'falcone.io/active-owner': 'falcone', 'falcone.io/knative-owner': 'falcone', 'app.kubernetes.io/instance': 'falcone-knative' },
+      annotations: { 'falcone.io/ownership-state': 'exclusive' },
+    },
+    data: {
+      owner: 'falcone', release: 'falcone-knative', state: 'exclusive', version: '1.22.1',
+      previousOwner: 'operator', backupEvidence: 'bbx-operator-backup',
+    },
+  })
+}
+
+function inventoryCollisionFor(activeScenario) {
+  const collisions = {
+    'inventory-foreign-config-network': {
+      apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'config-network', namespace: 'knative-serving', labels: { 'falcone.io/knative-owner': 'foreign-owner' } },
+    },
+    'inventory-unowned-webhook-certs': {
+      apiVersion: 'v1', kind: 'Secret', metadata: { name: 'webhook-certs', namespace: 'knative-serving' }, type: 'kubernetes.io/tls',
+    },
+    'inventory-foreign-controller-serviceaccount': {
+      apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: 'controller', namespace: 'knative-serving', labels: { 'falcone.io/knative-owner': 'foreign-owner' } },
+    },
+    'inventory-unowned-activator-role': {
+      apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'Role', metadata: { name: 'knative-serving-activator', namespace: 'knative-serving' }, rules: [],
+    },
+    'inventory-foreign-activator-rolebinding': {
+      apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'RoleBinding', metadata: { name: 'knative-serving-activator', namespace: 'knative-serving', labels: { 'falcone.io/knative-owner': 'foreign-owner' } }, subjects: [],
+    },
+    'inventory-unowned-webhook-hpa': {
+      apiVersion: 'autoscaling/v2', kind: 'HorizontalPodAutoscaler', metadata: { name: 'webhook', namespace: 'knative-serving' },
+    },
+    'inventory-foreign-webhook-pdb': {
+      apiVersion: 'policy/v1', kind: 'PodDisruptionBudget', metadata: { name: 'webhook-pdb', namespace: 'knative-serving', labels: { 'falcone.io/knative-owner': 'foreign-owner' } },
+    },
+    'inventory-unowned-routing-certificate': {
+      apiVersion: 'networking.internal.knative.dev/v1alpha1', kind: 'Certificate', metadata: { name: 'routing-serving-certs', namespace: 'knative-serving' },
+    },
+  }
+  return collisions[activeScenario]
+}
+
+function targetCanReturnCollision(target, collision) {
+  const kindPatterns = {
+    ConfigMap: /(?:^|[,\s])(?:configmaps?|cm)(?:[.,\s]|$)/i,
+    Secret: /(?:^|[,\s])secrets?(?:[.,\s]|$)/i,
+    ServiceAccount: /(?:^|[,\s])serviceaccounts?(?:[.,\s]|$)/i,
+    Role: /(?:^|[,\s])roles?(?:\.rbac\.authorization\.k8s\.io)?(?:[,\s]|$)/i,
+    RoleBinding: /(?:^|[,\s])rolebindings?(?:\.rbac\.authorization\.k8s\.io)?(?:[,\s]|$)/i,
+    HorizontalPodAutoscaler: /(?:^|[,\s])(?:horizontalpodautoscalers?|hpa)(?:[.,\s]|$)/i,
+    PodDisruptionBudget: /(?:^|[,\s])(?:poddisruptionbudgets?|pdb)(?:[.,\s]|$)/i,
+    Certificate: /(?:^|[,\s])certificates?(?:\.networking\.internal\.knative\.dev)?(?:[,\s]|$)/i,
+  }
+  return kindPatterns[collision?.kind]?.test(target) ?? false
+}
+
+const bundleCrdNames = [
+  'certificates.networking.internal.knative.dev',
+  'configurations.serving.knative.dev',
+  'clusterdomainclaims.networking.internal.knative.dev',
+  'domainmappings.serving.knative.dev',
+  'ingresses.networking.internal.knative.dev',
+  'metrics.autoscaling.internal.knative.dev',
+  'podautoscalers.autoscaling.internal.knative.dev',
+  'revisions.serving.knative.dev',
+  'routes.serving.knative.dev',
+  'serverlessservices.networking.internal.knative.dev',
+  'services.serving.knative.dev',
+  'images.caching.internal.knative.dev',
+]
+
+function bundleCrds() {
+  return bundleCrdNames.map((name, index) => ({
+    apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition',
+    metadata: {
+      name,
+      uid: `00000000-0000-4000-8000-${String(400 + index).padStart(12, '0')}`,
+      resourceVersion: String(400 + index),
+      labels: { 'falcone.io/knative-owner': owner },
+      annotations: { 'falcone.io/knative-owner': owner, 'falcone.io/ownership-state': 'exclusive' },
+    },
+    spec: {
+      group: name.slice(name.indexOf('.') + 1),
+      names: { plural: name.slice(0, name.indexOf('.')) },
+      versions: [{ name: 'v1', served: true, storage: true }],
+    },
+    status: { storedVersions: ['v1'] },
+  }))
+}
+
+function ownedPurgeService() {
+  return {
+    apiVersion: 'serving.knative.dev/v1', kind: 'Service',
+    metadata: {
+      name: 'owned-service', namespace: 'falcone-app-a',
+      uid: '00000000-0000-4000-8000-000000000069', resourceVersion: '169',
+      labels: { 'falcone.io/knative-owner': owner },
+    },
+  }
+}
+
+function writerDeployment(name, namespace, { includeOwner = true, replicas = 1 } = {}) {
+  const labels = { 'app.kubernetes.io/part-of': 'falcone-knative' }
+  if (includeOwner) labels['falcone.io/knative-owner'] = owner
+  return {
+    apiVersion: 'apps/v1', kind: 'Deployment',
+    metadata: { name, namespace, labels },
+    spec: { replicas },
+    status: { replicas, readyReplicas: replicas, availableReplicas: replicas },
+  }
+}
+
+function handoffWriters(activeScenario) {
+  const quiesced = previousKubectlCalls().some((call) => (call.args ?? []).includes('scale'))
+  const replicas = quiesced && activeScenario !== 'handoff-writer-live-replica' ? 0 : 1
+  const writers = [
+    writerDeployment('webhook', 'knative-serving', { replicas }),
+    writerDeployment('activator', 'knative-serving', { replicas }),
+    writerDeployment('autoscaler', 'knative-serving', { replicas }),
+    writerDeployment('controller', 'knative-serving', { replicas }),
+    writerDeployment('net-kourier-controller', 'knative-serving', { replicas }),
+    writerDeployment('3scale-kourier-gateway', 'kourier-system', { replicas }),
+    writerDeployment('falcone-knative-status-projector', 'knative-serving', { replicas }),
+  ]
+  if (activeScenario === 'handoff-writer-missing-label') {
+    writers[3] = writerDeployment('controller', 'knative-serving', { includeOwner: false, replicas })
+  }
+  return writers
+}
+
+function replacementService(uid = '00000000-0000-4000-8000-000000000068', resourceVersion = '101') {
+  return {
+    apiVersion: 'serving.knative.dev/v1', kind: 'Service',
+    metadata: {
+      name: 'bbx-service', namespace: 'bbx-replacement', uid, resourceVersion,
+      labels: {
+        'falcone.io/knative-owner': owner,
+        'falcone.io/tenant-id': 'tenant-a', 'falcone.io/workspace-id': 'workspace-a', 'falcone.io/server-id': 'server-a',
+        'falcone.io/tenant': 'tenant-a', 'falcone.io/workspace': 'workspace-a', 'falcone.io/server': 'server-a',
+        'in-falcone.io/tenant-id': 'tenant-a', 'in-falcone.io/workspace-id': 'workspace-a', 'in-falcone.io/server-id': 'server-a',
+        'in-falcone.io/tenant': 'tenant-a', 'in-falcone.io/workspace': 'workspace-a', 'in-falcone.io/server': 'server-a',
+        'in-falcone.io/mcp-server': 'server-a',
+      },
+      annotations: {
+        'falcone.io/knative-owner': owner,
+        'falcone.io/tenant-id': 'tenant-a', 'falcone.io/workspace-id': 'workspace-a', 'falcone.io/server-id': 'server-a',
+        'in-falcone.io/tenant-id': 'tenant-a', 'in-falcone.io/workspace-id': 'workspace-a', 'in-falcone.io/server-id': 'server-a',
+      },
+    },
+    spec: { template: { spec: { containers: [{ image: 'registry.example.test/bbx@sha256:000000000000000000000000000000000000000000000000000000000068' }] } } },
+    status: { conditions: [{ type: 'Ready', status: 'True' }] },
+  }
+}
+
+const installedOwnerScenarios = new Set([
+  'installed-managed',
+  'handoff-target-fail',
+  'acceptance-outage',
+  'acceptance-restart',
+  'acceptance-recover',
+  'acceptance-replacement-conflict',
+  'rollback-supported-stored-incompatible',
+  'upgrade-patch-downgrade',
+  'replacement-conflict-same-name-swap',
+])
+
+function previousKubectlCalls() {
+  const path = process.env.FALCONE_BBX_KUBECTL_LOG
+  if (!path) return []
+  try {
+    const calls = readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    return calls.slice(0, -1)
+  } catch {
+    return []
+  }
+}
+
+function statusNamespaceWasCreated() {
+  return previousKubectlCalls().some((call) => {
+    const command = (call.args ?? []).join(' ')
+    const input = `${call.stdin ?? ''}\n${call.fileInput ?? ''}`
+    return /\b(?:create|apply)\s+(?:namespace|ns)(?:\/|\s+)knative-serving\b/i.test(command)
+      || (/\bkind:\s*Namespace\b/.test(input) && /\bname:\s*knative-serving\b/.test(input))
+      || (/"kind"\s*:\s*"Namespace"/.test(input) && /"name"\s*:\s*"knative-serving"/.test(input))
+  })
+}
+
+function priorRegistrationMutation(pattern) {
+  return previousKubectlCalls().some((call) => pattern.test(`${(call.args ?? []).join(' ')}\n${call.stdin ?? ''}\n${call.fileInput ?? ''}`))
+}
+
+function priorSubmittedObject(pattern) {
+  return previousKubectlCalls().some((call) => pattern.test(`${call.stdin ?? ''}\n${call.fileInput ?? ''}`))
+}
+
+function reverseHandoffTargetWasEnabled() {
+  return priorSubmittedObject(/falcone-knative-handoff-target[\s\S]*(?:"owner"\s*:\s*"falcone"|falcone\.io\/target-owner["':=\s]+falcone)/i)
+}
+
+function purgeFenceState() {
+  const calls = previousKubectlCalls()
+  const submitted = (call) => `${call.stdin ?? ''}\n${call.fileInput ?? ''}`
+  const policyIndex = calls.findIndex((call) => /kind["':\s]+ValidatingAdmissionPolicy\b/i.test(submitted(call)))
+  const bindingIndex = calls.findIndex((call) => /kind["':\s]+ValidatingAdmissionPolicyBinding\b/i.test(submitted(call)))
+  const installedAt = policyIndex >= 0 && bindingIndex >= 0 ? Math.max(policyIndex, bindingIndex) : -1
+  const reinventoryComplete = installedAt >= 0 && bundleCrdNames.every((name) => calls.some((call, index) => (
+    index > installedAt
+    && (call.args ?? []).includes('get')
+    && (call.args ?? []).some((arg) => arg === name)
+  )))
+  return { installedAt, reinventoryComplete }
+}
+
+if (verb === 'version') {
+  const minor = scenario === 'unsupported-kubernetes' ? '33' : '34'
+  output({ clientVersion: { gitVersion: 'v1.34.0' }, serverVersion: { gitVersion: `v1.${minor}.0`, major: '1', minor } })
+  process.exit(0)
+}
+
+if (verb === 'auth') {
+  if (scenario === 'namespace-only' && tail.includes('can-i')) output('no\n')
+  else output('yes\n')
+  process.exit(0)
+}
+
+if (verb === 'api-resources') {
+  output('namespaces\ncustomresourcedefinitions.apiextensions.k8s.io\nclusterroles.rbac.authorization.k8s.io\nvalidatingwebhookconfigurations.admissionregistration.k8s.io\n')
+  process.exit(0)
+}
+
+if (verb === 'get') {
+  const target = tail.join(' ')
+  if (target.includes('--raw')) {
+    output('ok\n')
+    process.exit(0)
+  }
+  if (/clusterversion/.test(target)) {
+    const version = scenario === 'unsupported-openshift' ? '4.20.0' : '4.21.0'
+    output({ apiVersion: 'config.openshift.io/v1', kind: 'ClusterVersion', metadata: { name: 'version' }, status: { desired: { version }, history: [{ state: 'Completed', version }] } })
+    process.exit(0)
+  }
+  if (/infrastructures?|infrastructure /.test(target)) {
+    output({ apiVersion: 'config.openshift.io/v1', kind: 'Infrastructure', metadata: { name: 'cluster' }, status: { infrastructureName: 'bbx-ocp421', infrastructureId: 'bbx-ocp421-x8', apiServerURL: 'https://api.bbx.example.test:6443' } })
+    process.exit(0)
+  }
+  if (/namespace.*kube-system|namespace\/kube-system|ns kube-system/.test(target)) {
+    output(object('Namespace', 'kube-system', { metadata: { uid: '00000000-0000-4000-8000-000000000008' } }))
+    process.exit(0)
+  }
+  if (scenario === 'clean-status-namespace-absent' && /(?:namespace|namespaces|ns)(?:\/|\s+)knative-serving\b/.test(target)) {
+    if (!statusNamespaceWasCreated()) fail('NotFound: namespace knative-serving does not exist')
+    output(object('Namespace', 'knative-serving', { metadata: { labels: { 'falcone.io/knative-owner': owner } } }))
+    process.exit(0)
+  }
+  if (/\b(?:namespace|namespaces|ns)(?:\/|\s+)falcone-bbx\b/.test(target) && scenario.startsWith('registration-')) {
+    const namespaceOwner = scenario === 'registration-foreign-owner' ? 'foreign-owner' : owner
+    const postInstallScenario = scenario.startsWith('registration-runtime-')
+    const registration = postInstallScenario
+      ? (priorRegistrationMutation(/\blabel\s+namespace\s+falcone-bbx[\s\S]*falcone\.io\/knative-runtime-projection=enabled/i) ? 'enabled' : '')
+      : 'enabled'
+    if (/jsonpath|go-template/.test(target)) {
+      const asksRegistration = /knative-runtime-projection/.test(target)
+      const asksOwner = /knative-owner/.test(target)
+      const asksResourceVersion = /resourceVersion/.test(target)
+      if (asksRegistration && asksOwner && asksResourceVersion) output(`${registration}\t${namespaceOwner}\t77`)
+      else if (asksRegistration && asksOwner) output(`${registration}\t${namespaceOwner}`)
+      else if (asksResourceVersion) output('77')
+      else if (asksRegistration) output(registration)
+      else if (asksOwner) output(namespaceOwner)
+      else output('falcone-bbx')
+    } else {
+      output(object('Namespace', 'falcone-bbx', { metadata: { resourceVersion: '77', labels: {
+        'falcone.io/knative-runtime-projection': registration,
+        'falcone.io/knative-owner': namespaceOwner,
+      } } }))
+    }
+    process.exit(0)
+  }
+  const registeredNamespaceName = /\b(?:namespace|namespaces|ns)(?:\/|\s+)(falcone-app-[ab])\b/.exec(target)?.[1]
+  if (registeredNamespaceName) {
+    const resourceVersion = registeredNamespaceName === 'falcone-app-a' ? '81' : '82'
+    output(object('Namespace', registeredNamespaceName, { metadata: {
+      resourceVersion,
+      labels: { 'falcone.io/knative-runtime-projection': 'enabled', 'falcone.io/knative-owner': owner },
+    } }))
+    process.exit(0)
+  }
+  if (/namespaces?|\bns\b/.test(target)) {
+    const inventoryCollision = scenario === 'inventory-known-bundle-namespace'
+      ? [object('Namespace', 'knative-serving', { metadata: { labels: { 'falcone.io/knative-owner': 'foreign-lifecycle-owner' } } })]
+      : []
+    output({
+      apiVersion: 'v1',
+      kind: 'NamespaceList',
+      items: [
+        object('Namespace', 'falcone-app-a', { metadata: { resourceVersion: '81', labels: { 'falcone.io/knative-runtime-projection': 'enabled', 'falcone.io/knative-owner': owner } } }),
+        object('Namespace', 'falcone-app-b', { metadata: { resourceVersion: '82', labels: { 'falcone.io/knative-runtime-projection': 'enabled', 'falcone.io/knative-owner': owner } } }),
+        object('Namespace', 'falcone-unregistered', { metadata: { resourceVersion: '83' } }),
+        object('Namespace', 'falcone-foreign', { metadata: { resourceVersion: '84', labels: { 'falcone.io/knative-runtime-projection': 'enabled', 'falcone.io/knative-owner': 'foreign-owner' } } }),
+        ...inventoryCollision,
+      ],
+    })
+    process.exit(0)
+  }
+  const inventoryCollision = inventoryCollisionFor(scenario)
+  if (inventoryCollision && targetCanReturnCollision(target, inventoryCollision)) {
+    output({ apiVersion: 'v1', kind: 'List', items: [inventoryCollision] })
+    process.exit(0)
+  }
+  if (scenario === 'replacement-conflict-same-name-swap' && /(?:ksvc|services\.serving\.knative\.dev)(?:\/|\s+)bbx-service\b/.test(target)) {
+    output(replacementService())
+    process.exit(0)
+  }
+  if (scenario.startsWith('purge-') && /(?:ksvc|services\.serving\.knative\.dev)/.test(target)) {
+    const foreign = object('Service', 'foreign-service', {
+      metadata: {
+        namespace: 'foreign-app',
+        labels: scenario === 'purge-unowned-cr' ? {} : { 'falcone.io/knative-owner': 'foreign-owner' },
+      },
+    })
+    const safeOwnedOnly = ['purge-unverified-backup', 'purge-exact-owned-bundle', 'purge-extra-owner-crd', 'purge-race-fence'].includes(scenario)
+    const unownedBundleResource = scenario === 'purge-unowned-bundle-cr'
+      ? object('Service', 'unowned-service', { metadata: { namespace: 'falcone-app-a' } })
+      : null
+    output({
+      apiVersion: 'v1',
+      kind: 'List',
+      items: safeOwnedOnly
+        ? [ownedPurgeService()]
+        : unownedBundleResource
+          ? [object('Service', 'owned-service', { metadata: { namespace: 'falcone-app-a', labels: { 'falcone.io/knative-owner': owner } } }), unownedBundleResource]
+          : [object('Service', 'owned-service', { metadata: { namespace: 'falcone-app-a', labels: { 'falcone.io/knative-owner': owner } } }), foreign],
+    })
+    process.exit(0)
+  }
+  if (/ksvc|services\.serving\.knative\.dev/.test(target)) {
+    if (scenario === 'external-canary-missing') fail('NotFound: external canary is absent')
+    output({
+      apiVersion: 'serving.knative.dev/v1',
+      kind: 'Service',
+      metadata: { name: 'external-canary', namespace: 'knative-serving' },
+      status: {
+        url: 'http://external-canary.knative-serving.svc.cluster.local',
+        conditions: [{ type: 'Ready', status: scenario === 'external-canary-unhealthy' ? 'False' : 'True' }],
+      },
+    })
+    process.exit(0)
+  }
+  if (/endpoints?|endpoint.?slices?/.test(target)) {
+    if (scenario === 'stage-webhook-fail') fail('webhook endpoint is not ready')
+    const addresses = scenario === 'stage-webhook-endpoints-empty' ? [] : [{ ip: '10.0.0.8' }]
+    output({ apiVersion: 'v1', kind: 'Endpoints', metadata: { name: 'webhook', namespace: 'knative-serving' }, subsets: [{ addresses, ports: [{ name: 'https-webhook', port: 8443 }] }] })
+    process.exit(0)
+  }
+  if (/(?:^|[,\s])secrets?(?:[.,\s]|$)|\bsecret\b/.test(target)) {
+    if (!/(?:^|\s)secrets?(?:\/|\s+)webhook-certs\b/i.test(target)) {
+      output({ apiVersion: 'v1', kind: 'List', items: [] })
+      process.exit(0)
+    }
+    output({ apiVersion: 'v1', kind: 'Secret', metadata: { name: 'webhook-certs', namespace: 'knative-serving' }, type: 'kubernetes.io/tls', data: { 'tls.crt': 'YmJ4LWNlcnQ=', 'tls.key': 'YmJ4LWtleQ==' } })
+    process.exit(0)
+  }
+  if (/config\.webhook\.serving\.knative\.dev|webhook\.serving\.knative\.dev|validation\.webhook\.serving\.knative\.dev/.test(target)) {
+    const name = /validation\.webhook/.test(target)
+      ? 'validation.webhook.serving.knative.dev'
+      : /(?:^|\s)webhook\.serving/.test(target)
+        ? 'webhook.serving.knative.dev'
+        : 'config.webhook.serving.knative.dev'
+    const kind = name === 'webhook.serving.knative.dev' ? 'MutatingWebhookConfiguration' : 'ValidatingWebhookConfiguration'
+    output({
+      apiVersion: 'admissionregistration.k8s.io/v1',
+      kind,
+      metadata: { name, labels: { 'falcone.io/knative-owner': owner } },
+      webhooks: [{ name, clientConfig: { service: { name: 'webhook', namespace: 'knative-serving' }, caBundle: scenario === 'stage-ca-bundle-empty' ? '' : 'YmJ4LWNh' } }],
+    })
+    process.exit(0)
+  }
+  if (scenario.startsWith('registration-runtime-') && /configmaps?\/?(?:\s+)?falcone-knative-runtime\b/.test(target)) {
+    const placeholderExists = priorSubmittedObject(/(?:"name"\s*:\s*"falcone-knative-runtime"|name:\s*falcone-knative-runtime)/i)
+    if (scenario === 'registration-runtime-missing' && !placeholderExists) {
+      fail('NotFound: falcone-bbx/falcone-knative-runtime is absent')
+    }
+    const runtimeOwner = scenario === 'registration-runtime-foreign'
+      ? 'foreign-owner'
+      : scenario === 'registration-runtime-unowned'
+        ? ''
+        : owner
+    if (/jsonpath|go-template/.test(target)) {
+      if (/knative-owner/.test(target)) output(runtimeOwner)
+      else output(runtimeOwner ? 'falcone.knative-runtime/v1' : '')
+    } else {
+      output(runtimePlaceholder(runtimeOwner))
+    }
+    process.exit(0)
+  }
+  if (scenario.startsWith('reverse-handoff-') && /configmaps?\/?(?:\s+)?falcone-knative-ownership\b/.test(target)) {
+    if (reverseHandoffTargetWasEnabled()) {
+      output(falconeTargetOwnershipMarker())
+      process.exit(0)
+    }
+    fail('NotFound: historical falcone-knative-ownership marker is absent after Operator takeover')
+  }
+  if (scenario.startsWith('reverse-handoff-') && /configmaps?\/?(?:\s+)?bbx-operator-backup\b/.test(target)) {
+    output(backupRecord('bbx-operator-backup', 'handoff-backup', 'operator'))
+    process.exit(0)
+  }
+  if (scenario.startsWith('reverse-handoff-') && /configmaps?\/?(?:\s+)?operator-knative-ownership\b/.test(target)) {
+    output(operatorOwnershipMarker(scenario === 'reverse-handoff-foreign' ? 'foreign-operator' : 'operator'))
+    process.exit(0)
+  }
+  if (/configmaps?\/?(?:\s+)?falcone-knative-ownership\b/.test(target)) {
+    if (scenario === 'owner-marker-absent-existing' || scenario === 'clean-status-namespace-absent') {
+      fail('NotFound: exclusive owner marker falcone-knative-ownership is absent')
+    }
+    if (scenario === 'owner-transferred-to-operator') {
+      output(ownershipMarker('operator'))
+      process.exit(0)
+    }
+    if (scenario.startsWith('owner-marker-variant-')) {
+      output(ownershipMarkerVariant(scenario.slice('owner-marker-variant-'.length)))
+      process.exit(0)
+    }
+    if (installedOwnerScenarios.has(scenario) || scenario.startsWith('handoff-writer-') || ['handoff-success', 'projection-one-foreign', 'purge-foreign-cr', 'purge-unowned-cr', 'purge-unverified-backup', 'purge-exact-owned-bundle', 'purge-extra-owner-crd', 'purge-unowned-bundle-cr', 'purge-race-fence'].includes(scenario)) {
+      output(ownershipMarker())
+      process.exit(0)
+    }
+  }
+  if (scenario === 'projection-one-foreign' && /configmaps?\/?(?:\s+)?falcone-knative-runtime\b/.test(target)) {
+    const namespace = /(?:^|\s)-n\s+(\S+)/.exec(target)?.[1] ?? 'falcone-app-a'
+    const runtimeOwner = namespace === 'falcone-app-a' ? 'foreign-owner' : owner
+    output(object('ConfigMap', 'falcone-knative-runtime', {
+      metadata: {
+        namespace,
+        resourceVersion: namespace === 'falcone-app-a' ? '91' : '92',
+        labels: { 'falcone.io/knative-owner': runtimeOwner, 'falcone.io/runtime-schema': 'v1' },
+      },
+      data: {
+        'status.json': JSON.stringify({
+          schemaVersion: 'falcone.knative-runtime/v1', mode: 'managed', owner: runtimeOwner,
+          readiness: { state: 'ready', stage: 'ready', reason: 'STALE_READY' },
+          observedAt: '2026-08-07T00:00:00Z', validUntil: '2026-08-07T00:02:00Z',
+        }),
+      },
+    }))
+    process.exit(0)
+  }
+  if (scenario === 'handoff-success' && /configmaps?.*falcone\.io\/active-owner=operator/.test(target)) {
+    output({
+      apiVersion: 'v1',
+      kind: 'ConfigMapList',
+      items: [object('ConfigMap', 'operator-knative-ownership', {
+        metadata: {
+          namespace: 'knative-serving',
+          labels: { 'falcone.io/active-owner': 'operator', 'falcone.io/knative-owner': 'operator' },
+          annotations: { 'falcone.io/ownership-state': 'exclusive' },
+        },
+        data: { owner: 'operator', state: 'exclusive', previousOwner: owner, backupEvidence: 'bbx-backup-8' },
+      })],
+    })
+    process.exit(0)
+  }
+  if (scenario.startsWith('reverse-handoff-') && /configmaps?.*falcone\.io\/active-owner=operator/.test(target)) {
+    const markers = scenario === 'reverse-handoff-ambiguous'
+      ? [operatorOwnershipMarker(), operatorOwnershipMarker('operator', 'operator-knative-ownership-duplicate')]
+      : [operatorOwnershipMarker(scenario === 'reverse-handoff-foreign' ? 'foreign-operator' : 'operator')]
+    output({ apiVersion: 'v1', kind: 'ConfigMapList', items: markers })
+    process.exit(0)
+  }
+  if (scenario.startsWith('reverse-handoff-') && /configmaps?.*falcone\.io\/active-owner=falcone/.test(target)) {
+    output({
+      apiVersion: 'v1', kind: 'ConfigMapList',
+      items: reverseHandoffTargetWasEnabled() ? [falconeTargetOwnershipMarker()] : [],
+    })
+    process.exit(0)
+  }
+  if ((scenario === 'handoff-success' || scenario === 'handoff-target-fail' || scenario.startsWith('handoff-writer-')) && /deployments?(?:\.apps)?/.test(target) && !/configmaps?/.test(target)) {
+    const writers = handoffWriters(scenario)
+    const pods = scenario === 'handoff-writer-live-replica' && previousKubectlCalls().some((call) => (call.args ?? []).includes('scale'))
+      ? [{
+          apiVersion: 'v1', kind: 'Pod',
+          metadata: { name: 'controller-still-running', namespace: 'knative-serving', labels: { 'falcone.io/knative-owner': owner } },
+          status: { phase: 'Running' },
+        }]
+      : []
+    output({ apiVersion: 'v1', kind: 'List', items: [...writers, ...pods] })
+    process.exit(0)
+  }
+  if (/configmaps?|\bcm\b/.test(target)) {
+    if (scenario.startsWith('owner-marker-variant-')) {
+      output({
+        apiVersion: 'v1', kind: 'List',
+        items: [ownershipMarkerVariant(scenario.slice('owner-marker-variant-'.length)), backupRecord(), managedCrd(['v1'])],
+      })
+      process.exit(0)
+    }
+    if (scenario.startsWith('reverse-handoff-')) {
+      if (reverseHandoffTargetWasEnabled()) {
+        output({
+          apiVersion: 'v1', kind: 'ConfigMapList',
+          items: [falconeTargetOwnershipMarker(), backupRecord('bbx-operator-backup', 'handoff-backup', 'operator')],
+        })
+        process.exit(0)
+      }
+      const markers = scenario === 'reverse-handoff-ambiguous'
+        ? [operatorOwnershipMarker(), operatorOwnershipMarker('operator', 'operator-knative-ownership-duplicate')]
+        : [operatorOwnershipMarker(scenario === 'reverse-handoff-foreign' ? 'foreign-operator' : 'operator')]
+      output({ apiVersion: 'v1', kind: 'ConfigMapList', items: [...markers, backupRecord('bbx-operator-backup', 'handoff-backup', 'operator')] })
+      process.exit(0)
+    }
+    if (scenario === 'rollback-supported-stored-incompatible') {
+      output({ apiVersion: 'v1', kind: 'List', items: [ownershipMarker(), backupRecord('bbx-recovery-8', 'rollback'), managedCrd(['v1alpha0'])] })
+      process.exit(0)
+    }
+    if (scenario === 'upgrade-patch-downgrade') {
+      output({
+        apiVersion: 'v1', kind: 'List',
+        items: [ownershipMarker(), managedCrd(['v1']), { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'controller', namespace: 'knative-serving', labels: { 'falcone.io/knative-owner': owner, 'app.kubernetes.io/version': '1.22.2' } } }],
+      })
+      process.exit(0)
+    }
+    if (scenario === 'handoff-target-fail') {
+      output({
+        apiVersion: 'v1', kind: 'ConfigMapList',
+        items: [ownershipMarker(), backupRecord('bbx-backup-8', 'handoff-backup'), ...handoffWriters(scenario)],
+      })
+      process.exit(0)
+    }
+    if (scenario === 'handoff-success' || scenario.startsWith('handoff-writer-')) {
+      output({
+        apiVersion: 'v1', kind: 'List',
+        items: [ownershipMarker(), backupRecord('bbx-backup-8', 'handoff-backup'), ...handoffWriters(scenario)],
+      })
+      process.exit(0)
+    }
+    if (installedOwnerScenarios.has(scenario)) {
+      output({ apiVersion: 'v1', kind: 'ConfigMapList', items: [ownershipMarker()] })
+      process.exit(0)
+    }
+    if (['projection-one-foreign', 'purge-foreign-cr', 'purge-unowned-cr', 'purge-exact-owned-bundle', 'purge-extra-owner-crd', 'purge-unowned-bundle-cr', 'purge-race-fence'].includes(scenario)) {
+      output({ apiVersion: 'v1', kind: 'ConfigMapList', items: [ownershipMarker(), backupRecord()] })
+      process.exit(0)
+    }
+    if (scenario === 'purge-unverified-backup') {
+      output({ apiVersion: 'v1', kind: 'ConfigMapList', items: [ownershipMarker(), backupRecord('different-backup')] })
+      process.exit(0)
+    }
+    if (scenario === 'owner-transferred-to-operator') {
+      output({ apiVersion: 'v1', kind: 'ConfigMapList', items: [ownershipMarker('operator')] })
+      process.exit(0)
+    }
+    if (scenario === 'upgrade-same-owner' || scenario === 'upgrade-stored-version-incompatible') {
+      output({
+        apiVersion: 'v1',
+        kind: 'List',
+        items: [
+          ownershipMarker(owner, 'exclusive', '1.21.1'),
+          {
+            apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition',
+            metadata: { name: 'services.serving.knative.dev', labels: { 'falcone.io/knative-owner': owner } },
+            spec: { versions: [{ name: 'v1', served: true, storage: true }] },
+            status: { storedVersions: scenario === 'upgrade-stored-version-incompatible' ? ['v1alpha0'] : ['v1'] },
+          },
+          { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'controller', namespace: 'knative-serving', labels: { 'falcone.io/knative-owner': owner, 'app.kubernetes.io/version': '1.21.1' } } },
+        ],
+      })
+      process.exit(0)
+    }
+    output({ apiVersion: 'v1', kind: 'ConfigMapList', items: [] })
+    process.exit(0)
+  }
+  if (/clusterroles?|clusterrolebindings?/.test(target)) {
+    const items = scenario === 'inventory-serverless-rbac'
+      ? [{ apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: { name: 'knative-serving-operator', labels: { 'app.kubernetes.io/managed-by': 'OLM', 'olm.owner': 'serverless-operator' } }, rules: [] }]
+      : scenario === 'inventory-unrelated-only'
+        ? [{ apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: { name: 'unrelated-observability-reader' }, rules: [] }]
+        : []
+    output({ apiVersion: 'v1', kind: 'List', items })
+    process.exit(0)
+  }
+  if (/\bvwc,mwc\b|validatingwebhookconfigurations?|mutatingwebhookconfigurations?/.test(target)) {
+    const items = scenario === 'inventory-partial-webhook'
+      ? [{ apiVersion: 'admissionregistration.k8s.io/v1', kind: 'ValidatingWebhookConfiguration', metadata: { name: 'config.webhook.serving.knative.dev', labels: { 'falcone.io/knative-owner': owner }, annotations: { 'falcone.io/ownership-state': 'partial' } }, webhooks: [] }]
+      : scenario === 'inventory-unrelated-only'
+        ? [{ apiVersion: 'admissionregistration.k8s.io/v1', kind: 'ValidatingWebhookConfiguration', metadata: { name: 'unrelated-policy.example.test' }, webhooks: [] }]
+        : []
+    output({ apiVersion: 'v1', kind: 'List', items })
+    process.exit(0)
+  }
+  if (/customresourcedefinitions?|\bcrds?\b/.test(target)) {
+    const ownership = {
+      'owner-olm': { 'app.kubernetes.io/managed-by': 'OLM' },
+      'owner-serverless': { 'olm.owner': 'serverless-operator' },
+      'owner-raw': { 'falcone.io/installation': 'raw-manifest' },
+      'owner-other-falcone': { 'falcone.io/knative-owner': 'other-falcone-owner' },
+      'owner-unknown': { 'example.test/owner': 'unknown' },
+      'owner-partial': { 'falcone.io/knative-owner': owner, 'falcone.io/ownership-state': 'partial' },
+      'existing-undecided': { 'falcone.io/installation': 'existing-undecided' },
+    }[scenario]
+    let items = []
+    if (scenario === 'inventory-unrelated-only') {
+      items = [{ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'widgets.example.test' }, spec: { group: 'example.test', versions: [{ name: 'v1', served: true, storage: true }] } }]
+    } else if (scenario === 'owner-marker-absent-existing') {
+      items = [managedCrd(['v1'])]
+    } else if (scenario.startsWith('owner-marker-variant-')) {
+      items = [managedCrd(['v1'])]
+    } else if (scenario.startsWith('purge-')) {
+      items = bundleCrds()
+      if (scenario === 'purge-extra-owner-crd') {
+        items.push({
+          apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition',
+          metadata: { name: 'widgets.example.test', labels: { 'falcone.io/knative-owner': owner } },
+          spec: { group: 'example.test', names: { plural: 'widgets' }, versions: [{ name: 'v1', served: true, storage: true }] },
+          status: { storedVersions: ['v1'] },
+        })
+      }
+    } else if (scenario === 'rollback-supported-stored-incompatible') {
+      items = [managedCrd(['v1alpha0'])]
+    } else if (scenario === 'upgrade-patch-downgrade') {
+      items = [managedCrd(['v1'])]
+    } else if (scenario === 'upgrade-stored-version-incompatible') {
+      items = [{ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'services.serving.knative.dev', labels: { 'falcone.io/knative-owner': owner } }, spec: { versions: [{ name: 'v1', served: true, storage: true }] }, status: { storedVersions: ['v1alpha0'] } }]
+    } else if (ownership) {
+      items = [{ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'services.serving.knative.dev', annotations: ownership } }]
+    }
+    output({ apiVersion: 'v1', kind: 'List', items })
+    process.exit(0)
+  }
+  const collision = {
+    'owner-olm': { 'app.kubernetes.io/managed-by': 'OLM' },
+    'owner-serverless': { 'olm.owner': 'serverless-operator' },
+    'owner-raw': { 'falcone.io/installation': 'raw-manifest' },
+    'owner-other-falcone': { 'falcone.io/knative-owner': 'other-falcone-owner' },
+    'owner-unknown': { 'example.test/owner': 'unknown' },
+    'owner-partial': { 'falcone.io/knative-owner': owner, 'falcone.io/ownership-state': 'partial' },
+    'existing-undecided': { 'falcone.io/installation': 'existing-undecided' },
+  }[scenario]
+  if (collision) {
+    output({ apiVersion: 'v1', kind: 'List', items: [object('CustomResourceDefinition', 'services.serving.knative.dev', { metadata: { annotations: collision } })] })
+  } else {
+    output({ apiVersion: 'v1', kind: 'List', items: [] })
+  }
+  process.exit(0)
+}
+
+if (verb === 'wait') {
+  const target = tail.join(' ')
+  if (scenario === 'stage-crd-fail' && /established|customresourcedefinition|crd/i.test(target)) fail('CRD Established deadline exceeded')
+  if (scenario === 'stage-webhook-fail' && /webhook|endpoint|certificate/i.test(target)) fail('webhook readiness deadline exceeded')
+  if (scenario === 'stage-serving-fail' && /serving|controller/i.test(target)) fail('Serving controller readiness deadline exceeded')
+  if (scenario === 'stage-kourier-fail' && /kourier|gateway/i.test(target)) fail('Kourier readiness deadline exceeded')
+  output('condition met\n')
+  process.exit(0)
+}
+
+if (verb === 'exec') {
+  if (scenario === 'external-canary-invoke-fail' || scenario === 'stage-smoke-fail') fail('cluster-internal invocation failed')
+  output('falcone-knative-bbx-ok\n')
+  process.exit(0)
+}
+
+if (mutationVerbs.has(verb)) {
+  if (scenario === 'purge-race-fence' && verb === 'delete') {
+    const request = `${tail.join(' ')}\n${submitted}`
+    const deletesBundleResource = bundleCrdNames.some((name) => request.includes(name))
+      || /customresourcedefinitions?\.apiextensions\.k8s\.io/.test(request)
+      || /\/(?:apis\/)?(?:serving\.knative\.dev|networking\.internal\.knative\.dev|autoscaling\.internal\.knative\.dev|caching\.internal\.knative\.dev)\//.test(request)
+    if (deletesBundleResource) {
+      const fence = purgeFenceState()
+      if (fence.installedAt < 0) fail('purge race fence missing before destructive delete')
+      if (!fence.reinventoryComplete) fail('purge did not re-inventory every pinned Knative resource under the race fence')
+      if (/(?:^|\s)(?:-l|--selector)(?:=|\s)|--all\b/.test(request)) fail('purge race fence does not authorize selector or collection deletion')
+    }
+  }
+  if (scenario === 'replacement-conflict-same-name-swap' && verb === 'delete' && /bbx-service/.test(`${tail.join(' ')}\n${submitted}`)) {
+    const request = `${tail.join(' ')}\n${submitted}`
+    const hasUid = /00000000-0000-4000-8000-000000000068/.test(request)
+    const hasResourceVersion = /(?:resourceVersion["'=:\s]+|resource-version[=\s]+)101\b/i.test(request)
+    if (!hasUid || !hasResourceVersion) {
+      fail('unsafe delete omitted UID/resourceVersion preconditions')
+    }
+    fail('Conflict: same-name replacement now has uid 00000000-0000-4000-8000-000000000069 resourceVersion 102')
+  }
+  if (scenario === 'upgrade-same-owner' && verb === 'create' && submitted.includes('falcone-knative-ownership')) {
+    fail('AlreadyExists: exclusive owner falcone-knative-ownership belongs to bbx-owner')
+  }
+  if (scenario === 'clean-status-namespace-absent' && submitted.includes('falcone-knative-ownership') && !statusNamespaceWasCreated()) {
+    fail('NotFound: cannot create exclusive owner marker because namespace knative-serving does not exist')
+  }
+  if (process.env.FALCONE_BBX_REJECT_MUTATION === '1') fail(`offline harness rejected mutation: ${verb}`, 97)
+  output({ apiVersion: 'v1', kind: 'Status', status: 'Success' })
+  process.exit(0)
+}
+
+output({ apiVersion: 'v1', kind: 'Status', status: 'Success' })

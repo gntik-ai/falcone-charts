@@ -1,0 +1,9 @@
+# Preserve byte-for-byte upstream manifests while excluding their original
+# indentation from repository-local whitespace diagnostics.
+charts/falcone-knative/bundle/upstream/*.yaml whitespace=-space-before-tab
+
+# These generated/provenance-locked assets intentionally carry a terminal
+# blank line. Their byte identity is verified by validate_bundle.py.
+charts/falcone-knative/provenance/*.json whitespace=-blank-at-eof
+charts/falcone-knative/templates/00-validate.yaml whitespace=-blank-at-eof
+charts/falcone-knative/tools/validate_bundle.py whitespace=-blank-at-eof

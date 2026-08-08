@@ -27,6 +27,27 @@
       "falcone_app"
       "falcone_webhook_key_writer"
       "falcone_webhook_key_lifecycle" -}}
+{{- $knativeRuntime := .Values.global.knativeRuntime | default (dict) -}}
+{{- $knativeRuntimeMode := $knativeRuntime.mode | default "disabled" -}}
+{{- if not (has $knativeRuntimeMode (list "managed" "external" "disabled")) -}}
+  {{- fail "global.knativeRuntime.mode must be exactly one of managed, external, or disabled" -}}
+{{- end -}}
+{{- if and (ne ($knativeRuntime.owner | default "") "") (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $knativeRuntime.owner)) -}}
+  {{- fail "global.knativeRuntime.owner must be empty or a DNS-safe owner name" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" ($knativeRuntime.statusConfigMapName | default "")) -}}
+  {{- fail "global.knativeRuntime.statusConfigMapName must be a DNS subdomain name" -}}
+{{- end -}}
+{{- if and ($knativeRuntime.unregister | default false) (ne $knativeRuntimeMode "disabled") -}}
+  {{- fail "global.knativeRuntime.unregister may be true only for an explicit transition to disabled" -}}
+{{- end -}}
+{{- range $componentName := list "controlPlane" "controlPlaneExecutor" -}}
+  {{- range $entry := ((index $.Values $componentName).env | default (list)) -}}
+    {{- if has ($entry.name | default "") (list "KNATIVE_RUNTIME_MODE" "KNATIVE_RUNTIME_STATUS_FILE") -}}
+      {{- fail (printf "%s.env must not override reserved Knative runtime contract entries; configure global.knativeRuntime only" $componentName) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- if ne (len ($protectedWebhookDatabaseRoles | uniq)) (len $protectedWebhookDatabaseRoles) -}}
   {{- fail "global.webhookDatabase principal and fixed authority role names must all be distinct" -}}
 {{- end -}}

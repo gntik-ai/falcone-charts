@@ -15,6 +15,13 @@
 global:
   namespace: falcone-prod
   createNamespace: false            # let cluster-admin/GitOps own the namespace + SCC
+  # Knative runtime modes (default stays disabled):
+  # knativeRuntime:
+  #   mode: external                 # existing administrator-owned Serverless
+  #   owner: falcone-prod            # omit/empty to use this Helm release name
+  # Select managed only when the separate falcone-knative lifecycle release
+  # owns the validated raw-upstream bundle; select disabled to close the gates.
+  # statusConfigMapName defaults to falcone-knative-runtime in this namespace.
   # Harbor: every image's registry host is rewritten to this prefix automatically.
   imageRegistry: "harbor.example.com/falcone"
   imagePullSecrets:

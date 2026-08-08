@@ -1,0 +1,10 @@
+{{- if and .Values.supplyChain.disconnected (not .Values.supplyChain.registry) -}}
+{{- fail "supplyChain.registry is required when supplyChain.disconnected=true" -}}
+{{- end -}}
+{{- if and (eq .Values.platform.type "openshift") (not (hasPrefix "4.21" .Values.platform.openshiftVersion)) -}}
+{{- fail "managed OpenShift support is fixed to OpenShift 4.21 restricted-v2" -}}
+{{- end -}}
+{{- if and (eq .Values.status.state "compatible") (not .Values.lifecycle.smokeVerified) -}}
+{{- fail "status.state=compatible requires lifecycle.smokeVerified=true after the staged smoke ksvc gate" -}}
+{{- end -}}
+
