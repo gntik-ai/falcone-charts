@@ -61,12 +61,12 @@ these immutable digests:
 
 | Workload/runtime | Approved digest |
 |---|---|
-| control-plane | `sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a` |
-| control-plane-executor | `sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d` |
-| web-console | `sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34` |
-| workflow-worker | `sha256:2669be573ec5d461f8a1e21c58c13817fd1bc14a947dba845ce1cfac8368a054` |
-| function runtime | `sha256:4fe7a77b01e7e49cd97722a3f55808ec4a09c0c0886680389011ba43796382ba` |
-| MCP runtime | `sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99` |
+| control-plane | `sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253` |
+| control-plane-executor | `sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c` |
+| web-console | `sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191` |
+| workflow-worker | `sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d` |
+| function runtime | `sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613` |
+| MCP runtime | `sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb` |
 
 Render and schema-check before any environment action:
 
