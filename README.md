@@ -35,7 +35,7 @@ The umbrella supports two explicit External Secrets topologies:
 | Mode | Values | Ownership boundary |
 |---|---|---|
 | Managed (default) | `eso.external-secrets.enabled=true` | Falcone installs and owns the ESO controller, webhook, cert-controller, and CRDs. |
-| Externally managed | `eso.external-secrets.enabled=false` plus the exact `global.externalSecrets.operatorNamespace` and `operatorServiceAccount` | An administrator-owned ESO installation keeps its controller, webhook, and CRDs. Falcone renders only its own OpenBao-backed `ClusterSecretStore`, `ExternalSecret` objects, authentication ServiceAccount, and exact TokenRequest RBAC. No adoption occurs. |
+| Externally managed | `eso.external-secrets.enabled=false` plus the exact `global.externalSecrets.operatorNamespace` and `operatorServiceAccount` | An administrator-owned ESO installation keeps its controller, webhook, and CRDs. Falcone renders only its own OpenBao-backed `ClusterSecretStore`, `ExternalSecret` objects, authentication ServiceAccount, and exact TokenRequest RBAC. No administrator-owned object is adopted. |
 
 Use externally managed ESO mode when the cluster already has a compatible External Secrets
 release. The external controller namespace and Falcone's authentication
@@ -84,7 +84,16 @@ Secret mutation or TokenReview permission. OpenBao's ServiceAccount receives onl
 `create` on `tokenreviews`. Keep `eso.eso.clusterOwnership.adoptExisting=false`;
 `true` is rejected.
 
-For chart 0.4.6 staging repair details—rotating OpenBao reviewer credentials,
+The revision-20 staging repair has one narrower migration rule: if all fourteen
+Falcone-owned `ExternalSecret` declarations already exist without Helm owner
+metadata, the repair first proves their exact identity set and canonical specs,
+then adopts only those declarations with UID/resourceVersion-guarded metadata
+patches. Partial or foreign ownership, any spec drift, or any additional or
+missing declaration fails before adoption. This does not use Helm's broad
+`--take-ownership` option and never applies to the external ESO controller,
+CRDs, webhooks, Services, RBAC, or namespace.
+
+For chart 0.4.7 staging repair details—rotating OpenBao reviewer credentials,
 FerretDB rollout safety, local-path limitations, six approved image digests, and
 the revision-20 two-phase procedure—use the
 [staging infrastructure repair runbook](charts/in-falcone/docs/staging-infrastructure-repair.md).

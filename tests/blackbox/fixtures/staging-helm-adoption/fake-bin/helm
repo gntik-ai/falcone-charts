@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+
+/**
+ * Offline Helm public-surface fixture. An upgrade is accepted only after every
+ * exact ExternalSecret carries Falcone's three Helm ownership markers.
+ */
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { resolve } from 'node:path'
+
+const args = process.argv.slice(2)
+const statePath = process.env.FALCONE_ADOPTION_STATE
+const apiLog = process.env.FALCONE_ADOPTION_API_LOG
+const baseFakeBin = process.env.FALCONE_ADOPTION_BASE_FAKE_BIN
+const scenario = process.env.FALCONE_ADOPTION_SCENARIO ?? 'safe-unowned'
+const repairVersion = process.env.FALCONE_ADOPTION_REPAIR_VERSION
+
+if (!statePath || !apiLog || !baseFakeBin || !repairVersion) {
+  process.stderr.write('staging adoption fixture environment is incomplete\n')
+  process.exit(78)
+}
+
+function exactFalconeOwner(item) {
+  return item.metadata?.labels?.['app.kubernetes.io/managed-by'] === 'Helm'
+    && item.metadata?.annotations?.['meta.helm.sh/release-name'] === 'falcone'
+    && item.metadata?.annotations?.['meta.helm.sh/release-namespace'] === 'in-falcone-staging'
+}
+
+function logHelm() {
+  appendFileSync(process.env.FALCONE_STAGING_HELM_LOG, `${args.join(' ')}\n`)
+  if (process.env.FALCONE_STAGING_OPERATION_LOG) {
+    appendFileSync(process.env.FALCONE_STAGING_OPERATION_LOG, `helm ${args.join(' ')}\n`)
+  }
+}
+
+function argumentAfter(flag) {
+  const index = args.indexOf(flag)
+  return index >= 0 ? args[index + 1] : ''
+}
+
+function runChecked(file, commandArgs, options = {}) {
+  const result = spawnSync(file, commandArgs, { env: process.env, stdio: 'inherit', ...options })
+  if (result.error) throw result.error
+  if (result.status !== 0) process.exit(result.status ?? 1)
+}
+
+function requireVersion() {
+  if (argumentAfter('--version') !== repairVersion) {
+    process.stderr.write(`REPAIR_CHART_VERSION_MISMATCH expected=${repairVersion}\n`)
+    process.exit(64)
+  }
+}
+
+function releaseState() {
+  const baseScenario = process.env.FALCONE_STAGING_SCENARIO ?? 'safe'
+  const forward = baseScenario.startsWith('forward-')
+  const upgrades = Number.parseInt(readFileOr(process.env.FALCONE_STAGING_HELM_STATE_FILE, '0'), 10)
+  return {
+    revision: (forward ? 22 : 20) + upgrades,
+    chart: upgrades > 0 || forward ? repairChartName() : 'in-falcone-0.4.1',
+  }
+}
+
+function repairChartName() {
+  return `in-falcone-${repairVersion}`
+}
+
+if (args.includes('--take-ownership')) {
+  appendFileSync(apiLog, `${JSON.stringify({ command: 'helm', args, rejected: 'take-ownership' })}\n`)
+  process.stderr.write('HELM_TAKE_OWNERSHIP_FORBIDDEN\n')
+  process.exit(79)
+}
+
+if (args[0] === 'pull') {
+  requireVersion()
+  logHelm()
+  const untarDir = argumentAfter('--untardir')
+  const realHelm = process.env.FALCONE_STAGING_HELM_DELEGATE
+  const chartSource = process.env.FALCONE_STAGING_PACKAGED_CHART_SOURCE
+  if (!untarDir || !realHelm || !chartSource) {
+    process.stderr.write('synthetic pull configuration is incomplete\n')
+    process.exit(65)
+  }
+  runChecked(realHelm, ['package', chartSource, '--destination', untarDir, '--version', repairVersion], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  })
+  runChecked('tar', ['-xzf', resolve(untarDir, `in-falcone-${repairVersion}.tgz`), '-C', untarDir])
+  process.stdout.write(`Pulled: ghcr.io/gntik-ai/charts/in-falcone:${repairVersion}\n`)
+  process.stdout.write(`Digest: ${process.env.FALCONE_STAGING_REPAIR_PACKAGE_DIGEST}\n`)
+  process.exit(0)
+}
+
+if (args[0] === 'template') {
+  requireVersion()
+  logHelm()
+  runChecked(process.env.FALCONE_STAGING_HELM_DELEGATE, args)
+  if (process.env.FALCONE_STAGING_ASSUME_APPROVED_RENDER === 'true') {
+    process.stdout.write('# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb\n')
+  }
+  process.exit(0)
+}
+
+if (args[0] === 'plugin' && args[1] === 'list') {
+  logHelm()
+  process.stdout.write('NAME VERSION DESCRIPTION\n')
+  process.stdout.write('diff 3.9.12 Preview Helm upgrade changes as a diff\n')
+  process.exit(0)
+}
+
+if (args[0] === 'diff' && args[1] === 'upgrade') {
+  requireVersion()
+  logHelm()
+  process.exit(0)
+}
+
+if (args[0] === 'list') {
+  logHelm()
+  const release = releaseState()
+  process.stdout.write(`${JSON.stringify([{
+    name: 'falcone',
+    namespace: 'in-falcone-staging',
+    revision: String(release.revision),
+    chart: release.chart,
+    app_version: '0.3.1',
+    status: 'deployed',
+  }])}\n`)
+  process.exit(0)
+}
+
+if (args[0] === 'get' && args[1] === 'metadata') {
+  logHelm()
+  const release = releaseState()
+  process.stdout.write(`${JSON.stringify({
+    name: 'falcone',
+    namespace: 'in-falcone-staging',
+    revision: release.revision,
+    chart: release.chart,
+    appVersion: '0.3.1',
+  })}\n`)
+  process.exit(0)
+}
+
+if (args[0] === 'status') {
+  logHelm()
+  const release = releaseState()
+  process.stdout.write(`${JSON.stringify({
+    name: 'falcone',
+    namespace: 'in-falcone-staging',
+    version: release.revision,
+    chart: release.chart,
+    info: { status: 'deployed' },
+  })}\n`)
+  process.exit(0)
+}
+
+if (args[0] === 'upgrade') {
+  requireVersion()
+  const state = JSON.parse(readFileSync(statePath, 'utf8'))
+  const exactItems = state.items.filter((item) => state.expectedNames.includes(item.metadata.name))
+  const ready = exactItems.length === 14
+    && exactItems.every(exactFalconeOwner)
+    && state.items.length === 14
+    && scenario !== 'external-eso-unowned'
+  if (!ready) {
+    logHelm()
+    appendFileSync(apiLog, `${JSON.stringify({ command: 'helm', args, rejected: 'unowned-integration' })}\n`)
+    process.stderr.write('Error: rendered manifests contain a resource that already exists. Unable to continue with install: ExternalSecret "gateway-apisix-credentials" exists and cannot be imported into the current release: invalid ownership metadata\n')
+    process.exit(1)
+  }
+  logHelm()
+  const helmState = process.env.FALCONE_STAGING_HELM_STATE_FILE
+  const count = Number.parseInt(readFileOr(helmState, '0'), 10) + 1
+  writeFileSync(helmState, String(count))
+  process.exit(0)
+}
+
+function readFileOr(path, fallback) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return fallback
+  }
+}
+
+const result = spawnSync(resolve(baseFakeBin, 'helm'), args, {
+  env: process.env,
+  stdio: 'inherit',
+})
+if (result.error) throw result.error
+process.exit(result.status ?? 1)

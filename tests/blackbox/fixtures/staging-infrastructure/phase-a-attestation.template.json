@@ -12,7 +12,7 @@
   },
   "result": {
     "revision": "22",
-    "chart": "in-falcone-0.4.6",
+    "chart": "in-falcone-0.4.7",
     "packageDigest": "sha256:0460460460460460460460460460460460460460460460460460460460460460"
   },
   "health": {

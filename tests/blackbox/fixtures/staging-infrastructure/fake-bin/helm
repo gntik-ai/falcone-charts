@@ -11,9 +11,9 @@ real_helm="${FALCONE_STAGING_HELM_DELEGATE:-${FALCONE_STAGING_REAL_HELM:-}}"
 
 require_repair_version() {
   case " $* " in
-    *" --version 0.4.6 "*) ;;
+    *" --version 0.4.7 "*) ;;
     *)
-      printf 'REPAIR_CHART_VERSION_MISMATCH expected=0.4.6 call=%s\n' "$*" >&2
+      printf 'REPAIR_CHART_VERSION_MISMATCH expected=0.4.7 call=%s\n' "$*" >&2
       exit 64
       ;;
   esac
@@ -24,7 +24,7 @@ release_chart="in-falcone-0.4.1"
 case "$scenario" in
   phase-a-complete|phase-a-attestation-*|forward-*)
     release_revision=22
-    release_chart="in-falcone-0.4.6"
+    release_chart="in-falcone-0.4.7"
     ;;
   wrong-start-chart)
     release_chart="in-falcone-0.4.2"
@@ -33,12 +33,12 @@ esac
 case "${FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO:-}" in
   forward-*)
     release_revision=22
-    release_chart="in-falcone-0.4.6"
+    release_chart="in-falcone-0.4.7"
     ;;
 esac
 if [ "$upgrade_count" -gt 0 ]; then
   release_revision=$((release_revision + upgrade_count))
-  release_chart="in-falcone-0.4.6"
+  release_chart="in-falcone-0.4.7"
 fi
 
 case "${1:-}" in

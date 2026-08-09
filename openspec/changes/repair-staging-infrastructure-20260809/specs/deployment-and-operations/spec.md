@@ -16,9 +16,23 @@ SHALL NOT read a Helm release manifest or Secret payload.
 
 - **WHEN** staging selects externally managed ESO with exact namespace and ServiceAccount
 - **THEN** Falcone renders its store, fourteen declarations and auth identity
-- **AND** it renders no object into `external-secrets` and no adoption path
+- **AND** it renders no object into `external-secrets` and no adoption path for
+  any administrator-owned ESO object
 - **AND** create, update, removal, or owner-metadata drift of any protected ESO
   resource fails before the next mutation
+
+#### Scenario: Existing Falcone declarations lack Helm ownership
+
+- **WHEN** the exact fourteen Falcone-owned `ExternalSecret` declarations match
+  the target render but all three Helm owner markers are absent
+- **THEN** dry-run reports the exact adoptable set without mutation
+- **AND** apply validates all fourteen before atomically patching only their
+  owner metadata with UID and resourceVersion tests
+- **AND** exact already-owned retries are idempotent
+- **AND** partial or foreign ownership, identity/spec drift, or concurrency drift
+  fails before Helm upgrade
+- **AND** no generated Secret or administrator-owned ESO object is read or
+  adopted and broad `--take-ownership` is forbidden
 
 ### Requirement: OpenBao upgrades SHALL reconcile auth metadata only
 
@@ -115,7 +129,7 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.6,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.7,
   and neither path uses atomic upgrade or rollback to revision 20
 
 ### Requirement: Phase-A completion SHALL prove final no-root health
