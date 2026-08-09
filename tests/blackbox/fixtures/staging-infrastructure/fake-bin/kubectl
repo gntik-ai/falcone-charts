@@ -1,0 +1,84 @@
+#!/usr/bin/env sh
+set -eu
+
+printf '%s\n' "$*" >>"${FALCONE_STAGING_KUBECTL_LOG:?}"
+scenario="${FALCONE_STAGING_SCENARIO:-safe}"
+state_file="${FALCONE_STAGING_STATE_FILE:?}"
+args="$*"
+
+if [ "$args" = "config current-context" ]; then
+  if [ "$scenario" = "wrong-context" ]; then
+    printf 'production\n'
+  else
+    printf 'default\n'
+  fi
+  exit 0
+fi
+
+case "$args" in
+  "get namespace in-falcone-staging")
+    exit 0
+    ;;
+  "-n in-falcone-staging get pvc falcone-postgresql-vector-data -o json")
+    count=0
+    [ ! -f "$state_file" ] || count="$(cat "$state_file")"
+    count=$((count + 1))
+    printf '%s' "$count" >"$state_file"
+    uid="bbx-pvc-uid"
+    phase="Pending"
+    volume=""
+    if [ "$count" -ge 2 ]; then
+      case "$scenario" in
+        pvc-uid-changed) uid="bbx-pvc-replaced" ;;
+        pvc-phase-changed) phase="Bound" ;;
+        pvc-volume-changed) volume="bbx-pv-late" ;;
+      esac
+    elif [ "$scenario" = "pvc-already-bound" ]; then
+      phase="Bound"
+    fi
+    printf '{"metadata":{"uid":"%s"},"spec":{"volumeName":"%s"},"status":{"phase":"%s"}}\n' \
+      "$uid" "$volume" "$phase"
+    exit 0
+    ;;
+  "get pv -o json")
+    count=0
+    [ ! -f "$state_file" ] || count="$(cat "$state_file")"
+    if [ "$scenario" = "pv-claimref-added" ] && [ "$count" -ge 2 ]; then
+      printf '{"items":[{"spec":{"claimRef":{"uid":"bbx-pvc-uid","namespace":"in-falcone-staging","name":"falcone-postgresql-vector-data"}}}]}\n'
+    else
+      printf '{"items":[]}\n'
+    fi
+    exit 0
+    ;;
+esac
+
+case "$args" in
+  "-n in-falcone-staging get pods"*"-o json")
+    count=0
+    [ ! -f "$state_file" ] || count="$(cat "$state_file")"
+    if [ "$scenario" = "pod-evidence-added" ] && [ "$count" -ge 2 ]; then
+      printf '{"items":[{"metadata":{"name":"bbx-vector-pod"},"spec":{"volumes":[{"persistentVolumeClaim":{"claimName":"falcone-postgresql-vector-data"}}]},"status":{"phase":"Running"}}]}\n'
+    else
+      printf '{"items":[]}\n'
+    fi
+    exit 0
+    ;;
+  "-n in-falcone-staging get pvc falcone-postgresql-vector-data")
+    # Forward recovery checks only whether the exact PVC exists.
+    exit 0
+    ;;
+  "-n in-falcone-staging get externalsecrets.external-secrets.io -o json")
+    printf '{"items":[]}\n'
+    exit 0
+    ;;
+  "-n in-falcone-staging scale statefulset falcone-postgresql-vector --replicas=0"|\
+  "-n in-falcone-staging delete pvc falcone-postgresql-vector-data --wait=true"|\
+  "-n in-falcone-staging wait "*|\
+  "wait "*|\
+  "-n in-falcone-staging rollout status "*)
+    exit 0
+    ;;
+esac
+
+printf 'unexpected kubectl fixture invocation: %s\n' "$args" >&2
+exit 2

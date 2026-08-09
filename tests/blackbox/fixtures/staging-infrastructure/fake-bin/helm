@@ -1,0 +1,39 @@
+#!/usr/bin/env sh
+set -eu
+
+printf '%s\n' "$*" >>"${FALCONE_STAGING_HELM_LOG:?}"
+
+case "${1:-}" in
+  list)
+    printf '[{"name":"falcone","revision":"20"}]\n'
+    ;;
+  template)
+    "${FALCONE_STAGING_REAL_HELM:?}" "$@"
+    if [ "${FALCONE_STAGING_ASSUME_APPROVED_RENDER:-false}" = "true" ]; then
+      # Downstream gate tests model a render that has already passed the image
+      # authority preflight. The unmodified render is used by the dry-run test.
+      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99\n'
+    fi
+    ;;
+  plugin)
+    if [ "${2:-}" = "list" ]; then
+      printf 'NAME VERSION DESCRIPTION\n'
+      printf 'diff 3.9.12 Preview Helm upgrade changes as a diff\n'
+      exit 0
+    fi
+    exit 2
+    ;;
+  diff)
+    [ "${2:-}" = "upgrade" ] || exit 2
+    # The black-box fixture represents an owner-safe, secret-suppressed diff.
+    exit 0
+    ;;
+  upgrade|rollback)
+    # Mutating commands are recorded but never delegated to a real cluster.
+    exit 0
+    ;;
+  *)
+    printf 'unexpected helm fixture invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac

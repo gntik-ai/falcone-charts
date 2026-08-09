@@ -16,7 +16,7 @@ import {
   yamlDocuments,
 } from '../fixtures/blackbox.mjs'
 
-const adoptedArgs = [
+const externalEsoArgs = [
   '--set', 'eso.external-secrets.enabled=false',
   '--set-string', 'global.externalSecrets.operatorNamespace=external-secrets',
   '--set-string', 'global.externalSecrets.operatorServiceAccount=external-secrets',
@@ -43,7 +43,8 @@ function isBundledEsoDeployment(object) {
     && /^eso-external-secrets(?:-|$)/.test(object.metadata?.name ?? '')
 }
 
-test('values schema exposes a first-class managed/adopted ESO contract', () => {
+// bbx-external-eso-001 | fn-external-eso-configuration | OpenSpec #### Scenario: External controller is reused
+test('values schema exposes a first-class managed/externally-managed ESO contract', () => {
   const values = readYaml(resolve(umbrellaChart, 'values.yaml'))
   const schema = JSON.parse(readFileSync(resolve(umbrellaChart, 'values.schema.json'), 'utf8'))
   const enabled = schema?.properties?.eso?.properties?.['external-secrets']?.properties?.enabled
@@ -58,13 +59,14 @@ test('values schema exposes a first-class managed/adopted ESO contract', () => {
   assert.match(operatorNamespace?.pattern ?? '', /a-z0-9/)
 })
 
-test('adopted ESO requires a distinct, explicit external controller namespace', () => {
+// bbx-external-eso-002 | fn-external-eso-configuration | OpenSpec #### Scenario: External controller is reused
+test('externally managed ESO requires a distinct, explicit controller namespace', () => {
   const missing = run('helm', [
     'template', 'falcone-bbx', umbrellaChart,
     '--namespace', 'falcone-bbx',
     '--set', 'eso.external-secrets.enabled=false',
   ])
-  assert.notEqual(missing.status, 0, 'adopted ESO unexpectedly accepted a missing operator namespace')
+  assert.notEqual(missing.status, 0, 'externally managed ESO unexpectedly accepted a missing operator namespace')
   assert.match(combined(missing), /global\.externalSecrets\.operatorNamespace is required/)
 
   const shared = run('helm', [
@@ -74,7 +76,7 @@ test('adopted ESO requires a distinct, explicit external controller namespace', 
     '--set-string', 'global.externalSecrets.operatorNamespace=eso-system',
     '--set-string', 'global.externalSecrets.operatorServiceAccount=external-secrets',
   ])
-  assert.notEqual(shared.status, 0, 'adopted ESO unexpectedly allowed Falcone to own the external namespace')
+  assert.notEqual(shared.status, 0, 'externally managed ESO unexpectedly allowed Falcone to own the external namespace')
   assert.match(combined(shared), /must differ from eso\.eso\.namespace/)
 
   const managedWithExternalNamespace = run('helm', [
@@ -82,10 +84,11 @@ test('adopted ESO requires a distinct, explicit external controller namespace', 
     '--namespace', 'falcone-bbx',
     '--set-string', 'global.externalSecrets.operatorNamespace=external-secrets',
   ])
-  assert.notEqual(managedWithExternalNamespace.status, 0, 'managed ESO unexpectedly accepted adopted-only configuration')
+  assert.notEqual(managedWithExternalNamespace.status, 0, 'managed ESO unexpectedly accepted external-only configuration')
   assert.match(combined(managedWithExternalNamespace), /valid only when eso\.external-secrets\.enabled=false/)
 })
 
+// bbx-external-eso-003 | fn-managed-eso-installation | OpenSpec #### Scenario: External controller is reused
 test('managed ESO keeps the bundled controller, CRDs, webhook wait, and egress policy', () => {
   const { objects } = renderWithCrds()
 
@@ -95,13 +98,14 @@ test('managed ESO keeps the bundled controller, CRDs, webhook wait, and egress p
   assert.ok(objects.some((object) => object.kind === 'NetworkPolicy' && object.metadata?.name === 'eso-to-openbao'))
 })
 
-test('adopted ESO renders only Falcone-owned integration resources and never touches the external namespace', () => {
-  const { objects } = renderWithCrds(adoptedArgs)
+// bbx-external-eso-004 | fn-external-eso-owner-boundary | OpenSpec #### Scenario: External controller is reused
+test('externally managed ESO renders only Falcone-owned integration resources and never touches the external namespace', () => {
+  const { objects } = renderWithCrds(externalEsoArgs)
 
-  assert.equal(objects.filter(isEsoCrd).length, 0, 'adopted mode must not render ESO CRDs')
-  assert.equal(objects.filter(isBundledEsoDeployment).length, 0, 'adopted mode must not render bundled ESO workloads')
-  assert.ok(!objects.some((object) => object.metadata?.name === 'eso-webhook-wait'), 'adopted mode must not wait for Falcone-owned webhook endpoints')
-  assert.ok(!objects.some((object) => object.kind === 'NetworkPolicy' && object.metadata?.name === 'eso-to-openbao'), 'adopted mode must not apply a blanket egress policy to the external controller namespace')
+  assert.equal(objects.filter(isEsoCrd).length, 0, 'externally managed mode must not render ESO CRDs')
+  assert.equal(objects.filter(isBundledEsoDeployment).length, 0, 'externally managed mode must not render bundled ESO workloads')
+  assert.ok(!objects.some((object) => object.metadata?.name === 'eso-webhook-wait'), 'externally managed mode must not wait for Falcone-owned webhook endpoints')
+  assert.ok(!objects.some((object) => object.kind === 'NetworkPolicy' && object.metadata?.name === 'eso-to-openbao'), 'externally managed mode must not apply a blanket egress policy to the external controller namespace')
 
   assert.ok(!objects.some((object) => object.kind === 'Namespace' && object.metadata?.name === 'external-secrets'), 'Falcone must not own the administrator namespace')
   assert.ok(!objects.some((object) => object.metadata?.namespace === 'external-secrets'), 'Falcone must not render any namespaced object into the administrator namespace')
@@ -119,10 +123,10 @@ test('adopted ESO renders only Falcone-owned integration resources and never tou
   assert.ok(ingressNamespaces.includes('external-secrets'), 'OpenBao must admit the configured external ESO controller namespace')
 
   const preflight = objects.find((object) => object.kind === 'Job' && object.metadata?.name === 'eso-preflight')
-  assert.ok(preflight, 'adopted mode must retain the read-only compatibility preflight')
+  assert.ok(preflight, 'externally managed mode must retain the read-only compatibility preflight')
   const script = preflight.spec?.template?.spec?.containers?.[0]?.command?.[2] ?? ''
   const syntax = run('/bin/sh', ['-n'], { input: script })
-  assertSuccess(syntax, 'rendered adopted ESO preflight shell syntax')
+  assertSuccess(syntax, 'rendered externally managed ESO preflight shell syntax')
   assert.match(script, /eso_managed="false"/)
   assert.match(script, /external_eso_namespace="external-secrets"/)
   assert.match(script, /external_eso_service_account="external-secrets"/)

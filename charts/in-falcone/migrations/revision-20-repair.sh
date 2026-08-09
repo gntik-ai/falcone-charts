@@ -92,17 +92,34 @@ if [[ "$mode" == "phase-b" ]]; then selected_args=("${phase_b_args[@]}"); else s
 helm template "$EXPECTED_RELEASE" "$chart_dir" --namespace "$EXPECTED_NAMESPACE" --is-upgrade \
   "${selected_args[@]}" >"$render_file"
 
-approved_digests=(
-  sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a
-  sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d
-  sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34
-  sha256:2669be573ec5d461f8a1e21c58c13817fd1bc14a947dba845ce1cfac8368a054
-  sha256:4fe7a77b01e7e49cd97722a3f55808ec4a09c0c0886680389011ba43796382ba
-  sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99
-)
-for digest in "${approved_digests[@]}"; do
-  grep -qF "@$digest" "$render_file" || { printf 'STAGING_IMAGE_DIGEST_DRIFT digest=%s\n' "$digest" >&2; exit 1; }
-done
+require_render_contract() {
+  local contract="$1"
+  local expected="$2"
+  grep -qF "$expected" "$render_file" || {
+    printf 'STAGING_IMAGE_DIGEST_DRIFT contract=%s\n' "$contract" >&2
+    exit 1
+  }
+}
+
+# Validate each approved digest at the public field that consumes it. This
+# prevents an approved digest appearing on the wrong workload from satisfying
+# the preflight. MCP is deliberately different: consumers combine the separate
+# MCP_RUNTIME_IMAGE and MCP_RUNTIME_IMAGE_DIGEST ConfigMap fields, rather than
+# receiving one repository@digest value.
+require_render_contract control-plane \
+  'image: "ghcr.io/gntik-ai/in-falcone-control-plane@sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a"'
+require_render_contract control-plane-executor \
+  'image: "ghcr.io/gntik-ai/in-falcone-control-plane-executor@sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d"'
+require_render_contract web-console \
+  'image: "ghcr.io/gntik-ai/in-falcone-web-console@sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34"'
+require_render_contract workflow-worker \
+  'image: "ghcr.io/gntik-ai/in-falcone-workflow-worker@sha256:2669be573ec5d461f8a1e21c58c13817fd1bc14a947dba845ce1cfac8368a054"'
+require_render_contract function-executor-runtime \
+  "value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:4fe7a77b01e7e49cd97722a3f55808ec4a09c0c0886680389011ba43796382ba'"
+require_render_contract mcp-runtime-image \
+  'MCP_RUNTIME_IMAGE: "ghcr.io/gntik-ai/in-falcone-mcp-runtime:0.3.0"'
+require_render_contract mcp-runtime-image-digest \
+  'MCP_RUNTIME_IMAGE_DIGEST: "sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99"'
 if grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$render_file"; then
   printf 'EXTERNAL_ESO_OWNER_RENDERED\n' >&2
   exit 1
@@ -186,9 +203,23 @@ successful_vector_pods="$(kubectl -n "$EXPECTED_NAMESPACE" get pods \
 # Re-read immutable identity and state immediately after confirmation. Any change
 # expires the confirmation; no wildcard or label-wide deletion is used.
 fresh_pvc_json="$(kubectl -n "$EXPECTED_NAMESPACE" get pvc "$EXPECTED_PVC" -o json)"
-[[ "$(printf '%s' "$fresh_pvc_json" | jq -r '.metadata.uid')" == "$actual_pvc_uid" ]] || exit 1
-[[ "$(printf '%s' "$fresh_pvc_json" | jq -r '.status.phase // ""')" == "Pending" ]] || exit 1
-[[ -z "$(printf '%s' "$fresh_pvc_json" | jq -r '.spec.volumeName // ""')" ]] || exit 1
+fresh_pvc_uid="$(printf '%s' "$fresh_pvc_json" | jq -r '.metadata.uid')"
+fresh_phase="$(printf '%s' "$fresh_pvc_json" | jq -r '.status.phase // ""')"
+fresh_volume_name="$(printf '%s' "$fresh_pvc_json" | jq -r '.spec.volumeName // ""')"
+[[ "$fresh_pvc_uid" == "$actual_pvc_uid" ]] || { printf 'VECTOR_PVC_STATE_CHANGED field=uid\n' >&2; exit 1; }
+[[ "$fresh_phase" == "Pending" ]] || { printf 'VECTOR_PVC_STATE_CHANGED field=phase actual=%s\n' "$fresh_phase" >&2; exit 1; }
+[[ -z "$fresh_volume_name" ]] || { printf 'VECTOR_PVC_STATE_CHANGED field=volumeName\n' >&2; exit 1; }
+
+fresh_pv_refs="$(kubectl get pv -o json | jq --arg uid "$actual_pvc_uid" --arg ns "$EXPECTED_NAMESPACE" --arg name "$EXPECTED_PVC" \
+  '[.items[] | select(.spec.claimRef.uid == $uid or (.spec.claimRef.namespace == $ns and .spec.claimRef.name == $name))] | length')"
+[[ "$fresh_pv_refs" == 0 ]] || { printf 'VECTOR_PVC_STATE_CHANGED evidence=pv-claimref\n' >&2; exit 1; }
+fresh_pod_refs="$(kubectl -n "$EXPECTED_NAMESPACE" get pods -o json | jq --arg claim "$EXPECTED_PVC" \
+  '[.items[] | select(any(.spec.volumes[]?; .persistentVolumeClaim.claimName == $claim))] | length')"
+[[ "$fresh_pod_refs" == 0 ]] || { printf 'VECTOR_PVC_STATE_CHANGED evidence=pod-reference count=%s\n' "$fresh_pod_refs" >&2; exit 1; }
+fresh_successful_vector_pods="$(kubectl -n "$EXPECTED_NAMESPACE" get pods \
+  -l app.kubernetes.io/instance="$EXPECTED_RELEASE",app.kubernetes.io/name=postgresql-vector -o json \
+  | jq '[.items[] | select(.status.phase == "Succeeded")] | length')"
+[[ "$fresh_successful_vector_pods" == 0 ]] || { printf 'VECTOR_PVC_STATE_CHANGED evidence=data-bearing-pod\n' >&2; exit 1; }
 
 kubectl -n "$EXPECTED_NAMESPACE" scale statefulset "$EXPECTED_VECTOR_STATEFULSET" --replicas=0
 kubectl -n "$EXPECTED_NAMESPACE" delete pvc "$EXPECTED_PVC" --wait=true
