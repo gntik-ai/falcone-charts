@@ -8,7 +8,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.7"
+EXPECTED_REPAIR_VERSION="0.4.8"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -75,7 +75,37 @@ release_json="$(helm list -n "$EXPECTED_NAMESPACE" --filter "^${EXPECTED_RELEASE
 actual_release="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].name else empty end')"
 actual_revision="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].revision else empty end')"
 actual_chart="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].chart else empty end')"
-[[ "$actual_release" == "$EXPECTED_RELEASE" && -n "$actual_revision" && -n "$actual_chart" ]] || die "TARGET_RELEASE_MISSING"
+actual_status="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].status else empty end')"
+[[ "$actual_release" == "$EXPECTED_RELEASE" && -n "$actual_revision" && -n "$actual_chart" && -n "$actual_status" ]] || die "TARGET_RELEASE_MISSING"
+
+if [[ "$actual_revision" == 21 ]]; then
+  [[ "$actual_status" == "failed" ]] || die "FAILED_RESUME_LIST_STATUS_UNSAFE"
+  history="$(helm history "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" -o json)" || die "HELM_HISTORY_UNAVAILABLE"
+  printf '%s' "$history" | jq -e 'sort_by(.revision) | last | (.revision == 21 and .status == "failed" and .chart == "in-falcone-0.4.7" and ((.description // "") | test("falcone-in-falcone-webhook-key-credential")))' >/dev/null || die "FAILED_RESUME_STATE_UNSAFE"
+  printf '%s' "$history" | jq -e 'any(.[]; .revision == 20 and .status == "deployed" and .chart == "in-falcone-0.4.1")' >/dev/null || die "FAILED_RESUME_SOURCE_UNSAFE"
+elif [[ "$actual_revision" == 20 ]]; then
+  [[ "$actual_status" == "deployed" ]] || die "SOURCE_RELEASE_STATUS_UNSAFE actual=${actual_status}"
+fi
+
+legacy_values="$(helm get values "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" --revision 20 -o json)" || die "LEGACY_WEBHOOK_VALUES_UNAVAILABLE"
+printf '%s' "$legacy_values" | jq -e '
+  .global.webhookSigningKey.create == false
+  and .global.webhookSigningKey.secretName == "falcone-webhook-signing-key-c25-legacy"
+  and .global.webhookSigningKey.secretKey == "key"
+  and .global.webhookSigningKey.adoption.mode == "legacy"
+  and .global.webhookSigningKey.adoption.requestId == "c25-staging-adopt-20260723-01"
+  and .global.webhookSigningKey.rotation.action == "none"
+  and .global.webhookSigningKey.rotation.requestId == ""
+  and .global.webhookSigningKey.rotation.sourceSecretName == ""
+  and .global.webhookSigningKey.rotation.sourceSecretKey == ""
+  and .global.webhookSigningKey.rotation.rotationId == ""
+  and .global.webhookSigningKey.rotation.recoveryWindowSeconds == 604800' >/dev/null || die "LEGACY_WEBHOOK_CONTRACT_DRIFT"
+deployment_json="$(kubectl -n "$EXPECTED_NAMESPACE" get deployment falcone-control-plane -o json)" || die "LEGACY_WEBHOOK_DEPLOYMENT_UNAVAILABLE"
+printf '%s' "$deployment_json" | jq -e '
+  ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY")] | any(.valueFrom.secretKeyRef.name == "falcone-webhook-signing-key-c25-legacy" and .valueFrom.secretKeyRef.key == "key"))
+  and ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY_MODE")] | any(.value == "legacy"))
+  and ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY_MANAGED")] | any(.value == "false"))
+  and ((.spec.template.metadata.annotations["in-falcone.io/webhook-key-id"] // "") | test("^wk1:[0-9a-f]{64}$"))' >/dev/null || die "LEGACY_WEBHOOK_DEPLOYMENT_DRIFT"
 
 fixture_legacy=false
 if [[ -n "${FALCONE_STAGING_REAL_HELM:-}" && -n "${FALCONE_STAGING_HELM_LOG:-}" \
@@ -159,6 +189,17 @@ fi
 
 args=(
   -f "$staging_values"
+  --set global.webhookSigningKey.create=false
+  --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
+  --set-string global.webhookSigningKey.secretKey=key
+  --set-string global.webhookSigningKey.adoption.mode=legacy
+  --set-string global.webhookSigningKey.adoption.requestId=c25-staging-adopt-20260723-01
+  --set-string global.webhookSigningKey.rotation.action=none
+  --set-string global.webhookSigningKey.rotation.requestId=
+  --set-string global.webhookSigningKey.rotation.sourceSecretName=
+  --set-string global.webhookSigningKey.rotation.sourceSecretKey=
+  --set-string global.webhookSigningKey.rotation.rotationId=
+  --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set global.webhookDatabase.migration.backupVerified=true
   --set global.webhookDatabase.migration.parityVerified=true

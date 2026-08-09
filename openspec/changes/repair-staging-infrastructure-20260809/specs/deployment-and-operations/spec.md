@@ -129,7 +129,7 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.7,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.8,
   and neither path uses atomic upgrade or rollback to revision 20
 
 ### Requirement: Phase-A completion SHALL prove final no-root health

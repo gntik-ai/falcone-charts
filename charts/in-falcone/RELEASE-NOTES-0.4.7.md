@@ -1,6 +1,6 @@
 # In Falcone chart 0.4.7
 
-Release date: pending publication. Chart 0.4.7 retains the architecture,
+Release date: superseded by immutable chart 0.4.8. Chart 0.4.7 retained the architecture,
 component versions, Falcone main revision `61540248`, and six verified
 first-party image digests from chart 0.4.6.
 
@@ -20,6 +20,6 @@ identity drift, and concurrent changes fail closed. The repair never uses broad
 Services, RBAC, or namespace.
 
 Chart 0.4.6 remains the historical published repair blocked by that ownership
-gate and is not overwritten. Chart 0.4.7 changes no public API, schema, storage,
-authorization, image, or runtime contract. Chart 0.4.7 is the next active
-repair target.
+ gate and is not overwritten. Chart 0.4.7 changed no public API, schema, storage,
+authorization, image, or runtime contract. Chart 0.4.7 is superseded; chart
+0.4.8 is the active repair target.

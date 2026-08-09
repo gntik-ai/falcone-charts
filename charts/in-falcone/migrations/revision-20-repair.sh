@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.7"
+EXPECTED_REPAIR_VERSION="0.4.8"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -92,14 +92,60 @@ read_release() {
   release_json="$(helm list -n "$EXPECTED_NAMESPACE" --filter "^${EXPECTED_RELEASE}$" -o json)"
   actual_revision="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].revision else empty end')"
   actual_chart="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].chart else empty end')"
-  [[ -n "$actual_revision" && -n "$actual_chart" ]] || die "TARGET_RELEASE_MISSING"
+  actual_status="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].status else empty end')"
+  [[ -n "$actual_revision" && -n "$actual_chart" && -n "$actual_status" ]] || die "TARGET_RELEASE_MISSING"
 }
 read_release
 
+validate_failed_resume_state() {
+  local history latest prior
+  history="$(helm history "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" -o json)" || die "HELM_HISTORY_UNAVAILABLE"
+  latest="$(printf '%s' "$history" | jq -c 'sort_by(.revision) | last')"
+  prior="$(printf '%s' "$history" | jq -c 'sort_by(.revision) | map(select(.revision == 20)) | last')"
+  printf '%s' "$latest" | jq -e '.revision == 21 and .status == "failed" and .chart == "in-falcone-0.4.7" and ((.description // "") | test("falcone-in-falcone-webhook-key-credential"))' >/dev/null || die "FAILED_RESUME_STATE_UNSAFE"
+  printf '%s' "$prior" | jq -e '.revision == 20 and .status == "deployed" and .chart == "in-falcone-0.4.1"' >/dev/null || die "FAILED_RESUME_SOURCE_UNSAFE"
+  printf 'failed-resume=validated failedRevision=21 sourceRevision=20 sourceChart=in-falcone-0.4.1\n'
+}
+
+validate_legacy_webhook_contract() {
+  local values
+  values="$(helm get values "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" --revision 20 -o json)" || die "LEGACY_WEBHOOK_VALUES_UNAVAILABLE"
+  printf '%s' "$values" | jq -e '
+    .global.webhookSigningKey.create == false
+    and .global.webhookSigningKey.secretName == "falcone-webhook-signing-key-c25-legacy"
+    and .global.webhookSigningKey.secretKey == "key"
+    and .global.webhookSigningKey.adoption.mode == "legacy"
+    and .global.webhookSigningKey.adoption.requestId == "c25-staging-adopt-20260723-01"
+    and .global.webhookSigningKey.rotation.action == "none"
+    and .global.webhookSigningKey.rotation.requestId == ""
+    and .global.webhookSigningKey.rotation.sourceSecretName == ""
+    and .global.webhookSigningKey.rotation.sourceSecretKey == ""
+    and .global.webhookSigningKey.rotation.rotationId == ""
+    and .global.webhookSigningKey.rotation.recoveryWindowSeconds == 604800' >/dev/null || die "LEGACY_WEBHOOK_CONTRACT_DRIFT"
+  local deployment
+  deployment="$(kubectl -n "$EXPECTED_NAMESPACE" get deployment falcone-control-plane -o json)" || die "LEGACY_WEBHOOK_DEPLOYMENT_UNAVAILABLE"
+  printf '%s' "$deployment" | jq -e '
+    ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY")]
+      | any(.valueFrom.secretKeyRef.name == "falcone-webhook-signing-key-c25-legacy" and .valueFrom.secretKeyRef.key == "key"))
+    and ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY_MODE")]
+      | any(.value == "legacy"))
+    and ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY_MANAGED")]
+      | any(.value == "false"))
+    and ((.spec.template.metadata.annotations["in-falcone.io/webhook-key-id"] // "") | test("^wk1:[0-9a-f]{64}$"))' >/dev/null || die "LEGACY_WEBHOOK_DEPLOYMENT_DRIFT"
+  printf 'legacy-webhook-contract=validated sourceRevision=20 secretName=falcone-webhook-signing-key-c25-legacy adoption=legacy rotation=none\n'
+}
+
+if [[ "$actual_revision" == 21 ]]; then
+  [[ "$actual_status" == "failed" ]] || die "FAILED_RESUME_LIST_STATUS_UNSAFE"
+  validate_failed_resume_state
+fi
+validate_legacy_webhook_contract
+
 if [[ "$mode" == phase-a || "$mode" == preflight ]]; then
-  [[ "$actual_revision" == "$EXPECTED_SOURCE_REVISION" ]] || \
+  [[ "$actual_revision" == "$EXPECTED_SOURCE_REVISION" || "$actual_revision" == 21 ]] || \
     die "REVISION_GATE_FAILED expected=${EXPECTED_SOURCE_REVISION} actual=${actual_revision}; use forward recovery after Phase A"
-  [[ "$actual_chart" == "$EXPECTED_SOURCE_CHART" ]] || \
+  [[ "$actual_revision" == 21 || "$actual_status" == "deployed" ]] || die "SOURCE_RELEASE_STATUS_UNSAFE actual=${actual_status}"
+  [[ "$actual_revision" == 21 || "$actual_chart" == "$EXPECTED_SOURCE_CHART" ]] || \
     die "STARTING_CHART_MISMATCH expected=${EXPECTED_SOURCE_CHART} actual=${actual_chart}"
 fi
 
@@ -220,7 +266,11 @@ fi
 
 # Give an inexact Phase-A target a useful JIT error before loading evidence.
 if [[ "$apply" == true && "$mode" == phase-a \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"* ]]; then
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"* \
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/"* ]]; then
+  if [[ "$actual_revision" == 21 && "$actual_status" == failed ]]; then
+    die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/${actual_chart}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
+  fi
   die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}/${EXPECTED_SOURCE_CHART}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
 fi
 
@@ -266,6 +316,17 @@ diff_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision20-diff.XXXXXX")"
 
 phase_a_args=(
   -f "$staging_values"
+  --set global.webhookSigningKey.create=false
+  --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
+  --set-string global.webhookSigningKey.secretKey=key
+  --set-string global.webhookSigningKey.adoption.mode=legacy
+  --set-string global.webhookSigningKey.adoption.requestId=c25-staging-adopt-20260723-01
+  --set-string global.webhookSigningKey.rotation.action=none
+  --set-string global.webhookSigningKey.rotation.requestId=
+  --set-string global.webhookSigningKey.rotation.sourceSecretName=
+  --set-string global.webhookSigningKey.rotation.sourceSecretKey=
+  --set-string global.webhookSigningKey.rotation.rotationId=
+  --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set-string postgresqlVector.persistence.storageClass=hcloud-volumes
   --set openbao.openbao.authReconcile.allowRecoveryRoot=true
@@ -275,6 +336,17 @@ phase_a_args=(
 )
 phase_a_no_root_args=(
   -f "$staging_values"
+  --set global.webhookSigningKey.create=false
+  --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
+  --set-string global.webhookSigningKey.secretKey=key
+  --set-string global.webhookSigningKey.adoption.mode=legacy
+  --set-string global.webhookSigningKey.adoption.requestId=c25-staging-adopt-20260723-01
+  --set-string global.webhookSigningKey.rotation.action=none
+  --set-string global.webhookSigningKey.rotation.requestId=
+  --set-string global.webhookSigningKey.rotation.sourceSecretName=
+  --set-string global.webhookSigningKey.rotation.sourceSecretKey=
+  --set-string global.webhookSigningKey.rotation.rotationId=
+  --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set-string postgresqlVector.persistence.storageClass=hcloud-volumes
   --set openbao.openbao.authReconcile.allowRecoveryRoot=false
@@ -284,6 +356,17 @@ phase_a_no_root_args=(
 )
 phase_b_args=(
   -f "$staging_values"
+  --set global.webhookSigningKey.create=false
+  --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
+  --set-string global.webhookSigningKey.secretKey=key
+  --set-string global.webhookSigningKey.adoption.mode=legacy
+  --set-string global.webhookSigningKey.adoption.requestId=c25-staging-adopt-20260723-01
+  --set-string global.webhookSigningKey.rotation.action=none
+  --set-string global.webhookSigningKey.rotation.requestId=
+  --set-string global.webhookSigningKey.rotation.sourceSecretName=
+  --set-string global.webhookSigningKey.rotation.sourceSecretKey=
+  --set-string global.webhookSigningKey.rotation.rotationId=
+  --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set global.webhookDatabase.migration.backupVerified=true
   --set global.webhookDatabase.migration.parityVerified=true
@@ -497,6 +580,8 @@ fi
 if [[ "$mode" == phase-a ]]; then
   if [[ "$fixture_failure_seam" == true ]]; then
     expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"
+  elif [[ "$actual_revision" == 21 ]]; then
+    expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/${actual_chart}->${EXPECTED_REPAIR_CHART}/${package_digest}"
   else
     expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}/${EXPECTED_SOURCE_CHART}->${EXPECTED_REPAIR_CHART}/${package_digest}"
   fi

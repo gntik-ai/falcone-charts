@@ -9,8 +9,8 @@
     "chart": "in-falcone-0.4.1"
   },
   "repair": {
-    "chart": "in-falcone-0.4.7",
-    "packageDigest": "sha256:0460460460460460460460460460460460460460460460460460460460460460"
+    "chart": "in-falcone-0.4.8",
+    "packageDigest": "sha256:0480480480480480480480480480480480480480480480480480480480480480"
   },
   "evidence": {
     "reference": "bbx-backup-revision20",

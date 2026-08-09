@@ -36,13 +36,13 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
 const phaseATemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
-const repairDigest = 'sha256:0460460460460460460460460460460460460460460460460460460460460460'
+const repairDigest = 'sha256:0480480480480480480480480480480480480480480480480480480480480480'
 const repairVersion = readFileSync(resolve(umbrellaChart, 'Chart.yaml'), 'utf8')
   .match(/^version:\s*([^\s]+)\s*$/m)?.[1]
 assert.ok(repairVersion, 'public umbrella chart has no unique top-level version')
 const repairChart = `in-falcone-${repairVersion}`
 const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->${repairChart}/${repairDigest}`
-const forwardConfirmation = `default/in-falcone-staging/falcone@22/${repairChart}/${repairDigest}`
+const forwardConfirmation = `default/in-falcone-staging/falcone@23/${repairChart}/${repairDigest}`
 const exactNames = JSON.parse(readFileSync(revision20Manifest, 'utf8'))
   .falconeIntegrationResources
   .filter((resource) => resource.kind === 'ExternalSecret' && resource.namespace === 'in-falcone-staging')
@@ -65,6 +65,8 @@ function materializeAttestation(template, work, filename) {
   document.evidence.validUntil = new Date(now + 10 * 60_000).toISOString()
   if (document.repair) document.repair.chart = repairChart
   if (document.result) document.result.chart = repairChart
+  if (document.repair) document.repair.packageDigest = repairDigest
+  if (document.result) document.result.packageDigest = repairDigest
   const path = resolve(work, filename)
   writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`)
   return path

@@ -8,12 +8,17 @@ helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${FALCONE_STAGING_STATE_FILE:?}.h
 upgrade_count=0
 [ ! -f "$helm_state" ] || upgrade_count="$(cat "$helm_state")"
 real_helm="${FALCONE_STAGING_HELM_DELEGATE:-${FALCONE_STAGING_REAL_HELM:-}}"
+repair_version="${FALCONE_STAGING_REPAIR_VERSION:-0.4.8}"
+repair_chart="in-falcone-${repair_version}"
+
+legacy_values='{"global":{"webhookSigningKey":{"create":false,"secretName":"falcone-webhook-signing-key-c25-legacy","secretKey":"key","adoption":{"mode":"legacy","requestId":"c25-staging-adopt-20260723-01"},"rotation":{"action":"none","requestId":"","sourceSecretName":"","sourceSecretKey":"","rotationId":"","recoveryWindowSeconds":604800}}}}'
+failed_hook_description='Upgrade "falcone" failed: pre-upgrade hooks failed: job falcone-in-falcone-webhook-key-credential failed: CREDENTIAL_MANAGED_SECRET_MISSING'
 
 require_repair_version() {
   case " $* " in
-    *" --version 0.4.7 "*) ;;
+    *" --version $repair_version "*) ;;
     *)
-      printf 'REPAIR_CHART_VERSION_MISMATCH expected=0.4.7 call=%s\n' "$*" >&2
+      printf 'REPAIR_CHART_VERSION_MISMATCH expected=%s call=%s\n' "$repair_version" "$*" >&2
       exit 64
       ;;
   esac
@@ -21,30 +26,42 @@ require_repair_version() {
 
 release_revision=20
 release_chart="in-falcone-0.4.1"
+release_status="deployed"
 case "$scenario" in
   phase-a-complete|phase-a-attestation-*|forward-*)
-    release_revision=22
-    release_chart="in-falcone-0.4.7"
+    release_revision=23
+    release_chart="$repair_chart"
     ;;
   wrong-start-chart)
     release_chart="in-falcone-0.4.2"
     ;;
+  failed-resume-*)
+    release_revision=21
+    release_chart="in-falcone-0.4.7"
+    release_status="failed"
+    ;;
 esac
 case "${FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO:-}" in
   forward-*)
-    release_revision=22
-    release_chart="in-falcone-0.4.7"
+    release_revision=23
+    release_chart="$repair_chart"
     ;;
+esac
+case "$scenario" in
+  failed-resume-list-status-drift) release_status="pending-upgrade" ;;
+  failed-resume-list-revision-drift) release_revision=22 ;;
+  failed-resume-list-chart-drift) release_chart="in-falcone-0.4.6" ;;
 esac
 if [ "$upgrade_count" -gt 0 ]; then
   release_revision=$((release_revision + upgrade_count))
-  release_chart="in-falcone-0.4.7"
+  release_chart="$repair_chart"
+  release_status="deployed"
 fi
 
 case "${1:-}" in
   list)
     printf '[{"name":"falcone","namespace":"in-falcone-staging","revision":"%s","chart":"%s","app_version":"0.3.1","status":"deployed"}]\n' \
-      "$release_revision" "$release_chart"
+      "$release_revision" "$release_chart" | sed "s/\"status\":\"deployed\"/\"status\":\"$release_status\"/"
     ;;
   pull)
     require_repair_version "$@"
@@ -127,6 +144,16 @@ case "${1:-}" in
     ;;
   get)
     case "${2:-}" in
+      values)
+        case "$scenario" in
+          custody-values-missing) printf '{}\n' ;;
+          custody-values-create-drift) printf '%s\n' "$legacy_values" | jq '.global.webhookSigningKey.create = true' ;;
+          custody-values-name-drift) printf '%s\n' "$legacy_values" | jq '.global.webhookSigningKey.secretName = "another-reference"' ;;
+          custody-values-adoption-drift) printf '%s\n' "$legacy_values" | jq '.global.webhookSigningKey.adoption.mode = "none"' ;;
+          custody-values-rotation-drift) printf '%s\n' "$legacy_values" | jq '.global.webhookSigningKey.rotation.requestId = "unexpected-request"' ;;
+          *) printf '%s\n' "$legacy_values" ;;
+        esac
+        ;;
       manifest)
         printf 'SECRET_BEARING_HELM_MANIFEST_ACCESS_FORBIDDEN\n' >&2
         exit 77
@@ -139,8 +166,37 @@ case "${1:-}" in
     esac
     ;;
   status)
-    printf '{"name":"falcone","namespace":"in-falcone-staging","version":%s,"chart":"%s","info":{"status":"deployed"}}\n' \
-      "$release_revision" "$release_chart"
+    printf '{"name":"falcone","namespace":"in-falcone-staging","version":%s,"chart":"%s","info":{"status":"%s"}}\n' \
+      "$release_revision" "$release_chart" "$release_status"
+    ;;
+  history)
+    history_revision=21
+    history_chart="in-falcone-0.4.7"
+    history_status="failed"
+    history_description="$failed_hook_description"
+    source_status="deployed"
+    source_chart="in-falcone-0.4.1"
+    case "$scenario" in
+      failed-resume-history-revision-drift) history_revision=22 ;;
+      failed-resume-history-chart-drift) history_chart="in-falcone-0.4.6" ;;
+      failed-resume-history-status-drift) history_status="pending-upgrade" ;;
+      failed-resume-history-description-drift) history_description='Upgrade "falcone" failed: another pre-upgrade hook failed' ;;
+      failed-resume-history-source-missing)
+        jq -nc --arg description "$failed_hook_description" \
+          '[{revision:21,status:"failed",chart:"in-falcone-0.4.7",description:$description}]'
+        exit 0
+        ;;
+      failed-resume-history-source-status-drift) source_status="superseded" ;;
+      failed-resume-history-source-chart-drift) source_chart="in-falcone-0.4.2" ;;
+    esac
+    jq -nc \
+      --arg source_status "$source_status" --arg source_chart "$source_chart" \
+      --argjson history_revision "$history_revision" --arg history_status "$history_status" \
+      --arg history_chart "$history_chart" --arg history_description "$history_description" \
+      '[
+        {revision:20,status:$source_status,chart:$source_chart,description:"Upgrade complete"},
+        {revision:$history_revision,status:$history_status,chart:$history_chart,description:$history_description}
+      ]'
     ;;
   upgrade)
     require_repair_version "$@"

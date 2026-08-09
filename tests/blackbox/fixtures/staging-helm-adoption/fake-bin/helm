@@ -56,7 +56,7 @@ function releaseState() {
   const forward = baseScenario.startsWith('forward-')
   const upgrades = Number.parseInt(readFileOr(process.env.FALCONE_STAGING_HELM_STATE_FILE, '0'), 10)
   return {
-    revision: (forward ? 22 : 20) + upgrades,
+    revision: (forward ? 23 : 20) + upgrades,
     chart: upgrades > 0 || forward ? repairChartName() : 'in-falcone-0.4.1',
   }
 }

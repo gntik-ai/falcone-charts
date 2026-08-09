@@ -10,6 +10,13 @@ scale_state="${FALCONE_STAGING_SCALE_STATE_FILE:-${state_file}.scaled}"
 external_secrets_fixture="${FALCONE_STAGING_EXTERNAL_SECRETS_FIXTURE:-}"
 args="$*"
 
+case " $args " in
+  *" get secret "*|*" get secrets "*)
+    printf 'SECRET_DATA_READ_FORBIDDEN\n' >&2
+    exit 77
+    ;;
+esac
+
 if [ "$args" = "config current-context" ]; then
   if [ "$scenario" = "wrong-context" ]; then
     printf 'production\n'
@@ -90,6 +97,26 @@ case "$args" in
         ;;
       *) cat "$external_secrets_fixture" ;;
     esac
+    exit 0
+    ;;
+  "-n in-falcone-staging get deployment falcone-control-plane -o json")
+    signing_mode="legacy"
+    signing_managed="false"
+    signing_name="falcone-webhook-signing-key-c25-legacy"
+    signing_key="key"
+    signing_id="wk1:5fc9546bfa1d386a4d27fd80823bb1fe679ddf9856ba96cc5fddab79189b50cd"
+    case "$scenario" in
+      custody-deployment-missing)
+        printf '{"metadata":{"name":"falcone-control-plane","namespace":"in-falcone-staging"},"spec":{"template":{"metadata":{"annotations":{}},"spec":{"containers":[{"name":"control-plane","env":[]}]}}}}\n'
+        exit 0
+        ;;
+      custody-deployment-mode-drift) signing_mode="canonical-v1" ;;
+      custody-deployment-managed-drift) signing_managed="true" ;;
+      custody-deployment-reference-drift) signing_name="another-reference" ;;
+      custody-deployment-id-drift) signing_id="canonical-v1:unexpected" ;;
+    esac
+    printf '{"metadata":{"name":"falcone-control-plane","namespace":"in-falcone-staging"},"spec":{"template":{"metadata":{"annotations":{"in-falcone.io/webhook-key-mode":"%s","in-falcone.io/webhook-key-request-id":"c25-staging-adopt-20260723-01","in-falcone.io/webhook-key-action":"none","in-falcone.io/webhook-key-id":"%s"}},"spec":{"containers":[{"name":"control-plane","env":[{"name":"WEBHOOK_SIGNING_KEY","valueFrom":{"secretKeyRef":{"name":"%s","key":"%s","optional":false}}},{"name":"WEBHOOK_SIGNING_KEY_MODE","value":"%s"},{"name":"WEBHOOK_SIGNING_KEY_MANAGED","value":"%s"}]}]}}}}\n' \
+      "$signing_mode" "$signing_id" "$signing_name" "$signing_key" "$signing_mode" "$signing_managed"
     exit 0
     ;;
   "-n secret-store logs job/openbao-auth-reconcile")

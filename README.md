@@ -93,7 +93,7 @@ missing declaration fails before adoption. This does not use Helm's broad
 `--take-ownership` option and never applies to the external ESO controller,
 CRDs, webhooks, Services, RBAC, or namespace.
 
-For chart 0.4.7 staging repair details—rotating OpenBao reviewer credentials,
+For chart 0.4.8 staging repair details—rotating OpenBao reviewer credentials,
 FerretDB rollout safety, local-path limitations, six approved image digests, and
 the revision-20 two-phase procedure—use the
 [staging infrastructure repair runbook](charts/in-falcone/docs/staging-infrastructure-repair.md).
