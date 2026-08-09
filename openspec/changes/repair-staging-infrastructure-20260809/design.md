@@ -37,7 +37,7 @@
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.3 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.4 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
 9. A secret-suppressed semantic diff protects the sanitized 21-resource external
    ESO inventory, including cluster-scoped objects. Exact owner metadata is

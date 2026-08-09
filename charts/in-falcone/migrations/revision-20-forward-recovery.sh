@@ -8,7 +8,8 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_CHART="in-falcone-0.4.3"
+EXPECTED_REPAIR_VERSION="0.4.4"
+EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
 
@@ -144,14 +145,14 @@ fi
 if [[ "$apply" == true && "$fixture_legacy" == false && -z "${FALCONE_STAGING_REAL_HELM:-}" ]]; then
   chart_package_dir="$(mktemp -d "${TMPDIR:-/tmp}/falcone-recovery-package.XXXXXX")"
   pull_output="$(helm pull oci://ghcr.io/gntik-ai/charts/in-falcone \
-    --version 0.4.3 --untar --untardir "$chart_package_dir" 2>&1)" || die "REPAIR_PACKAGE_PULL_FAILED"
+    --version "$EXPECTED_REPAIR_VERSION" --untar --untardir "$chart_package_dir" 2>&1)" || die "REPAIR_PACKAGE_PULL_FAILED"
   pulled_digest="$(printf '%s\n' "$pull_output" | awk '/^Digest: sha256:[0-9a-f]+$/ {print $2}' | tail -n1)"
   [[ "$pulled_digest" == "$package_digest" ]] || die "REPAIR_PACKAGE_DIGEST_MISMATCH expected=${package_digest} actual=${pulled_digest:-missing}"
   chart_source="$chart_package_dir/in-falcone"
   staging_values="$chart_source/values/staging.yaml"
   [[ -f "$staging_values" ]] || die "REPAIR_PACKAGE_STAGING_VALUES_MISSING"
   pulled_version="$(awk '$1 == "version:" {print $2; exit}' "$chart_source/Chart.yaml")"
-  [[ "$pulled_version" == 0.4.3 ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
+  [[ "$pulled_version" == "$EXPECTED_REPAIR_VERSION" ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
 fi
 
 args=(
@@ -163,7 +164,7 @@ args=(
 )
 render_file="$(mktemp "${TMPDIR:-/tmp}/falcone-forward-render.XXXXXX")"
 diff_file="$(mktemp "${TMPDIR:-/tmp}/falcone-forward-diff.XXXXXX")"
-helm template "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --is-upgrade "${args[@]}" >"$render_file"
+helm template "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --is-upgrade "${args[@]}" >"$render_file"
 grep -qF 'storageClassName: local-path' "$render_file" || die "FORWARD_RENDER_STORAGE_DRIFT"
 grep -qF 'MCP_RUNTIME_IMAGE_DIGEST: "sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb"' "$render_file" || \
   die "FORWARD_RENDER_IMAGE_DRIFT"
@@ -171,7 +172,7 @@ grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$render_file" && die "EX
 
 if helm plugin list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx diff; then
   status=0
-  helm diff upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --suppress-secrets "${args[@]}" >"$diff_file" || status=$?
+  helm diff upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --suppress-secrets "${args[@]}" >"$diff_file" || status=$?
   [[ "$status" == 0 || "$status" == 2 ]] || die "HELM_DIFF_FAILED"
   diff_headers="$(grep -Ei '^[^[:space:]].*(has (been )?(added|removed)|has changed):$' "$diff_file" || true)"
   if printf '%s\n' "$diff_headers" | grep -Eiq '(^|[, /])external-secrets([, /]|$)|external-secrets-controller|external-secrets-cert-controller|externalsecret-validate|secretstore-validate|clustersecretstores\.external-secrets\.io'; then
@@ -233,7 +234,7 @@ OWNER_INVENTORY
 
 owner_before="$(owner_metadata)"
 mutation_started=true
-helm upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${args[@]}"
+helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${args[@]}"
 if kubectl -n "$EXPECTED_NAMESPACE" get pvc "$EXPECTED_PVC" >/dev/null 2>&1; then
   kubectl -n "$EXPECTED_NAMESPACE" wait --for=jsonpath='{.status.phase}'=Bound pvc/"$EXPECTED_PVC" --timeout=5m
 fi

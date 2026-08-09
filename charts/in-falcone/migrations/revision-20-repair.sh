@@ -9,7 +9,8 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_CHART="in-falcone-0.4.3"
+EXPECTED_REPAIR_VERSION="0.4.4"
+EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
 
@@ -244,14 +245,14 @@ load_attested_chart() {
   chart_package_dir="$(mktemp -d "${TMPDIR:-/tmp}/falcone-repair-package.XXXXXX")"
   local pull_output pulled_digest pulled_version
   pull_output="$(helm pull oci://ghcr.io/gntik-ai/charts/in-falcone \
-    --version 0.4.3 --untar --untardir "$chart_package_dir" 2>&1)" || die "REPAIR_PACKAGE_PULL_FAILED"
+    --version "$EXPECTED_REPAIR_VERSION" --untar --untardir "$chart_package_dir" 2>&1)" || die "REPAIR_PACKAGE_PULL_FAILED"
   pulled_digest="$(printf '%s\n' "$pull_output" | awk '/^Digest: sha256:[0-9a-f]+$/ {print $2}' | tail -n1)"
   [[ "$pulled_digest" == "$package_digest" ]] || die "REPAIR_PACKAGE_DIGEST_MISMATCH expected=${package_digest} actual=${pulled_digest:-missing}"
   chart_source="$chart_package_dir/in-falcone"
   staging_values="$chart_source/values/staging.yaml"
   [[ -f "$staging_values" ]] || die "REPAIR_PACKAGE_STAGING_VALUES_MISSING"
   pulled_version="$(awk '$1 == "version:" {print $2; exit}' "$chart_source/Chart.yaml")"
-  [[ "$pulled_version" == 0.4.3 ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
+  [[ "$pulled_version" == "$EXPECTED_REPAIR_VERSION" ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
 }
 if [[ "$apply" == true && "$fixture_failure_seam" == false && "$legacy_phase_b_seam" == false ]]; then
   load_attested_chart
@@ -289,7 +290,7 @@ if [[ "$mode" == phase-b ]]; then selected_args=("${phase_b_args[@]}"); else sel
 
 render_and_validate_images() {
   local output="$1"
-  helm template "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --is-upgrade \
+  helm template "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --is-upgrade \
     "${selected_args[@]}" >"$output"
   local contract expected
   while IFS='|' read -r contract expected; do
@@ -323,7 +324,7 @@ semantic_diff() {
     return 0
   fi
   local status=0
-  helm diff upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" \
+  helm diff upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" \
     --suppress-secrets "${selected_args[@]}" >"$diff_file" || status=$?
   [[ "$status" == 0 || "$status" == 2 ]] || { printf 'HELM_DIFF_FAILED\n' >&2; return 1; }
   local diff_headers
@@ -431,10 +432,10 @@ if [[ "$mode" == phase-a ]]; then
   [[ "$confirm_target" == "$expected_confirmation" ]] || die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${expected_confirmation}"
   owner_before="$(owner_metadata)"
   mutation_started=true
-  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_args[@]}"
+  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_args[@]}"
   if ! health_gate "$owner_before" false; then die "PHASE_A_HEALTH_GATE_FAILED"; fi
   owner_before_second="$(owner_metadata)"
-  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_no_root_args[@]}"
+  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_no_root_args[@]}"
   if ! health_gate "$owner_before_second" true; then die "FINAL_HEALTH_GATE_FAILED"; fi
   read_release
   [[ "$actual_chart" == "$EXPECTED_REPAIR_CHART" ]] || die "FINAL_REPAIR_CHART_MISMATCH actual=${actual_chart}"
@@ -535,7 +536,7 @@ fi
 [[ "$(owner_metadata)" == "$owner_before" ]] || die "EXTERNAL_ESO_OWNER_METADATA_CHANGED"
 
 kubectl -n "$EXPECTED_NAMESPACE" delete pvc "$EXPECTED_PVC" --wait=true
-helm upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_b_args[@]}"
+helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_b_args[@]}"
 kubectl -n "$EXPECTED_NAMESPACE" wait --for=jsonpath='{.status.phase}'=Bound pvc/"$EXPECTED_PVC" --timeout=5m
 kubectl -n "$EXPECTED_NAMESPACE" rollout status statefulset/"$EXPECTED_VECTOR_STATEFULSET" --timeout=10m
 [[ "$(owner_metadata)" == "$owner_before" ]] || die "EXTERNAL_ESO_OWNER_METADATA_CHANGED"
