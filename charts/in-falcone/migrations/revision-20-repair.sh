@@ -295,13 +295,13 @@ render_and_validate_images() {
   while IFS='|' read -r contract expected; do
     grep -qF "$expected" "$output" || { printf 'STAGING_IMAGE_DIGEST_DRIFT contract=%s\n' "$contract" >&2; return 1; }
   done <<'DIGESTS'
-control-plane|image: "ghcr.io/gntik-ai/in-falcone-control-plane@sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a"
-control-plane-executor|image: "ghcr.io/gntik-ai/in-falcone-control-plane-executor@sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d"
-web-console|image: "ghcr.io/gntik-ai/in-falcone-web-console@sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34"
-workflow-worker|image: "ghcr.io/gntik-ai/in-falcone-workflow-worker@sha256:2669be573ec5d461f8a1e21c58c13817fd1bc14a947dba845ce1cfac8368a054"
-function-executor-runtime|value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:4fe7a77b01e7e49cd97722a3f55808ec4a09c0c0886680389011ba43796382ba'
+control-plane|image: "ghcr.io/gntik-ai/in-falcone-control-plane@sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253"
+control-plane-executor|image: "ghcr.io/gntik-ai/in-falcone-control-plane-executor@sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c"
+web-console|image: "ghcr.io/gntik-ai/in-falcone-web-console@sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191"
+workflow-worker|image: "ghcr.io/gntik-ai/in-falcone-workflow-worker@sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d"
+function-executor-runtime|value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613'
 mcp-runtime-image|MCP_RUNTIME_IMAGE: "ghcr.io/gntik-ai/in-falcone-mcp-runtime:0.3.0"
-mcp-runtime-image-digest|MCP_RUNTIME_IMAGE_DIGEST: "sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99"
+mcp-runtime-image-digest|MCP_RUNTIME_IMAGE_DIGEST: "sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb"
 DIGESTS
   if grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$output"; then
     printf 'EXTERNAL_ESO_OWNER_RENDERED\n' >&2

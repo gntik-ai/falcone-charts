@@ -34,7 +34,7 @@ case "${1:-}" in
     if [ "${FALCONE_STAGING_ASSUME_APPROVED_RENDER:-false}" = "true" ]; then
       # Downstream gate tests model a render that has already passed the image
       # authority preflight. The unmodified render is used by the dry-run test.
-      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99\n'
+      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb\n'
     fi
     ;;
   plugin)

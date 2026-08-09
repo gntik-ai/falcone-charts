@@ -165,7 +165,7 @@ render_file="$(mktemp "${TMPDIR:-/tmp}/falcone-forward-render.XXXXXX")"
 diff_file="$(mktemp "${TMPDIR:-/tmp}/falcone-forward-diff.XXXXXX")"
 helm template "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --is-upgrade "${args[@]}" >"$render_file"
 grep -qF 'storageClassName: local-path' "$render_file" || die "FORWARD_RENDER_STORAGE_DRIFT"
-grep -qF 'MCP_RUNTIME_IMAGE_DIGEST: "sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99"' "$render_file" || \
+grep -qF 'MCP_RUNTIME_IMAGE_DIGEST: "sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb"' "$render_file" || \
   die "FORWARD_RENDER_IMAGE_DRIFT"
 grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$render_file" && die "EXTERNAL_ESO_OWNER_RENDERED"
 
