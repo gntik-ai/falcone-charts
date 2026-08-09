@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.4"
+EXPECTED_REPAIR_VERSION="0.4.5"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -314,6 +314,8 @@ render_and_validate_images "$render_file"
 # Sanitized metadata-only inventory for the 21 resources owned by the separate
 # external ESO release. Helm diff is checked semantically against this set; no
 # Secret payload or `helm get manifest` operation is used.
+# Exact identities owned by the separately-installed ESO release.  Do not
+# reject the Falcone integration ExternalSecret external-secrets/eso-openbao-auth.
 protected_owner_names='external-secrets|external-secrets-cert-controller|external-secrets-webhook|external-secrets-metrics|external-secrets-cert-controller-metrics|external-secrets-webhook-metrics|external-secrets-leaderelection|external-secrets-controller|external-secrets-edit|external-secrets-view|external-secrets-servicebindings|externalsecret-validate|secretstore-validate'
 
 semantic_diff() {
@@ -329,7 +331,10 @@ semantic_diff() {
   [[ "$status" == 0 || "$status" == 2 ]] || { printf 'HELM_DIFF_FAILED\n' >&2; return 1; }
   local diff_headers
   diff_headers="$(grep -Ei '^[^[:space:]].*(has (been )?(added|removed)|has changed):$' "$diff_file" || true)"
-  if printf '%s\n' "$diff_headers" | grep -Eiq "(^|[, /])external-secrets([, /]|$)|(${protected_owner_names})|clustersecretstores\\.external-secrets\\.io"; then
+  # helm-diff headers are `namespace, name, Kind (apiGroup) has changed:`.
+  # Classify by exact owner identity; namespace/group alone would incorrectly
+  # block the legitimate Falcone integration resources.
+  if printf '%s\n' "$diff_headers" | grep -Eiq ",[[:space:]]*(${protected_owner_names})([[:space:],/]|$)|clustersecretstores\.external-secrets\.io"; then
     printf 'EXTERNAL_ESO_SEMANTIC_DIFF\n' >&2
     return 1
   fi
