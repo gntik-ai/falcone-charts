@@ -8,12 +8,22 @@ helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${FALCONE_STAGING_STATE_FILE:?}.h
 upgrade_count=0
 [ ! -f "$helm_state" ] || upgrade_count="$(cat "$helm_state")"
 
+require_repair_version() {
+  case " $* " in
+    *" --version 0.4.4 "*) ;;
+    *)
+      printf 'REPAIR_CHART_VERSION_MISMATCH expected=0.4.4 call=%s\n' "$*" >&2
+      exit 64
+      ;;
+  esac
+}
+
 release_revision=20
 release_chart="in-falcone-0.4.1"
 case "$scenario" in
   phase-a-complete|phase-a-attestation-*|forward-*)
     release_revision=22
-    release_chart="in-falcone-0.4.3"
+    release_chart="in-falcone-0.4.4"
     ;;
   wrong-start-chart)
     release_chart="in-falcone-0.4.2"
@@ -21,7 +31,7 @@ case "$scenario" in
 esac
 if [ "$upgrade_count" -gt 0 ]; then
   release_revision=$((release_revision + upgrade_count))
-  release_chart="in-falcone-0.4.3"
+  release_chart="in-falcone-0.4.4"
 fi
 
 case "${1:-}" in
@@ -30,11 +40,12 @@ case "${1:-}" in
       "$release_revision" "$release_chart"
     ;;
   template)
+    require_repair_version "$@"
     "${FALCONE_STAGING_REAL_HELM:?}" "$@"
     if [ "${FALCONE_STAGING_ASSUME_APPROVED_RENDER:-false}" = "true" ]; then
       # Downstream gate tests model a render that has already passed the image
       # authority preflight. The unmodified render is used by the dry-run test.
-      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99\n'
+      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb\n'
     fi
     ;;
   plugin)
@@ -47,6 +58,7 @@ case "${1:-}" in
     ;;
   diff)
     [ "${2:-}" = "upgrade" ] || exit 2
+    require_repair_version "$@"
     case "$scenario" in
       external-owner-cluster-create)
         printf 'in-falcone, clustersecretstores.external-secrets.io, CustomResourceDefinition (apiextensions.k8s.io) has been added:\n'
@@ -78,6 +90,7 @@ case "${1:-}" in
       "$release_revision" "$release_chart"
     ;;
   upgrade)
+    require_repair_version "$@"
     upgrade_count=$((upgrade_count + 1))
     printf '%s' "$upgrade_count" >"$helm_state"
     case "$scenario" in

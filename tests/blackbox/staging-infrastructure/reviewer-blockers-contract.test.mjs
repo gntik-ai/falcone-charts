@@ -37,9 +37,9 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const phaseAAttestationTemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
-const repairDigest = 'sha256:0430430430430430430430430430430430430430430430430430430430430430'
-const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.3/${repairDigest}`
-const phaseBConfirmation = `default/in-falcone-staging/falcone@22/in-falcone-0.4.3/${repairDigest}`
+const repairDigest = 'sha256:0440440440440440440440440440440440440440440440440440440440440440'
+const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.4/${repairDigest}`
+const phaseBConfirmation = `default/in-falcone-staging/falcone@22/in-falcone-0.4.4/${repairDigest}`
 const upgradeEvidenceArgs = [
   '--set-string', 'deployment.upgrade.currentVersion=0.3.1',
   '--set', 'global.webhookDatabase.migration.backupVerified=true',
@@ -74,15 +74,30 @@ function phaseAArgs(work) {
 }
 
 function phaseBArgs(work) {
+  return phaseBArgsWithConfirmation(work, phaseBConfirmation)
+}
+
+function phaseBArgsWithConfirmation(work, confirmation) {
   const backup = materializeAttestation(backupTemplate, work, 'backup.json')
   const parity = materializeAttestation(parityTemplate, work, 'parity.json')
   const phaseA = materializeAttestation(phaseAAttestationTemplate, work, 'phase-a.json')
   if (!structuredEvidenceCliAvailable) return legacyPhaseBArgs
   return [
-    '--phase-b', '--apply', '--confirm-target', phaseBConfirmation,
+    '--phase-b', '--apply', '--confirm-target', confirmation,
     '--backup-attestation', backup, '--parity-attestation', parity,
     '--phase-a-attestation', phaseA,
     '--pvc-uid', 'bbx-pvc-uid', '--confirm-pvc', 'falcone-postgresql-vector-data/bbx-pvc-uid',
+  ]
+}
+
+function forwardArgs(work, confirmation = phaseBConfirmation) {
+  const backup = materializeAttestation(backupTemplate, work, 'backup.json')
+  const parity = materializeAttestation(parityTemplate, work, 'parity.json')
+  const phaseA = materializeAttestation(phaseAAttestationTemplate, work, 'phase-a.json')
+  return [
+    '--apply', '--confirm-target', confirmation,
+    '--backup-attestation', backup, '--parity-attestation', parity,
+    '--phase-a-attestation', phaseA,
   ]
 }
 
@@ -635,4 +650,43 @@ test('OpenShift strips every fixed FerretDB UID/GID at pod, main, and init scope
     assert.deepEqual(container?.securityContext?.capabilities?.drop, ['ALL'])
   }
   assert.equal(gate?.securityContext?.readOnlyRootFilesystem, true)
+})
+
+// bbx-repair-staging-029 | fn-repair-chart-version | OpenSpec #### Scenario: PVC state changes
+test('repair and forward-recovery pin chart 0.4.4 and reject a 0.4.3 target confirmation', () => {
+  for (const [label, tool, args, scenario] of [
+    ['repair', repairTool, phaseAArgs, 'safe'],
+    ['forward-recovery', recoveryTool, forwardArgs, 'forward-complete'],
+  ]) {
+    const invocation = invokeMigration(tool, args, scenario)
+    try {
+      assertSuccess(invocation.result, `${label} with the immutable 0.4.4 repair package`)
+      const chartCalls = invocation.helmCalls.filter((line) => /^(?:template|diff upgrade|upgrade)(?:\s|$)/.test(line))
+      assert.ok(chartCalls.some((line) => /^template(?:\s|$)/.test(line)), `${label} did not render the repair chart`)
+      assert.ok(chartCalls.some((line) => /^diff upgrade(?:\s|$)/.test(line)), `${label} did not diff the repair chart`)
+      assert.ok(chartCalls.some((line) => /^upgrade(?:\s|$)/.test(line)), `${label} did not apply the repair chart`)
+      for (const call of chartCalls) {
+        assert.match(call, /(?:^|\s)--version 0\.4\.4(?:\s|$)/, `${label} did not select chart 0.4.4`)
+        assert.doesNotMatch(call, /(?:^|\s)--version 0\.4\.3(?:\s|$)/, `${label} selected immutable chart 0.4.3`)
+      }
+    } finally {
+      invocation.cleanup()
+    }
+  }
+
+  const obsoleteConfirmation = phaseBConfirmation.replace('in-falcone-0.4.4', 'in-falcone-0.4.3')
+  for (const [label, tool, args, scenario] of [
+    ['repair', repairTool, (work) => phaseBArgsWithConfirmation(work, obsoleteConfirmation), 'phase-a-complete'],
+    ['forward-recovery', recoveryTool, (work) => forwardArgs(work, obsoleteConfirmation), 'forward-complete'],
+  ]) {
+    const invocation = invokeMigration(tool, args, scenario)
+    try {
+      assert.notEqual(invocation.result.status, 0, `${label} accepted an immutable 0.4.3 target confirmation`)
+      assert.match(combined(invocation.result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
+      assert.match(combined(invocation.result), /in-falcone-0\.4\.4/)
+      assert.deepEqual(invocation.helmMutations, [], `${label} mutated before rejecting the mismatched chart`)
+    } finally {
+      invocation.cleanup()
+    }
+  }
 })

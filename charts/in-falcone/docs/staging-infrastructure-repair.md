@@ -1,4 +1,4 @@
-# Staging infrastructure repair (chart 0.4.3)
+# Staging infrastructure repair (chart 0.4.4)
 
 Verified source baseline: `gntik-ai/falcone-charts` commit
 `e05f9e8cea4c4cc80573bc7ef0693fb42d47cd07`, 2026-08-09. Upgrade anchor:
@@ -10,8 +10,9 @@ acceptance gates.
 
 ## Status, outcome, and exclusions
 
-Chart 0.4.3 repairs four independent staging faults without changing public APIs
-or Falcone product source. It consumes (but never adopts) an administrator-owned
+Chart 0.4.4 carries the 0.4.3 repair and repins the six first-party images to
+Falcone main `61540248` without changing public APIs or Falcone product source.
+It consumes (but never adopts) an administrator-owned
 External Secrets Operator, converts OpenBao Kubernetes auth to its rotating
 pod-local reviewer identity, fixes FerretDB's non-root init identity and rollout,
 and supplies a staging-only pgvector storage topology. It also makes Helm
@@ -61,12 +62,12 @@ these immutable digests:
 
 | Workload/runtime | Approved digest |
 |---|---|
-| control-plane | `sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a` |
-| control-plane-executor | `sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d` |
-| web-console | `sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34` |
-| workflow-worker | `sha256:2669be573ec5d461f8a1e21c58c13817fd1bc14a947dba845ce1cfac8368a054` |
-| function runtime | `sha256:4fe7a77b01e7e49cd97722a3f55808ec4a09c0c0886680389011ba43796382ba` |
-| MCP runtime | `sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99` |
+| control-plane | `sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253` |
+| control-plane-executor | `sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c` |
+| web-console | `sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191` |
+| workflow-worker | `sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d` |
+| function runtime | `sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613` |
+| MCP runtime | `sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb` |
 
 Render and schema-check before any environment action:
 
@@ -164,7 +165,7 @@ cluster-scoped objects. It never reads a Helm release manifest or Secret data.
 Before apply, create two separate, current, metadata-only JSON attestations:
 
 - `Revision20BackupEvidence` identifies exact context/namespace/release,
-  revision 20, chart 0.4.1, target repair chart 0.4.3, published package digest,
+  revision 20, chart 0.4.1, target repair chart 0.4.4, published package digest,
   a non-secret backup reference, `verified: true`, `observedAt`, and
   `validUntil`;
 - `Revision20ParityEvidence` binds the same target and package digest to a
@@ -172,7 +173,7 @@ Before apply, create two separate, current, metadata-only JSON attestations:
 
 Opaque strings are not apply evidence. Expired, malformed, reused, differently
 targeted, or package-mismatched attestations fail before mutation.
-For a real apply the tool pulls chart 0.4.3 from
+For a real apply the tool pulls chart 0.4.4 from
 `oci://ghcr.io/gntik-ai/charts/in-falcone`, verifies the registry-reported digest
 against both attestations, and renders/applies that extracted artifact and its
 own staging profile. It does not apply an unbound checkout after merely comparing
@@ -186,7 +187,7 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --phase-a --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.3/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.4/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 Phase A uses the retained recovery credential for one bounded auth repair when
@@ -199,7 +200,7 @@ fourteen unique named ExternalSecrets Ready, FerretDB 2/2, and at least two
 Ready endpoints. Phase A does not delete or change the PVC.
 
 Create a fresh `StagingPhaseAAttestation` from that final metadata-only result.
-It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.3,
+It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.4,
 the same package digest, recovery-root disabled, auth unchanged/canary passed,
 store/ExternalSecret/FerretDB health, owner-inventory digest, image-set digest,
 and a short `observedAt`/`validUntil` window. Phase B rejects a missing, stale,
@@ -232,7 +233,7 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
   --phase-a-attestation /secure/path/phase-a.json \
-  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.3/sha256:PUBLISHED_PACKAGE_DIGEST' \
+  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.4/sha256:PUBLISHED_PACKAGE_DIGEST' \
   --pvc-uid PVC-UID-FROM-PREFLIGHT \
   --confirm-pvc falcone-postgresql-vector-data/PVC-UID-FROM-PREFLIGHT
 ```
@@ -284,7 +285,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
 ```
 
 After review, its apply requires the actual
-`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.3/sha256:PUBLISHED_PACKAGE_DIGEST`
+`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.4/sha256:PUBLISHED_PACKAGE_DIGEST`
 confirmation. It revalidates the same three attestations, secret-suppressed
 semantic owner diff, and external owner metadata. It never deletes a PVC or
 returns to an old release; it reapplies canonical values and waits for exact
@@ -308,7 +309,7 @@ static rendering is not live proof.
 
 ## Compatibility and provenance
 
-The supported repair anchor is chart 0.4.1 revision 20 to chart 0.4.3,
+The supported repair anchor is chart 0.4.1 revision 20 to chart 0.4.4,
 `appVersion` 0.3.1. Chart 0.4.2 already supplied externally managed ESO packaging
 but not the reviewer, FerretDB, storage, or image repair. Exact package/OCI digest
 must be recorded after the merged source commit is built; source rendering alone

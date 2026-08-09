@@ -9,7 +9,8 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_CHART="in-falcone-0.4.3"
+EXPECTED_REPAIR_VERSION="0.4.4"
+EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
 
@@ -244,14 +245,14 @@ load_attested_chart() {
   chart_package_dir="$(mktemp -d "${TMPDIR:-/tmp}/falcone-repair-package.XXXXXX")"
   local pull_output pulled_digest pulled_version
   pull_output="$(helm pull oci://ghcr.io/gntik-ai/charts/in-falcone \
-    --version 0.4.3 --untar --untardir "$chart_package_dir" 2>&1)" || die "REPAIR_PACKAGE_PULL_FAILED"
+    --version "$EXPECTED_REPAIR_VERSION" --untar --untardir "$chart_package_dir" 2>&1)" || die "REPAIR_PACKAGE_PULL_FAILED"
   pulled_digest="$(printf '%s\n' "$pull_output" | awk '/^Digest: sha256:[0-9a-f]+$/ {print $2}' | tail -n1)"
   [[ "$pulled_digest" == "$package_digest" ]] || die "REPAIR_PACKAGE_DIGEST_MISMATCH expected=${package_digest} actual=${pulled_digest:-missing}"
   chart_source="$chart_package_dir/in-falcone"
   staging_values="$chart_source/values/staging.yaml"
   [[ -f "$staging_values" ]] || die "REPAIR_PACKAGE_STAGING_VALUES_MISSING"
   pulled_version="$(awk '$1 == "version:" {print $2; exit}' "$chart_source/Chart.yaml")"
-  [[ "$pulled_version" == 0.4.3 ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
+  [[ "$pulled_version" == "$EXPECTED_REPAIR_VERSION" ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
 }
 if [[ "$apply" == true && "$fixture_failure_seam" == false && "$legacy_phase_b_seam" == false ]]; then
   load_attested_chart
@@ -289,19 +290,19 @@ if [[ "$mode" == phase-b ]]; then selected_args=("${phase_b_args[@]}"); else sel
 
 render_and_validate_images() {
   local output="$1"
-  helm template "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --is-upgrade \
+  helm template "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --is-upgrade \
     "${selected_args[@]}" >"$output"
   local contract expected
   while IFS='|' read -r contract expected; do
     grep -qF "$expected" "$output" || { printf 'STAGING_IMAGE_DIGEST_DRIFT contract=%s\n' "$contract" >&2; return 1; }
   done <<'DIGESTS'
-control-plane|image: "ghcr.io/gntik-ai/in-falcone-control-plane@sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a"
-control-plane-executor|image: "ghcr.io/gntik-ai/in-falcone-control-plane-executor@sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d"
-web-console|image: "ghcr.io/gntik-ai/in-falcone-web-console@sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34"
-workflow-worker|image: "ghcr.io/gntik-ai/in-falcone-workflow-worker@sha256:2669be573ec5d461f8a1e21c58c13817fd1bc14a947dba845ce1cfac8368a054"
-function-executor-runtime|value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:4fe7a77b01e7e49cd97722a3f55808ec4a09c0c0886680389011ba43796382ba'
+control-plane|image: "ghcr.io/gntik-ai/in-falcone-control-plane@sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253"
+control-plane-executor|image: "ghcr.io/gntik-ai/in-falcone-control-plane-executor@sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c"
+web-console|image: "ghcr.io/gntik-ai/in-falcone-web-console@sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191"
+workflow-worker|image: "ghcr.io/gntik-ai/in-falcone-workflow-worker@sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d"
+function-executor-runtime|value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613'
 mcp-runtime-image|MCP_RUNTIME_IMAGE: "ghcr.io/gntik-ai/in-falcone-mcp-runtime:0.3.0"
-mcp-runtime-image-digest|MCP_RUNTIME_IMAGE_DIGEST: "sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99"
+mcp-runtime-image-digest|MCP_RUNTIME_IMAGE_DIGEST: "sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb"
 DIGESTS
   if grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$output"; then
     printf 'EXTERNAL_ESO_OWNER_RENDERED\n' >&2
@@ -323,7 +324,7 @@ semantic_diff() {
     return 0
   fi
   local status=0
-  helm diff upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" \
+  helm diff upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" \
     --suppress-secrets "${selected_args[@]}" >"$diff_file" || status=$?
   [[ "$status" == 0 || "$status" == 2 ]] || { printf 'HELM_DIFF_FAILED\n' >&2; return 1; }
   local diff_headers
@@ -431,10 +432,10 @@ if [[ "$mode" == phase-a ]]; then
   [[ "$confirm_target" == "$expected_confirmation" ]] || die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${expected_confirmation}"
   owner_before="$(owner_metadata)"
   mutation_started=true
-  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_args[@]}"
+  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_args[@]}"
   if ! health_gate "$owner_before" false; then die "PHASE_A_HEALTH_GATE_FAILED"; fi
   owner_before_second="$(owner_metadata)"
-  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_no_root_args[@]}"
+  helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_no_root_args[@]}"
   if ! health_gate "$owner_before_second" true; then die "FINAL_HEALTH_GATE_FAILED"; fi
   read_release
   [[ "$actual_chart" == "$EXPECTED_REPAIR_CHART" ]] || die "FINAL_REPAIR_CHART_MISMATCH actual=${actual_chart}"
@@ -535,7 +536,7 @@ fi
 [[ "$(owner_metadata)" == "$owner_before" ]] || die "EXTERNAL_ESO_OWNER_METADATA_CHANGED"
 
 kubectl -n "$EXPECTED_NAMESPACE" delete pvc "$EXPECTED_PVC" --wait=true
-helm upgrade "$EXPECTED_RELEASE" "$chart_source" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_b_args[@]}"
+helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_b_args[@]}"
 kubectl -n "$EXPECTED_NAMESPACE" wait --for=jsonpath='{.status.phase}'=Bound pvc/"$EXPECTED_PVC" --timeout=5m
 kubectl -n "$EXPECTED_NAMESPACE" rollout status statefulset/"$EXPECTED_VECTOR_STATEFULSET" --timeout=10m
 [[ "$(owner_metadata)" == "$owner_before" ]] || die "EXTERNAL_ESO_OWNER_METADATA_CHANGED"
