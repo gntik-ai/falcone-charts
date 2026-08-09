@@ -1,10 +1,11 @@
+{{- if .Release.IsInstall }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: openbao-init
   namespace: {{ .Values.openbao.namespace }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": post-install
     "helm.sh/hook-weight": "-4"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
 spec:
@@ -15,7 +16,7 @@ spec:
       labels:
         app.kubernetes.io/name: openbao-init
     spec:
-      serviceAccountName: openbao
+      serviceAccountName: openbao-bootstrap
       restartPolicy: OnFailure
       {{- include "openbao.imagePullSecrets" . | nindent 6 }}
       securityContext: {{- toYaml .Values.openbao.jobPodSecurityContext | nindent 8 }}
@@ -181,18 +182,31 @@ spec:
               bao auth enable kubernetes >/dev/null 2>&1 || true
               bao write auth/kubernetes/config \
                 kubernetes_host="https://kubernetes.default.svc:443" \
-                kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-                token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" >/dev/null
+                disable_local_ca_jwt=false \
+                kubernetes_ca_cert="" \
+                token_reviewer_jwt="" >/dev/null
               bao secrets enable -path=secret kv-v2 >/dev/null 2>&1 || true
               bao audit enable file file_path=/openbao/audit/openbao-audit.log >/dev/null 2>&1 || true
-              for policy in init platform tenant functions gateway iam; do
+              for policy in init platform tenant functions gateway iam auth-reconcile; do
                 bao policy write "$policy" "/config/policies/${policy}.hcl" >/dev/null
               done
 
               bao write auth/kubernetes/role/openbao-init-role \
-                bound_service_account_names='openbao' \
+                bound_service_account_names='openbao-bootstrap' \
                 bound_service_account_namespaces='{{ .Values.openbao.namespace }}' \
-                policies=init ttl=1h >/dev/null
+                token_policies=init \
+                token_ttl=1h \
+                token_max_ttl=1h \
+                token_no_default_policy=true \
+                alias_name_source=serviceaccount_uid >/dev/null
+              bao write auth/kubernetes/role/openbao-auth-reconcile-role \
+                bound_service_account_names='openbao-auth-reconciler' \
+                bound_service_account_namespaces='{{ .Values.openbao.namespace }}' \
+                token_policies=auth-reconcile \
+                token_ttl='{{ .Values.openbao.authReconcile.tokenExpirationSeconds }}s' \
+                token_max_ttl='{{ .Values.openbao.authReconcile.tokenExpirationSeconds }}s' \
+                token_no_default_policy=true \
+                alias_name_source=serviceaccount_uid >/dev/null
               bao write auth/kubernetes/role/platform-role \
                 bound_service_account_names="$(auth_identity platform-service-account-names)" \
                 bound_service_account_namespaces='{{ .Release.Namespace }}' \
@@ -316,3 +330,6 @@ spec:
                   name: openbao-policy-gateway
               - configMap:
                   name: openbao-policy-iam
+              - configMap:
+                  name: openbao-policy-auth-reconcile
+{{- end }}

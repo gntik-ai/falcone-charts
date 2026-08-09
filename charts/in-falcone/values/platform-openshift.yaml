@@ -1,3 +1,10 @@
+global:
+  podSecurity:
+    # Propagate restricted-v2 arbitrary-UID behavior into dependency charts.
+    # The component wrapper uses this flag to remove fixed runAsUser/runAsGroup
+    # values from init containers while retaining runAsNonRoot and hardening.
+    openshiftRestricted: true
+
 platform:
   target: openshift
   network:

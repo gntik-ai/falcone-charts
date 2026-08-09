@@ -7,6 +7,18 @@
   {{- $_ := unset $podSecurityContext "fsGroupChangePolicy" -}}
   {{- $_ := unset $podSecurityContext "openshiftRestricted" -}}
 {{- end -}}
+{{- /* repair-staging-infrastructure: mirror the pod/init UID stripping on the main
+       container securityContext. Under the OpenShift restricted-v2 overlay the SCC
+       injects a namespace-range UID, so any fixed runAsUser/runAsGroup/fsGroup
+       (e.g. the FerretDB gateway's runAsUser: 1000) must be removed while
+       runAsNonRoot, seccomp, dropped capabilities and no-privilege-escalation are
+       retained. On vanilla Kubernetes the deep copy renders byte-identically. */ -}}
+{{- $containerSecurityContext := deepCopy (default (dict) .Values.securityContext) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $containerSecurityContext "runAsUser" -}}
+  {{- $_ := unset $containerSecurityContext "runAsGroup" -}}
+  {{- $_ := unset $containerSecurityContext "fsGroup" -}}
+{{- end -}}
 {{- /* Normalize pull secrets to a string list: global.imagePullSecrets items may
        be strings or {name: ...} maps; global.privateRegistry.pullSecretNames
        items are strings (per values.schema.json). */ -}}
@@ -107,6 +119,27 @@ spec:
   serviceName: {{ include "component-wrapper.fullname" . }}
   {{- end }}
   replicas: {{ .Values.replicas }}
+  {{- /* Optional rollout contract (repair-staging-infrastructure): only rendered when a
+         component opts in, so default renders stay byte-identical. FerretDB uses this to
+         guarantee zero-unavailable rollout (maxUnavailable: 0) and retained ReplicaSet
+         history so the old healthy pod keeps serving until a replacement is Ready. */ -}}
+  {{- if .Values.revisionHistoryLimit }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  {{- end }}
+  {{- if eq $workloadKind "Deployment" }}
+  {{- if .Values.progressDeadlineSeconds }}
+  progressDeadlineSeconds: {{ .Values.progressDeadlineSeconds }}
+  {{- end }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else if eq $workloadKind "StatefulSet" }}
+  {{- with .Values.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "component-wrapper.selectorLabels" . | nindent 6 }}
@@ -201,7 +234,25 @@ spec:
             {{- toYaml .Values.volumePermissions.securityContext | nindent 12 }}
         {{- end }}
         {{- with .Values.initContainers }}
+        {{- /* repair-staging-infrastructure: under the OpenShift restricted-v2 overlay, strip
+               any fixed runAsUser/runAsGroup from user-supplied init containers so the SCC can
+               inject a namespace-range UID — mirroring the pod-level unset above. On vanilla
+               Kubernetes the values (e.g. the FerretDB engine-gate's runAsUser: 999) pass
+               through unchanged. */ -}}
+        {{- if ($.Values.global.podSecurity.openshiftRestricted | default false) }}
+        {{- $ocpInitContainers := list }}
+        {{- range $ic := . }}
+          {{- $ic = deepCopy $ic }}
+          {{- if $ic.securityContext }}
+            {{- $_ := unset $ic.securityContext "runAsUser" }}
+            {{- $_ := unset $ic.securityContext "runAsGroup" }}
+          {{- end }}
+          {{- $ocpInitContainers = append $ocpInitContainers $ic }}
+        {{- end }}
+        {{- tpl (toYaml $ocpInitContainers) $ | nindent 8 }}
+        {{- else }}
         {{- tpl (toYaml .) $ | nindent 8 }}
+        {{- end }}
         {{- end }}
       {{- end }}
       containers:
@@ -340,7 +391,7 @@ spec:
           startupProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.securityContext }}
+          {{- with $containerSecurityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

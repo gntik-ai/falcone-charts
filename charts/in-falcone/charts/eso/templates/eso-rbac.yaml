@@ -1,27 +1,36 @@
+{{- $managed := true -}}
+{{- if hasKey (index .Values "external-secrets") "enabled" -}}
+  {{- $managed = (index .Values "external-secrets").enabled -}}
+{{- end -}}
+{{- $external := .Values.global.externalSecrets | default dict -}}
+{{- $controllerNamespace := ternary (.Values.eso.namespace | default "eso-system") ($external.operatorNamespace | default "") $managed -}}
+{{- $controllerServiceAccount := ternary "eso-external-secrets" ($external.operatorServiceAccount | default "") $managed -}}
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: eso-secret-manager
+  name: eso-openbao-token-request
+  namespace: {{ .Values.eso.namespace | default "eso-system" }}
 rules:
   - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
     resources: ["serviceaccounts/token"]
-    verbs: ["create"]
-  - apiGroups: ["authentication.k8s.io"]
-    resources: ["tokenreviews"]
+    resourceNames:
+      - {{ .Values.eso.serviceAccountName | default "eso-openbao-auth" }}
     verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: eso-secret-manager
+  name: eso-openbao-token-request
+  namespace: {{ .Values.eso.namespace | default "eso-system" }}
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.eso.serviceAccountName }}
-    namespace: {{ .Values.eso.namespace }}
+    name: {{ $controllerServiceAccount }}
+    namespace: {{ $controllerNamespace }}
+  # The metadata-only reconcile hook requests the same bounded canary token.
+  - kind: ServiceAccount
+    name: openbao-auth-reconciler
+    namespace: {{ .Values.eso.caProvider.namespace | default "secret-store" }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: eso-secret-manager
+  kind: Role
+  name: eso-openbao-token-request

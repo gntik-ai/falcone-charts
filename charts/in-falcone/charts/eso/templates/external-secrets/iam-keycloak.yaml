@@ -1,11 +1,21 @@
+{{- /* repair-staging-infrastructure: emit post-install/upgrade hook annotations only in the
+       bundled/managed ESO install (webhook-readiness ordering via eso-webhook-wait). In
+       externally managed mode (issue #908) the ExternalSecrets are ordinary Helm-tracked
+       resources so `helm uninstall` prunes them instead of orphaning untracked hook output.
+       hasKey branch preserves an explicit `false`. */ -}}
+{{- $es := index .Values "external-secrets" | default dict -}}
+{{- $esoManaged := true -}}
+{{- if hasKey $es "enabled" }}{{- $esoManaged = $es.enabled }}{{- end -}}
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
   name: iam-keycloak-credentials
   namespace: {{ .Release.Namespace }}
+  {{- if $esoManaged }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "5"
+  {{- end }}
 spec:
   refreshInterval: {{ $.Values.eso.refreshInterval | quote }}
   secretStoreRef: { name: openbao-backend, kind: ClusterSecretStore }
@@ -21,9 +31,11 @@ kind: ExternalSecret
 metadata:
   name: iam-identity-client
   namespace: {{ .Release.Namespace }}
+  {{- if $esoManaged }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "5"
+  {{- end }}
 spec:
   refreshInterval: {{ $.Values.eso.refreshInterval | quote }}
   secretStoreRef: { name: openbao-backend, kind: ClusterSecretStore }
@@ -43,9 +55,11 @@ kind: ExternalSecret
 metadata:
   name: iam-superadmin
   namespace: {{ .Release.Namespace }}
+  {{- if $esoManaged }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "5"
+  {{- end }}
 spec:
   refreshInterval: {{ $.Values.eso.refreshInterval | quote }}
   secretStoreRef: { name: openbao-backend, kind: ClusterSecretStore }

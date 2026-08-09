@@ -1,0 +1,132 @@
+#!/usr/bin/env sh
+set -eu
+
+printf '%s\n' "$*" >>"${FALCONE_STAGING_KUBECTL_LOG:?}"
+[ -z "${FALCONE_STAGING_OPERATION_LOG:-}" ] || printf 'kubectl %s\n' "$*" >>"$FALCONE_STAGING_OPERATION_LOG"
+scenario="${FALCONE_STAGING_SCENARIO:-safe}"
+state_file="${FALCONE_STAGING_STATE_FILE:?}"
+helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${state_file}.helm}"
+scale_state="${FALCONE_STAGING_SCALE_STATE_FILE:-${state_file}.scaled}"
+external_secrets_fixture="${FALCONE_STAGING_EXTERNAL_SECRETS_FIXTURE:-}"
+args="$*"
+
+if [ "$args" = "config current-context" ]; then
+  if [ "$scenario" = "wrong-context" ]; then
+    printf 'production\n'
+  else
+    printf 'default\n'
+  fi
+  exit 0
+fi
+
+case "$args" in
+  "get namespace in-falcone-staging")
+    exit 0
+    ;;
+  "-n in-falcone-staging get pvc falcone-postgresql-vector-data -o json")
+    count=0
+    [ ! -f "$state_file" ] || count="$(cat "$state_file")"
+    count=$((count + 1))
+    printf '%s' "$count" >"$state_file"
+    uid="bbx-pvc-uid"
+    phase="Pending"
+    volume=""
+    if [ "$count" -ge 2 ]; then
+      case "$scenario" in
+        pvc-uid-changed) uid="bbx-pvc-replaced" ;;
+        pvc-phase-changed) phase="Bound" ;;
+        pvc-volume-changed) volume="bbx-pv-late" ;;
+      esac
+    elif [ "$scenario" = "pvc-already-bound" ]; then
+      phase="Bound"
+    fi
+    printf '{"metadata":{"uid":"%s"},"spec":{"volumeName":"%s"},"status":{"phase":"%s"}}\n' \
+      "$uid" "$volume" "$phase"
+    exit 0
+    ;;
+  "get pv -o json")
+    count=0
+    [ ! -f "$state_file" ] || count="$(cat "$state_file")"
+    if [ "$scenario" = "pv-claimref-added" ] && [ "$count" -ge 2 ]; then
+      printf '{"items":[{"spec":{"claimRef":{"uid":"bbx-pvc-uid","namespace":"in-falcone-staging","name":"falcone-postgresql-vector-data"}}}]}\n'
+    else
+      printf '{"items":[]}\n'
+    fi
+    exit 0
+    ;;
+esac
+
+case "$args" in
+  "-n in-falcone-staging get pods"*"-o json")
+    count=0
+    [ ! -f "$state_file" ] || count="$(cat "$state_file")"
+    if [ "$scenario" = "initial-pending-vector-pod" ] && [ ! -f "$scale_state" ]; then
+      printf '{"items":[{"metadata":{"name":"falcone-postgresql-vector-0","namespace":"in-falcone-staging","ownerReferences":[{"apiVersion":"apps/v1","kind":"StatefulSet","name":"falcone-postgresql-vector","controller":true}]},"spec":{"volumes":[{"persistentVolumeClaim":{"claimName":"falcone-postgresql-vector-data"}}]},"status":{"phase":"Pending"}}]}\n'
+    elif [ "$scenario" = "pod-evidence-added" ] && [ "$count" -ge 2 ]; then
+      printf '{"items":[{"metadata":{"name":"bbx-vector-pod"},"spec":{"volumes":[{"persistentVolumeClaim":{"claimName":"falcone-postgresql-vector-data"}}]},"status":{"phase":"Running"}}]}\n'
+    else
+      printf '{"items":[]}\n'
+    fi
+    exit 0
+    ;;
+  "-n in-falcone-staging get pvc falcone-postgresql-vector-data")
+    # Forward recovery checks only whether the exact PVC exists.
+    exit 0
+    ;;
+  "-n in-falcone-staging get externalsecrets.external-secrets.io -o json")
+    [ -n "$external_secrets_fixture" ] || { printf 'external secret fixture missing\n' >&2; exit 2; }
+    case "$scenario" in
+      external-secrets-zero) printf '{"apiVersion":"v1","kind":"ExternalSecretList","items":[]}\n' ;;
+      external-secrets-partial) jq '.items = .items[0:13]' "$external_secrets_fixture" ;;
+      external-secrets-duplicate) jq '.items = (.items[0:13] + [.items[0]])' "$external_secrets_fixture" ;;
+      external-secrets-notready) jq '.items[0].status.conditions[0] = {"type":"Ready","status":"False","reason":"ProviderError"}' "$external_secrets_fixture" ;;
+      post-no-root-health-regression)
+        upgrades=0; [ ! -f "$helm_state" ] || upgrades="$(cat "$helm_state")"
+        if [ "$upgrades" -ge 2 ]; then
+          jq '.items[0].status.conditions[0] = {"type":"Ready","status":"False","reason":"ProviderError"}' "$external_secrets_fixture"
+        else
+          cat "$external_secrets_fixture"
+        fi
+        ;;
+      *) cat "$external_secrets_fixture" ;;
+    esac
+    exit 0
+    ;;
+  "-n secret-store logs job/openbao-auth-reconcile")
+    upgrades=0; [ ! -f "$helm_state" ] || upgrades="$(cat "$helm_state")"
+    if [ "$scenario" = "post-no-root-health-regression" ] && [ "$upgrades" -ge 2 ]; then
+      printf 'result=changed code=AUTH_METADATA_CONVERGED canary=passed\n'
+    else
+      printf 'result=unchanged code=AUTH_METADATA_MATCHED canary=passed\n'
+    fi
+    exit 0
+    ;;
+  "-n in-falcone-staging get deployment falcone-ferretdb -o json")
+    printf '{"spec":{"replicas":2},"status":{"availableReplicas":2,"updatedReplicas":2,"unavailableReplicas":0}}\n'
+    exit 0
+    ;;
+  "-n in-falcone-staging get endpointslices.discovery.k8s.io -l kubernetes.io/service-name=falcone-ferretdb -o json")
+    printf '{"items":[{"endpoints":[{"conditions":{"ready":true}},{"conditions":{"ready":true}}]}]}\n'
+    exit 0
+    ;;
+  "-n external-secrets get deployment external-secrets -o json")
+    upgrades=0; [ ! -f "$helm_state" ] || upgrades="$(cat "$helm_state")"
+    owner="external-secrets"; owner_ns="external-secrets"
+    if [ "$scenario" = "external-owner-changed-after-apply" ] && [ "$upgrades" -ge 1 ]; then owner="falcone"; owner_ns="in-falcone-staging"; fi
+    printf '{"metadata":{"name":"external-secrets","namespace":"external-secrets","annotations":{"meta.helm.sh/release-name":"%s","meta.helm.sh/release-namespace":"%s"},"labels":{"app.kubernetes.io/managed-by":"Helm"}},"status":{"availableReplicas":1}}\n' "$owner" "$owner_ns"
+    exit 0
+    ;;
+  "-n in-falcone-staging scale statefulset falcone-postgresql-vector --replicas=0")
+    printf '%s' scaled >"$scale_state"
+    exit 0
+    ;;
+  "-n in-falcone-staging delete pvc falcone-postgresql-vector-data --wait=true"|\
+  "-n in-falcone-staging wait "*|\
+  "wait "*|\
+  "-n in-falcone-staging rollout status "*)
+    exit 0
+    ;;
+esac
+
+printf 'unexpected kubectl fixture invocation: %s\n' "$args" >&2
+exit 2

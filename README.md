@@ -35,9 +35,9 @@ The umbrella supports two explicit External Secrets topologies:
 | Mode | Values | Ownership boundary |
 |---|---|---|
 | Managed (default) | `eso.external-secrets.enabled=true` | Falcone installs and owns the ESO controller, webhook, cert-controller, and CRDs. |
-| Adopted | `eso.external-secrets.enabled=false` plus `global.externalSecrets.operatorNamespace=<namespace>` | An administrator-owned ESO installation keeps its controller, webhook, and CRDs. Falcone renders only its own OpenBao-backed `ClusterSecretStore`, `ExternalSecret` objects, authentication ServiceAccount, and related RBAC. |
+| Externally managed | `eso.external-secrets.enabled=false` plus the exact `global.externalSecrets.operatorNamespace` and `operatorServiceAccount` | An administrator-owned ESO installation keeps its controller, webhook, and CRDs. Falcone renders only its own OpenBao-backed `ClusterSecretStore`, `ExternalSecret` objects, authentication ServiceAccount, and exact TokenRequest RBAC. No adoption occurs. |
 
-Use adopted mode when the cluster already has a compatible External Secrets
+Use externally managed ESO mode when the cluster already has a compatible External Secrets
 release. The external controller namespace and Falcone's authentication
 namespace must remain distinct. Leave `eso.eso.namespace` and
 `openbao.eso.namespace` at their matching Falcone-owned default (`eso-system`)
@@ -48,6 +48,7 @@ point either value at the administrator-owned controller namespace.
 global:
   externalSecrets:
     operatorNamespace: external-secrets
+    operatorServiceAccount: external-secrets
 
 eso:
   external-secrets:
@@ -60,12 +61,14 @@ Equivalent command-line overrides are:
 helm upgrade --install falcone charts/in-falcone \
   --namespace falcone --create-namespace \
   --set eso.external-secrets.enabled=false \
-  --set-string global.externalSecrets.operatorNamespace=external-secrets
+  --set-string global.externalSecrets.operatorNamespace=external-secrets \
+  --set-string global.externalSecrets.operatorServiceAccount=external-secrets
 ```
 
 Before applying the Falcone custom resources, the preflight verifies that the
-configured namespace contains an available ESO controller and that the
-`ClusterSecretStore` and `ExternalSecret` APIs are registered. Adopted mode
+configured namespace contains an available ESO controller using the configured
+ServiceAccount, that the identity exists, and that the `ClusterSecretStore` and
+`ExternalSecret` APIs are registered. Externally managed mode
 does not render a `Namespace`, controller workload, CRD, webhook-wait resource,
 or blanket egress `NetworkPolicy` into the external namespace. The OpenBao
 policy grants ingress from that namespace without taking ownership of anything
@@ -73,10 +76,18 @@ inside it.
 
 Falcone still owns the cluster-scoped `ClusterSecretStore/openbao-backend`.
 If an object with that name already belongs to another release, the existing
-ownership preflight fails closed; do not use the adopted-controller flag to
-bypass a separate store-ownership conflict. The external ESO controller must
-also retain permission to request a token for the explicit
-`serviceAccountRef` in the Falcone authentication namespace.
+ownership preflight fails closed; there is no adoption flag that may bypass a
+separate store-ownership conflict. The chart grants the exact external controller
+identity `create` only on the `eso-system/eso-openbao-auth`
+`serviceaccounts/token` subresource. The identity-only ServiceAccount receives no
+Secret mutation or TokenReview permission. OpenBao's ServiceAccount receives only
+`create` on `tokenreviews`. Keep `eso.eso.clusterOwnership.adoptExisting=false`;
+`true` is rejected.
+
+For chart 0.4.3 staging repair details—rotating OpenBao reviewer credentials,
+FerretDB rollout safety, local-path limitations, six approved image digests, and
+the revision-20 two-phase procedure—use the
+[staging infrastructure repair runbook](charts/in-falcone/docs/staging-infrastructure-repair.md).
 
 ## Managed Knative Serving and Kourier (proposed)
 

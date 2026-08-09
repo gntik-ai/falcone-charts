@@ -376,9 +376,13 @@
   {{- $esoManaged = $externalSecretsValues.enabled -}}
 {{- end -}}
 {{- $externalEsoNamespace := .Values.global.externalSecrets.operatorNamespace | default "" -}}
+{{- $externalEsoServiceAccount := .Values.global.externalSecrets.operatorServiceAccount | default "" -}}
+{{- if (.Values.eso.eso.clusterOwnership.adoptExisting | default false) -}}
+  {{- fail "eso.eso.clusterOwnership.adoptExisting=true is forbidden: Falcone never adopts or mutates an external ESO owner" -}}
+{{- end -}}
 {{- if $esoManaged -}}
-  {{- if ne $externalEsoNamespace "" -}}
-    {{- fail "global.externalSecrets.operatorNamespace is valid only when eso.external-secrets.enabled=false" -}}
+  {{- if or (ne $externalEsoNamespace "") (ne $externalEsoServiceAccount "") -}}
+    {{- fail "global.externalSecrets operatorNamespace/operatorServiceAccount are valid only when eso.external-secrets.enabled=false" -}}
   {{- end -}}
   {{- if lt (int ($externalSecretsValues.replicaCount | default 0)) 1 -}}
     {{- fail "eso.external-secrets.replicaCount must be at least 1: the ESO controller is core" -}}
@@ -412,9 +416,25 @@
   {{- if eq $externalEsoNamespace "" -}}
     {{- fail "global.externalSecrets.operatorNamespace is required when eso.external-secrets.enabled=false: set it to the namespace of the existing External Secrets controller" -}}
   {{- end -}}
+  {{- if eq $externalEsoServiceAccount "" -}}
+    {{- fail "global.externalSecrets.operatorServiceAccount is required when eso.external-secrets.enabled=false" -}}
+  {{- end -}}
   {{- if eq $externalEsoNamespace (.Values.eso.eso.namespace | default "eso-system") -}}
     {{- fail "global.externalSecrets.operatorNamespace must differ from eso.eso.namespace in adopted mode: Falcone must not own or render resources into the administrator's ESO namespace" -}}
   {{- end -}}
+{{- end -}}
+{{- $authReconcile := .Values.openbao.openbao.authReconcile | default dict -}}
+{{- if not ($authReconcile.enabled | default false) -}}
+  {{- fail "openbao.openbao.authReconcile.enabled must remain true for rotating Kubernetes reviewer credentials" -}}
+{{- end -}}
+{{- if not ($authReconcile.useLocalReviewerJWT | default false) -}}
+  {{- fail "openbao.openbao.authReconcile.useLocalReviewerJWT must be true; persisted hook reviewer JWTs are forbidden" -}}
+{{- end -}}
+{{- if ne ($authReconcile.evidenceMode | default "") "metadata-only" -}}
+  {{- fail "openbao.openbao.authReconcile.evidenceMode must be metadata-only" -}}
+{{- end -}}
+{{- if lt (int ($authReconcile.roleTTLSeconds | default 0)) 60 -}}
+  {{- fail "openbao.openbao.authReconcile.roleTTLSeconds must be at least 60" -}}
 {{- end -}}
 {{- if ne (.Values.eso.eso.serviceAccountName | default "eso-openbao-auth") (.Values.openbao.eso.serviceAccountName | default "eso-openbao-auth") -}}
   {{- fail "eso.eso.serviceAccountName and openbao.eso.serviceAccountName must match" -}}

@@ -114,7 +114,9 @@ metadata:
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-45"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # The credential Pod handles key material in memory. Retain no failed Pod
+    # after Helm has surfaced its failure status.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
 spec:
   backoffLimit: 3
   template:

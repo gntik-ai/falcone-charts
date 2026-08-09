@@ -72,6 +72,19 @@ openbao:
       repository: docker.io/alpine/k8s
       tag: "1.32.2"
       pullPolicy: IfNotPresent
+  authReconcile:
+    enabled: true
+    # OpenBao periodically rereads its own mounted token and CA. A completed
+    # Helm hook token is never persisted as token_reviewer_jwt.
+    useLocalReviewerJWT: true
+    roleName: eso-role
+    roleTTLSeconds: 86400
+    tokenExpirationSeconds: 600
+    activeDeadlineSeconds: 300
+    # Revision-20 recovery may enable this for one explicitly confirmed repair
+    # release; the canonical follow-up release disables it again.
+    allowRecoveryRoot: false
+    evidenceMode: metadata-only
   recovery:
     secretName: openbao-recovery
   authIdentitiesConfigMapName: openbao-auth-identities

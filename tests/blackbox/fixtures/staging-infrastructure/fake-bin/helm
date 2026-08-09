@@ -1,0 +1,98 @@
+#!/usr/bin/env sh
+set -eu
+
+printf '%s\n' "$*" >>"${FALCONE_STAGING_HELM_LOG:?}"
+[ -z "${FALCONE_STAGING_OPERATION_LOG:-}" ] || printf 'helm %s\n' "$*" >>"$FALCONE_STAGING_OPERATION_LOG"
+scenario="${FALCONE_STAGING_SCENARIO:-safe}"
+helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${FALCONE_STAGING_STATE_FILE:?}.helm}"
+upgrade_count=0
+[ ! -f "$helm_state" ] || upgrade_count="$(cat "$helm_state")"
+
+release_revision=20
+release_chart="in-falcone-0.4.1"
+case "$scenario" in
+  phase-a-complete|phase-a-attestation-*|forward-*)
+    release_revision=22
+    release_chart="in-falcone-0.4.3"
+    ;;
+  wrong-start-chart)
+    release_chart="in-falcone-0.4.2"
+    ;;
+esac
+if [ "$upgrade_count" -gt 0 ]; then
+  release_revision=$((release_revision + upgrade_count))
+  release_chart="in-falcone-0.4.3"
+fi
+
+case "${1:-}" in
+  list)
+    printf '[{"name":"falcone","namespace":"in-falcone-staging","revision":"%s","chart":"%s","app_version":"0.3.1","status":"deployed"}]\n' \
+      "$release_revision" "$release_chart"
+    ;;
+  template)
+    "${FALCONE_STAGING_REAL_HELM:?}" "$@"
+    if [ "${FALCONE_STAGING_ASSUME_APPROVED_RENDER:-false}" = "true" ]; then
+      # Downstream gate tests model a render that has already passed the image
+      # authority preflight. The unmodified render is used by the dry-run test.
+      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99\n'
+    fi
+    ;;
+  plugin)
+    if [ "${2:-}" = "list" ]; then
+      printf 'NAME VERSION DESCRIPTION\n'
+      printf 'diff 3.9.12 Preview Helm upgrade changes as a diff\n'
+      exit 0
+    fi
+    exit 2
+    ;;
+  diff)
+    [ "${2:-}" = "upgrade" ] || exit 2
+    case "$scenario" in
+      external-owner-cluster-create)
+        printf 'in-falcone, clustersecretstores.external-secrets.io, CustomResourceDefinition (apiextensions.k8s.io) has been added:\n'
+        ;;
+      external-owner-namespaced-update)
+        printf 'external-secrets, external-secrets, Deployment (apps) has changed:\n'
+        ;;
+      external-owner-cluster-remove)
+        printf 'in-falcone, externalsecret-validate, ValidatingWebhookConfiguration (admissionregistration.k8s.io) has been removed:\n'
+        ;;
+    esac
+    exit 0
+    ;;
+  get)
+    case "${2:-}" in
+      manifest)
+        printf 'SECRET_BEARING_HELM_MANIFEST_ACCESS_FORBIDDEN\n' >&2
+        exit 77
+        ;;
+      metadata)
+        printf '{"name":"falcone","namespace":"in-falcone-staging","revision":%s,"chart":"%s","appVersion":"0.3.1"}\n' \
+          "$release_revision" "$release_chart"
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  status)
+    printf '{"name":"falcone","namespace":"in-falcone-staging","version":%s,"chart":"%s","info":{"status":"deployed"}}\n' \
+      "$release_revision" "$release_chart"
+    ;;
+  upgrade)
+    upgrade_count=$((upgrade_count + 1))
+    printf '%s' "$upgrade_count" >"$helm_state"
+    case "$scenario" in
+      phase-b-post-delete-helm-failure|forward-helm-failure|phase-a-helm-failure)
+        printf 'synthetic repaired-chart apply failure\n' >&2
+        exit 42
+        ;;
+    esac
+    exit 0
+    ;;
+  rollback)
+    exit 0
+    ;;
+  *)
+    printf 'unexpected helm fixture invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
