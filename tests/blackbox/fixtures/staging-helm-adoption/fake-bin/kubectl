@@ -1,0 +1,275 @@
+#!/usr/bin/env node
+
+/**
+ * Offline Kubernetes public-surface fixture for the revision-20 ExternalSecret
+ * adoption contract. All other calls are delegated to the established staging
+ * fixture; this executable never contacts a cluster.
+ */
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { resolve } from 'node:path'
+
+const args = process.argv.slice(2)
+const statePath = process.env.FALCONE_ADOPTION_STATE
+const apiLog = process.env.FALCONE_ADOPTION_API_LOG
+const baseFakeBin = process.env.FALCONE_ADOPTION_BASE_FAKE_BIN
+const scenario = process.env.FALCONE_ADOPTION_SCENARIO ?? 'safe-unowned'
+
+if (!statePath || !apiLog || !baseFakeBin) {
+  process.stderr.write('staging adoption fixture environment is incomplete\n')
+  process.exit(78)
+}
+
+appendFileSync(apiLog, `${JSON.stringify({ command: 'kubectl', args })}\n`)
+
+function loadState() {
+  return JSON.parse(readFileSync(statePath, 'utf8'))
+}
+
+function saveState(state) {
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`)
+}
+
+function namespaceOf(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '-n' || argv[index] === '--namespace') return argv[index + 1]
+    if (argv[index].startsWith('--namespace=')) return argv[index].slice('--namespace='.length)
+  }
+  return ''
+}
+
+function resourceIdentity(argv, verbIndex) {
+  const resourceToken = argv[verbIndex + 1] ?? ''
+  const slash = resourceToken.indexOf('/')
+  const resource = slash >= 0 ? resourceToken.slice(0, slash) : resourceToken
+  let name = slash >= 0 ? resourceToken.slice(slash + 1) : ''
+  if (!name) {
+    const candidate = argv[verbIndex + 2] ?? ''
+    if (candidate && !candidate.startsWith('-')) name = candidate
+  }
+  return { resource, name }
+}
+
+function isExternalSecretResource(resource) {
+  const kind = resource.split('.')[0].toLowerCase()
+  return kind === 'externalsecret' || kind === 'externalsecrets'
+}
+
+function markerState(item) {
+  return {
+    managedBy: item.metadata?.labels?.['app.kubernetes.io/managed-by'],
+    releaseName: item.metadata?.annotations?.['meta.helm.sh/release-name'],
+    releaseNamespace: item.metadata?.annotations?.['meta.helm.sh/release-namespace'],
+  }
+}
+
+function exactFalconeOwner(item) {
+  const markers = markerState(item)
+  return markers.managedBy === 'Helm'
+    && markers.releaseName === 'falcone'
+    && markers.releaseNamespace === 'in-falcone-staging'
+}
+
+function output(value) {
+  process.stdout.write(`${JSON.stringify(value)}\n`)
+  process.exit(0)
+}
+
+function fail(message, status = 1) {
+  process.stderr.write(`${message}\n`)
+  process.exit(status)
+}
+
+function delegate() {
+  const result = spawnSync(resolve(baseFakeBin, 'kubectl'), args, {
+    env: process.env,
+    stdio: 'inherit',
+  })
+  if (result.error) throw result.error
+  process.exit(result.status ?? 1)
+}
+
+const getIndex = args.indexOf('get')
+if (getIndex >= 0) {
+  const { resource, name } = resourceIdentity(args, getIndex)
+  const namespace = namespaceOf(args)
+
+  if (/^secrets?(?:\.|$)/i.test(resource)) {
+    fail('SECRET_PAYLOAD_READ_FORBIDDEN', 77)
+  }
+
+  if (isExternalSecretResource(resource) && namespace === 'in-falcone-staging') {
+    const state = loadState()
+    if (name) {
+      const item = state.items.find((candidate) => candidate.metadata.name === name)
+      if (!item) fail(`Error from server (NotFound): ExternalSecret ${name} not found`)
+      state.readNames = [...new Set([...(state.readNames ?? []), name])]
+      saveState(state)
+      output(item)
+    }
+    state.readNames = [...new Set([
+      ...(state.readNames ?? []),
+      ...state.items.map((item) => item.metadata.name),
+    ])]
+    saveState(state)
+    output({
+      apiVersion: 'external-secrets.io/v1',
+      kind: 'ExternalSecretList',
+      items: state.items,
+    })
+  }
+
+  if (scenario === 'external-eso-unowned'
+      && namespace === 'external-secrets'
+      && resource.split('.')[0] === 'deployment'
+      && name === 'external-secrets') {
+    output({
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: {
+        name: 'external-secrets',
+        namespace: 'external-secrets',
+        uid: 'bbx-external-eso-uid',
+        resourceVersion: '900',
+      },
+      status: { availableReplicas: 1 },
+    })
+  }
+}
+
+const createIndex = args.indexOf('create')
+if (createIndex >= 0
+    && args.includes('--dry-run=client')
+    && args.includes('-f')
+    && args[args.indexOf('-f') + 1] === '-'
+    && args.includes('-o')
+    && args[args.indexOf('-o') + 1] === 'json') {
+  const input = readFileSync(0, 'utf8')
+  const conversion = spawnSync('python3', [
+    '-c',
+    'import json,sys,yaml; document=yaml.safe_load(sys.stdin.read()); json.dump(document,sys.stdout)',
+  ], { input, encoding: 'utf8' })
+  if (conversion.error) throw conversion.error
+  if (conversion.status !== 0) fail(conversion.stderr || 'synthetic YAML-to-JSON conversion failed')
+  process.stdout.write(`${conversion.stdout}\n`)
+  process.exit(0)
+}
+
+const mutationIndex = args.findIndex((argument) => ['annotate', 'label', 'patch'].includes(argument))
+if (mutationIndex >= 0) {
+  const verb = args[mutationIndex]
+  const { resource, name } = resourceIdentity(args, mutationIndex)
+  const namespace = namespaceOf(args)
+
+  if (!isExternalSecretResource(resource)) delegate()
+  if (namespace !== 'in-falcone-staging') {
+    fail(`FALCONE_INTEGRATION_ADOPTION_SCOPE_FORBIDDEN namespace=${namespace || '<none>'}`)
+  }
+  if (!name || args.includes('--all')) {
+    fail('FALCONE_INTEGRATION_ADOPTION_BROAD_MUTATION_FORBIDDEN')
+  }
+  if (verb !== 'patch') {
+    fail('FALCONE_INTEGRATION_ADOPTION_REQUIRES_ATOMIC_JSON_PATCH')
+  }
+
+  const state = loadState()
+  const expectedNames = new Set(state.expectedNames)
+  if (!expectedNames.has(name)) {
+    fail(`FALCONE_INTEGRATION_ADOPTION_IDENTITY_FORBIDDEN name=${name}`)
+  }
+  const readNames = new Set(state.readNames ?? [])
+  if (![...expectedNames].every((expected) => readNames.has(expected))) {
+    fail('FALCONE_INTEGRATION_ADOPTION_PREVALIDATION_INCOMPLETE')
+  }
+
+  const item = state.items.find((candidate) => candidate.metadata.name === name)
+  if (!item) fail(`FALCONE_INTEGRATION_ADOPTION_IDENTITY_MISSING name=${name}`)
+  if (exactFalconeOwner(item)) {
+    fail(`FALCONE_INTEGRATION_ADOPTION_ALREADY_OWNED_PATCH_FORBIDDEN name=${name}`)
+  }
+
+  const jsonType = args.includes('--type=json')
+    || args.some((argument, index) => argument === '--type' && args[index + 1] === 'json')
+  if (!jsonType) fail('FALCONE_INTEGRATION_ADOPTION_REQUIRES_ATOMIC_JSON_PATCH')
+
+  let patchText = ''
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === '-p' || args[index] === '--patch') patchText = args[index + 1] ?? ''
+    if (args[index].startsWith('--patch=')) patchText = args[index].slice('--patch='.length)
+  }
+  let operations
+  try {
+    operations = JSON.parse(patchText)
+  } catch {
+    fail('FALCONE_INTEGRATION_ADOPTION_PATCH_NOT_JSON')
+  }
+  if (!Array.isArray(operations)) fail('FALCONE_INTEGRATION_ADOPTION_PATCH_NOT_JSON_ARRAY')
+  if (operations.some((operation) => /^\/spec(?:\/|$)|^\/metadata\/ownerReferences(?:\/|$)/.test(operation.path ?? ''))) {
+    fail('FALCONE_INTEGRATION_ADOPTION_PATCH_SCOPE_FORBIDDEN')
+  }
+
+  if (scenario === 'uid-drift' && !state.driftInjected) {
+    item.metadata.uid = `${item.metadata.uid}-replacement`
+    state.driftInjected = true
+    saveState(state)
+  }
+  if (scenario === 'resource-version-drift' && !state.driftInjected) {
+    item.metadata.resourceVersion = `${item.metadata.resourceVersion}9`
+    state.driftInjected = true
+    saveState(state)
+  }
+
+  const uidTest = operations.find((operation) => operation.op === 'test' && operation.path === '/metadata/uid')
+  const resourceVersionTest = operations.find((operation) => operation.op === 'test'
+    && operation.path === '/metadata/resourceVersion')
+  if (!uidTest || !resourceVersionTest) {
+    fail('FALCONE_INTEGRATION_ADOPTION_PRECONDITION_TESTS_REQUIRED')
+  }
+  if (uidTest.value !== item.metadata.uid || resourceVersionTest.value !== item.metadata.resourceVersion) {
+    fail(`Error from server (Conflict): atomic metadata precondition changed for ExternalSecret ${name}`)
+  }
+
+  function operationSets(path, key, value) {
+    return operations.some((operation) => {
+      if (!['add', 'replace'].includes(operation.op)) return false
+      if (operation.path === `${path}/${key.replaceAll('/', '~1')}`) return operation.value === value
+      if (operation.path === path && operation.value && typeof operation.value === 'object') {
+        return operation.value[key] === value
+      }
+      return false
+    })
+  }
+  const hasManagedBy = operationSets('/metadata/labels', 'app.kubernetes.io/managed-by', 'Helm')
+  const hasReleaseName = operationSets('/metadata/annotations', 'meta.helm.sh/release-name', 'falcone')
+  const hasReleaseNamespace = operationSets(
+    '/metadata/annotations',
+    'meta.helm.sh/release-namespace',
+    'in-falcone-staging',
+  )
+  if (!hasManagedBy || !hasReleaseName || !hasReleaseNamespace) {
+    fail('FALCONE_INTEGRATION_ADOPTION_OWNER_MARKERS_INCOMPLETE')
+  }
+
+  state.mutationStarted = true
+  if (scenario === 'patch-failure' && (state.adoptionWrites ?? []).length === 2 && !state.failureInjected) {
+    state.failureInjected = true
+    saveState(state)
+    fail(`Error from server (InternalError): synthetic atomic patch failure for ExternalSecret ${name}`)
+  }
+
+  item.metadata.labels = {
+    ...(item.metadata.labels ?? {}),
+    'app.kubernetes.io/managed-by': 'Helm',
+  }
+  item.metadata.annotations = {
+    ...(item.metadata.annotations ?? {}),
+    'meta.helm.sh/release-name': 'falcone',
+    'meta.helm.sh/release-namespace': 'in-falcone-staging',
+  }
+  item.metadata.resourceVersion = `${Number.parseInt(item.metadata.resourceVersion, 10) + 1}`
+  state.adoptionWrites = [...(state.adoptionWrites ?? []), name]
+  saveState(state)
+  output(item)
+}
+
+delegate()

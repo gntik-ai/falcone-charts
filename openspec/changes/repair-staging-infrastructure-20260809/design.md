@@ -37,9 +37,15 @@
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.6 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.7 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
-9. A secret-suppressed semantic diff protects the sanitized 21-resource external
+9. Revision-20 Phase A prevalidates the exact fourteen Falcone-owned
+   `ExternalSecret` declarations before apply. It accepts only the all-absent
+   Helm owner tuple or the exact release tuple from an idempotent retry, compares
+   canonical specs after ESO CRD defaults, and adopts absent tuples with atomic
+   metadata-only UID/resourceVersion-guarded patches. It never reads generated
+   Secrets, uses broad `--take-ownership`, or adopts an external ESO object.
+10. A secret-suppressed semantic diff protects the sanitized 21-resource external
    ESO inventory, including cluster-scoped objects. Exact owner metadata is
    captured before and compared after each repaired-chart pass. No release
    manifest or Secret payload is read.

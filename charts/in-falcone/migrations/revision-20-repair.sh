@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.6"
+EXPECTED_REPAIR_VERSION="0.4.7"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -70,6 +70,7 @@ cleanup() {
     rm -rf "$chart_package_dir"
   fi
   if ((rc != 0)) && [[ "$mutation_started" == true ]]; then
+    printf 'mutation_started=true\n' >&2
     printf 'FORWARD_RECOVERY_REQUIRED\n' >&2
   fi
   exit "$rc"
@@ -343,6 +344,66 @@ semantic_diff() {
 }
 semantic_diff
 
+# Adopt only the exact Falcone ExternalSecrets already present in the target.
+# Compare specs and reject Helm ownership conflicts/extras before patching labels.
+adopt_falcone_external_secrets() {
+  local perform_patch="${1:-false}"
+  local names name live_list live rendered spec_live spec_rendered markers uid rv labels annotations
+  local adoptable=0 already_owned=0
+  local -a live_names expected_names
+  local -A live_json patch_json
+  names='gateway-apisix-credentials gateway-shared-secret iam-identity-client iam-keycloak-credentials iam-superadmin platform-documentdb-credentials platform-documentdb-replication platform-encryption-key platform-ferretdb-credentials platform-kafka-credentials platform-postgresql-credentials platform-postgresql-vector-credentials platform-s3-credentials platform-temporal-credentials'
+  live_list="$(kubectl -n "$EXPECTED_NAMESPACE" get externalsecrets.external-secrets.io -o json)" || \
+    die "EXTERNAL_SECRET_IDENTITY_SET_MISMATCH"
+  mapfile -t live_names < <(printf '%s' "$live_list" | jq -r '.items[].metadata.name' | sort)
+  mapfile -t expected_names < <(printf '%s\n' $names | sort)
+  [[ "${live_names[*]}" == "${expected_names[*]}" ]] || die "EXTERNAL_SECRET_IDENTITY_SET_MISMATCH"
+  for name in $names; do
+    live="$(printf '%s' "$live_list" | jq -ce --arg name "$name" '.items[] | select(.metadata.name == $name)')" || \
+      die "EXTERNAL_SECRET_MISSING_$name"
+    live_json[$name]="$live"
+    markers="$(printf '%s' "$live" | jq -c '[.metadata.labels["app.kubernetes.io/managed-by"] // null,.metadata.annotations["meta.helm.sh/release-name"] // null,.metadata.annotations["meta.helm.sh/release-namespace"] // null]')"
+    case "$markers" in
+      '[null,null,null]') adoptable=$((adoptable + 1)) ;;
+      '["Helm","falcone","in-falcone-staging"]') already_owned=$((already_owned + 1)) ;;
+      *) die "EXTERNAL_SECRET_FOREIGN_HELM_OWNER_$name" ;;
+    esac
+    rendered="$(awk -v n="$name" 'BEGIN{RS="---"} $0 ~ "kind:[[:space:]]*ExternalSecret" && $0 ~ "name:[[:space:]]*" n "([[:space:]]|$)" {print; exit}' "$render_file")"
+    [[ -n "$rendered" ]] || die "EXTERNAL_SECRET_NOT_RENDERED_$name"
+    spec_live="$(printf '%s' "$live" | jq -cS '.spec | .target.deletionPolicy=(.target.deletionPolicy // "Retain") | .data=(.data // [] | map(.remoteRef=(.remoteRef // {}) | .remoteRef.conversionStrategy=(.remoteRef.conversionStrategy // "Default") | .remoteRef.decodingStrategy=(.remoteRef.decodingStrategy // "None") | .remoteRef.metadataPolicy=(.remoteRef.metadataPolicy // "None"))) | .dataFrom = (.dataFrom // [])')"
+    spec_rendered="$(printf '%s' "$rendered" | kubectl create --dry-run=client -f - -o json | jq -cS '.spec | .target.deletionPolicy=(.target.deletionPolicy // "Retain") | .data=(.data // [] | map(.remoteRef=(.remoteRef // {}) | .remoteRef.conversionStrategy=(.remoteRef.conversionStrategy // "Default") | .remoteRef.decodingStrategy=(.remoteRef.decodingStrategy // "None") | .remoteRef.metadataPolicy=(.remoteRef.metadataPolicy // "None"))) | .dataFrom = (.dataFrom // [])')"
+    [[ "$spec_live" == "$spec_rendered" ]] || die "EXTERNAL_SECRET_SPEC_DRIFT_$name"
+    uid="$(printf '%s' "$live" | jq -r '.metadata.uid')"; rv="$(printf '%s' "$live" | jq -r '.metadata.resourceVersion')"
+    labels="$(printf '%s' "$live" | jq -c '.metadata.labels // {} | .["app.kubernetes.io/managed-by"]="Helm"')"
+    annotations="$(printf '%s' "$live" | jq -c --arg r "$EXPECTED_RELEASE" --arg n "$EXPECTED_NAMESPACE" '.metadata.annotations // {} | .["meta.helm.sh/release-name"]=$r | .["meta.helm.sh/release-namespace"]=$n')"
+    patch_json[$name]="$(jq -n --arg u "$uid" --arg rv "$rv" --argjson l "$labels" --argjson a "$annotations" '[{op:"test",path:"/metadata/uid",value:$u},{op:"test",path:"/metadata/resourceVersion",value:$rv},{op:"add",path:"/metadata/labels",value:$l},{op:"add",path:"/metadata/annotations",value:$a}]')"
+  done
+  if [[ "$perform_patch" != true ]]; then
+    printf 'external-secret-adoption=preflight exact=14 adoptable=%s already-owned=%s mutation=false\n' "$adoptable" "$already_owned"
+    return 0
+  fi
+  for name in $names; do
+    [[ "$(printf '%s' "${live_json[$name]:-}" | jq -r '[.metadata.labels["app.kubernetes.io/managed-by"] // null,.metadata.annotations["meta.helm.sh/release-name"] // null,.metadata.annotations["meta.helm.sh/release-namespace"] // null] | @tsv')" == $'Helm\tfalcone\tin-falcone-staging' ]] && continue
+    kubectl -n "$EXPECTED_NAMESPACE" patch externalsecret.external-secrets.io "$name" --type=json -p "${patch_json[$name]}" >/dev/null
+  done
+}
+
+validate_external_eso_release_owner() {
+  local owner
+  owner="$(kubectl -n external-secrets get deployment external-secrets -o json)" || \
+    die "EXTERNAL_ESO_OWNER_METADATA_INVALID"
+  printf '%s' "$owner" | jq -e '
+    .metadata.namespace == "external-secrets"
+    and .metadata.name == "external-secrets"
+    and .metadata.labels["app.kubernetes.io/managed-by"] == "Helm"
+    and .metadata.annotations["meta.helm.sh/release-name"] == "external-secrets"
+    and .metadata.annotations["meta.helm.sh/release-namespace"] == "external-secrets"
+    and (.status.availableReplicas // 0) >= 1' >/dev/null || \
+    die "EXTERNAL_ESO_OWNER_METADATA_INVALID"
+}
+
+validate_external_eso_release_owner
+
 owner_metadata() {
   local inventory="" resource namespace name object canonical
   if [[ -n "${FALCONE_STAGING_REAL_HELM:-}" ]]; then
@@ -426,6 +487,9 @@ printf 'preflight=passed context=%s namespace=%s release=%s revision=%s chart=%s
   "$([[ "$apply" == true ]] && printf false || printf true)"
 
 if [[ "$apply" == false ]]; then
+  if [[ "$mode" == phase-a ]]; then
+    adopt_falcone_external_secrets false
+  fi
   printf 'no mutation performed; apply requires fresh target-bound backup/parity attestations and exact package confirmation\n'
   exit 0
 fi
@@ -439,6 +503,7 @@ if [[ "$mode" == phase-a ]]; then
   [[ "$confirm_target" == "$expected_confirmation" ]] || die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${expected_confirmation}"
   owner_before="$(owner_metadata)"
   mutation_started=true
+  adopt_falcone_external_secrets true
   helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_args[@]}"
   if ! health_gate "$owner_before" false; then die "PHASE_A_HEALTH_GATE_FAILED"; fi
   owner_before_second="$(owner_metadata)"

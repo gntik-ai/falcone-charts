@@ -143,5 +143,11 @@ case "$args" in
     ;;
 esac
 
+if [ "$args" = "create --dry-run=client -f - -o json" ]; then
+  python3 -c 'import json,sys,yaml; json.dump(yaml.safe_load(sys.stdin.read()),sys.stdout)'
+  printf '\n'
+  exit 0
+fi
+
 printf 'unexpected kubectl fixture invocation: %s\n' "$args" >&2
 exit 2
