@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.5"
+EXPECTED_REPAIR_VERSION="0.4.6"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -251,7 +251,9 @@ load_attested_chart() {
   chart_source="$chart_package_dir/in-falcone"
   staging_values="$chart_source/values/staging.yaml"
   [[ -f "$staging_values" ]] || die "REPAIR_PACKAGE_STAGING_VALUES_MISSING"
-  pulled_version="$(awk '$1 == "version:" {print $2; exit}' "$chart_source/Chart.yaml")"
+  # Read exactly one top-level Chart.yaml version; dependency versions are
+  # indented and duplicate/missing top-level declarations fail closed.
+  pulled_version="$(awk '$0 ~ /^version:[[:space:]]/ {count++; value=$2} END {if (count == 1) print value}' "$chart_source/Chart.yaml")"
   [[ "$pulled_version" == "$EXPECTED_REPAIR_VERSION" ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
 }
 if [[ "$apply" == true && "$fixture_failure_seam" == false && "$legacy_phase_b_seam" == false ]]; then

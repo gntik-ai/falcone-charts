@@ -37,9 +37,9 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const phaseAAttestationTemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
-const repairDigest = 'sha256:0450450450450450450450450450450450450450450450450450450450450450'
-const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.5/${repairDigest}`
-const phaseBConfirmation = `default/in-falcone-staging/falcone@22/in-falcone-0.4.5/${repairDigest}`
+const repairDigest = 'sha256:0460460460460460460460460460460460460460460460460460460460460460'
+const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.6/${repairDigest}`
+const phaseBConfirmation = `default/in-falcone-staging/falcone@22/in-falcone-0.4.6/${repairDigest}`
 const upgradeEvidenceArgs = [
   '--set-string', 'deployment.upgrade.currentVersion=0.3.1',
   '--set', 'global.webhookDatabase.migration.backupVerified=true',
@@ -138,6 +138,9 @@ function invokeMigration(tool, argsOrBuilder, scenario = 'safe', extraEnv = {}) 
       FALCONE_STAGING_SCENARIO: scenario,
       FALCONE_STAGING_EXTERNAL_SECRETS_FIXTURE: externalSecretsFixture,
       FALCONE_STAGING_REVISION20_MANIFEST: revision20Manifest,
+      FALCONE_STAGING_HELM_DELEGATE: realHelm.stdout.trim(),
+      FALCONE_STAGING_PACKAGED_CHART_SOURCE: umbrellaChart,
+      FALCONE_STAGING_REPAIR_PACKAGE_DIGEST: repairDigest,
       ...extraEnv,
     },
     timeout: 30_000,
@@ -719,21 +722,21 @@ test('OpenShift strips every fixed FerretDB UID/GID at pod, main, and init scope
 })
 
 // bbx-repair-staging-029 | fn-repair-chart-version | OpenSpec #### Scenario: PVC state changes
-test('repair and forward-recovery pin chart 0.4.5 and reject 0.4.4 and 0.4.3 target confirmations', () => {
+test('repair and forward-recovery pin chart 0.4.6 and reject 0.4.5, 0.4.4, and 0.4.3 target confirmations', () => {
   for (const [label, tool, args, scenario] of [
     ['repair', repairTool, phaseAArgs, 'safe'],
     ['forward-recovery', recoveryTool, forwardArgs, 'forward-complete'],
   ]) {
     const invocation = invokeMigration(tool, args, scenario)
     try {
-      assertSuccess(invocation.result, `${label} with the immutable 0.4.5 repair package`)
+      assertSuccess(invocation.result, `${label} with the immutable 0.4.6 repair package`)
       const chartCalls = invocation.helmCalls.filter((line) => /^(?:template|diff upgrade|upgrade)(?:\s|$)/.test(line))
       assert.ok(chartCalls.some((line) => /^template(?:\s|$)/.test(line)), `${label} did not render the repair chart`)
       assert.ok(chartCalls.some((line) => /^diff upgrade(?:\s|$)/.test(line)), `${label} did not diff the repair chart`)
       assert.ok(chartCalls.some((line) => /^upgrade(?:\s|$)/.test(line)), `${label} did not apply the repair chart`)
       for (const call of chartCalls) {
-        assert.match(call, /(?:^|\s)--version 0\.4\.5(?:\s|$)/, `${label} did not select chart 0.4.5`)
-        assert.doesNotMatch(call, /(?:^|\s)--version 0\.4\.[34](?:\s|$)/,
+        assert.match(call, /(?:^|\s)--version 0\.4\.6(?:\s|$)/, `${label} did not select chart 0.4.6`)
+        assert.doesNotMatch(call, /(?:^|\s)--version 0\.4\.[345](?:\s|$)/,
           `${label} selected a historical immutable chart`)
       }
     } finally {
@@ -741,8 +744,8 @@ test('repair and forward-recovery pin chart 0.4.5 and reject 0.4.4 and 0.4.3 tar
     }
   }
 
-  for (const historicalVersion of ['0.4.4', '0.4.3']) {
-    const obsoleteConfirmation = phaseBConfirmation.replace('in-falcone-0.4.5', `in-falcone-${historicalVersion}`)
+  for (const historicalVersion of ['0.4.5', '0.4.4', '0.4.3']) {
+    const obsoleteConfirmation = phaseBConfirmation.replace('in-falcone-0.4.6', `in-falcone-${historicalVersion}`)
     for (const [label, tool, args, scenario] of [
       ['repair', repairTool, (work) => phaseBArgsWithConfirmation(work, obsoleteConfirmation), 'phase-a-complete'],
       ['forward-recovery', recoveryTool, (work) => forwardArgs(work, obsoleteConfirmation), 'forward-complete'],
@@ -752,11 +755,63 @@ test('repair and forward-recovery pin chart 0.4.5 and reject 0.4.4 and 0.4.3 tar
         assert.notEqual(invocation.result.status, 0,
           `${label} accepted historical chart ${historicalVersion} target confirmation`)
         assert.match(combined(invocation.result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
-        assert.match(combined(invocation.result), /in-falcone-0\.4\.5/)
+        assert.match(combined(invocation.result), /in-falcone-0\.4\.6/)
         assert.deepEqual(invocation.helmMutations, [], `${label} mutated before rejecting the mismatched chart`)
       } finally {
         invocation.cleanup()
       }
     }
   }
+})
+
+// bbx-repair-staging-031 | fn-repair-package-version | OpenSpec #### Scenario: Evidence is opaque, stale, or targets another package
+test('repair and forward use the packaged chart top-level version and reject a wrong top-level version before mutation', () => {
+  const violations = []
+  for (const [label, tool, args, baseScenario] of [
+    ['repair', repairTool, phaseAArgs, 'safe'],
+    ['forward-recovery', recoveryTool, forwardArgs, 'forward-complete'],
+  ]) {
+    const valid = invokeMigration(tool, args, 'packaged-chart-version-order', {
+      FALCONE_STAGING_REAL_HELM: '',
+      FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO: baseScenario,
+    })
+    try {
+      if (!valid.helmCalls.some((line) => /^pull(?:\s|$)/.test(line))) {
+        violations.push(`${label}:package-not-pulled`)
+      }
+      if (!valid.helmCalls.includes('fixture-package first-version=0.2.2 top-level-version=0.4.6')) {
+        violations.push(`${label}:dependency-first-package-not-proven`)
+      }
+      if (valid.result.status !== 0) {
+        const output = combined(valid.result)
+        const version = /REPAIR_PACKAGE_VERSION_MISMATCH actual=([^\s]+)/.exec(output)?.[1]
+        const code = /\b[A-Z][A-Z_]{3,}(?: [^\n]*)?/.exec(output)?.[0] ?? `exit=${valid.result.status}`
+        violations.push(`${label}:valid-top-level-rejected:${version ? `actual=${version}` : code}`)
+      }
+    } finally {
+      valid.cleanup()
+    }
+
+    const invalid = invokeMigration(tool, args, 'packaged-chart-version-order', {
+      FALCONE_STAGING_REAL_HELM: '',
+      FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO: baseScenario,
+      FALCONE_STAGING_PACKAGED_TOP_LEVEL_VERSION: '9.9.9',
+    })
+    try {
+      if (!invalid.helmCalls.includes('fixture-package first-version=0.2.2 top-level-version=9.9.9')) {
+        violations.push(`${label}:wrong-top-level-package-not-proven`)
+      }
+      if (invalid.result.status === 0) violations.push(`${label}:wrong-top-level-accepted`)
+      if (!/REPAIR_PACKAGE_VERSION_MISMATCH actual=9\.9\.9/.test(combined(invalid.result))) {
+        violations.push(`${label}:wrong-top-level-code-missing`)
+      }
+      if (invalid.helmMutations.length > 0) violations.push(`${label}:wrong-top-level-mutated`)
+      if (invalid.operations.some((line) => /^kubectl .* (?:apply|create|delete|patch|scale)(?:\s|$)/.test(line))) {
+        violations.push(`${label}:wrong-top-level-kubernetes-mutated`)
+      }
+    } finally {
+      invalid.cleanup()
+    }
+  }
+  assert.deepEqual(violations, [])
 })

@@ -116,6 +116,21 @@ case "$args" in
     printf '{"metadata":{"name":"external-secrets","namespace":"external-secrets","annotations":{"meta.helm.sh/release-name":"%s","meta.helm.sh/release-namespace":"%s"},"labels":{"app.kubernetes.io/managed-by":"Helm"}},"status":{"availableReplicas":1}}\n' "$owner" "$owner_ns"
     exit 0
     ;;
+  "-n external-secrets get "*" -o json")
+    set -- $args
+    resource_name="$5"
+    printf '{"metadata":{"name":"%s","namespace":"external-secrets","annotations":{"meta.helm.sh/release-name":"external-secrets","meta.helm.sh/release-namespace":"external-secrets"},"labels":{"app.kubernetes.io/managed-by":"Helm"}}}\n' \
+      "$resource_name"
+    exit 0
+    ;;
+  get\ clusterrole*\ -o\ json|\
+  get\ validatingwebhookconfiguration*\ -o\ json)
+    set -- $args
+    resource_name="$3"
+    printf '{"metadata":{"name":"%s","annotations":{"meta.helm.sh/release-name":"external-secrets","meta.helm.sh/release-namespace":"external-secrets"},"labels":{"app.kubernetes.io/managed-by":"Helm"}}}\n' \
+      "$resource_name"
+    exit 0
+    ;;
   "-n in-falcone-staging scale statefulset falcone-postgresql-vector --replicas=0")
     printf '%s' scaled >"$scale_state"
     exit 0
