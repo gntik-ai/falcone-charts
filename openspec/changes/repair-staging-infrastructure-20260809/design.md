@@ -37,7 +37,7 @@
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.8 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.9 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
 9. Revision-20 Phase A prevalidates the exact fourteen Falcone-owned
    `ExternalSecret` declarations before apply. It accepts only the all-absent
@@ -49,6 +49,12 @@
    ESO inventory, including cluster-scoped objects. Exact owner metadata is
    captured before and compared after each repaired-chart pass. No release
    manifest or Secret payload is read.
+11. Revision 22 is admitted only as the exact failed chart-0.4.8 immutable-field
+    incident. The repair validates four bound standalone PVCs, two SeaweedFS
+    claim-template contracts and their historical bound child PVCs from public
+    Kubernetes metadata, then passes their exact non-secret storage values to
+    every Helm operation. It does not use `--reuse-values`, patch storage objects,
+    read volume contents, or fabricate a successful Phase-A attestation.
 
 ## Failure and rollback
 

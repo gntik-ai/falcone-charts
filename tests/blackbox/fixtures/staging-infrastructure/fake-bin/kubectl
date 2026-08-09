@@ -26,6 +26,108 @@ if [ "$args" = "config current-context" ]; then
   exit 0
 fi
 
+r22_pvc_json() {
+  resource_name="$1"
+  storage_class="local-path"
+  storage_size="10Gi"
+  case "$scenario:$resource_name" in
+    r22-immutable-pvc-storage-drift:falcone-documentdb-data)
+      storage_class="hcloud-volumes"
+      ;;
+    r22-immutable-pvc-size-drift:falcone-kafka-data)
+      storage_size="20Gi"
+      ;;
+    r22-immutable-child-pvc-drift:data-in-falcone-staging-falcone-seaweedfs-master-0)
+      storage_class="hcloud-volumes"
+      ;;
+  esac
+  printf '{"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"%s","namespace":"in-falcone-staging","uid":"bbx-%s-uid"},"spec":{"accessModes":["ReadWriteOnce"],"storageClassName":"%s","resources":{"requests":{"storage":"%s"}},"volumeName":"bbx-%s-pv"},"status":{"phase":"Bound"}}\n' \
+    "$resource_name" "$resource_name" "$storage_class" "$storage_size" "$resource_name"
+}
+
+r22_statefulset_json() {
+  resource_name="$1"
+  case "$resource_name" in
+    falcone-seaweedfs-filer)
+      component="filer"
+      claim_name="data-filer"
+      ;;
+    falcone-seaweedfs-master)
+      component="master"
+      claim_name="data-in-falcone-staging"
+      ;;
+    *)
+      printf 'unexpected r22 StatefulSet fixture resource: %s\n' "$resource_name" >&2
+      exit 2
+      ;;
+  esac
+  storage_size="10Gi"
+  if [ "$scenario" = "r22-immutable-vct-drift" ] && [ "$resource_name" = "falcone-seaweedfs-filer" ]; then
+    storage_size="11Gi"
+  fi
+  jq -nc \
+    --arg name "$resource_name" --arg component "$component" --arg claim "$claim_name" --arg storage "$storage_size" \
+    '{
+      apiVersion:"apps/v1", kind:"StatefulSet",
+      metadata:{name:$name,namespace:"in-falcone-staging",uid:("bbx-" + $component + "-statefulset-uid")},
+      spec:{
+        serviceName:$name, podManagementPolicy:"Parallel", replicas:1,
+        selector:{matchLabels:{"app.kubernetes.io/name":"seaweedfs","app.kubernetes.io/instance":"falcone","app.kubernetes.io/component":$component}},
+        template:{metadata:{labels:{"app.kubernetes.io/name":"seaweedfs","app.kubernetes.io/instance":"falcone","app.kubernetes.io/component":$component}},spec:{containers:[{name:"seaweedfs",image:"example.invalid/seaweedfs@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}},
+        volumeClaimTemplates:[{apiVersion:"v1",kind:"PersistentVolumeClaim",metadata:{name:$claim},spec:{accessModes:["ReadWriteOnce"],storageClassName:"hcloud-volumes",resources:{requests:{storage:$storage}}}}]
+      }
+    }'
+}
+
+case "$scenario" in
+  r22-immutable-*)
+    case "$args" in
+      "-n in-falcone-staging get pvc falcone-documentdb-data -o json"|\
+      "-n in-falcone-staging get pvc falcone-kafka-data -o json"|\
+      "-n in-falcone-staging get pvc falcone-observability-data -o json"|\
+      "-n in-falcone-staging get pvc falcone-postgresql-data -o json"|\
+      "-n in-falcone-staging get pvc data-filer-falcone-seaweedfs-filer-0 -o json"|\
+      "-n in-falcone-staging get pvc data-in-falcone-staging-falcone-seaweedfs-master-0 -o json")
+        set -- $args
+        r22_pvc_json "$5"
+        exit 0
+        ;;
+      "-n in-falcone-staging get pvc -o json")
+        printf '{"apiVersion":"v1","kind":"PersistentVolumeClaimList","items":['
+        separator=""
+        for resource_name in \
+          falcone-documentdb-data falcone-kafka-data falcone-observability-data falcone-postgresql-data \
+          data-filer-falcone-seaweedfs-filer-0 data-in-falcone-staging-falcone-seaweedfs-master-0; do
+          printf '%s' "$separator"
+          r22_pvc_json "$resource_name" | tr -d '\n'
+          separator=,
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+      "-n in-falcone-staging get statefulset falcone-seaweedfs-filer -o json"|\
+      "-n in-falcone-staging get statefulsets.apps falcone-seaweedfs-filer -o json")
+        r22_statefulset_json falcone-seaweedfs-filer
+        exit 0
+        ;;
+      "-n in-falcone-staging get statefulset falcone-seaweedfs-master -o json"|\
+      "-n in-falcone-staging get statefulsets.apps falcone-seaweedfs-master -o json")
+        r22_statefulset_json falcone-seaweedfs-master
+        exit 0
+        ;;
+      "-n in-falcone-staging get statefulset -o json"|\
+      "-n in-falcone-staging get statefulsets.apps -o json")
+        printf '{"apiVersion":"apps/v1","kind":"StatefulSetList","items":['
+        r22_statefulset_json falcone-seaweedfs-filer | tr -d '\n'
+        printf ','
+        r22_statefulset_json falcone-seaweedfs-master | tr -d '\n'
+        printf ']}\n'
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+
 case "$args" in
   "get namespace in-falcone-staging")
     exit 0

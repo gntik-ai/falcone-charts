@@ -8,11 +8,12 @@ helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${FALCONE_STAGING_STATE_FILE:?}.h
 upgrade_count=0
 [ ! -f "$helm_state" ] || upgrade_count="$(cat "$helm_state")"
 real_helm="${FALCONE_STAGING_HELM_DELEGATE:-${FALCONE_STAGING_REAL_HELM:-}}"
-repair_version="${FALCONE_STAGING_REPAIR_VERSION:-0.4.8}"
+repair_version="${FALCONE_STAGING_REPAIR_VERSION:-0.4.9}"
 repair_chart="in-falcone-${repair_version}"
 
-legacy_values='{"global":{"webhookSigningKey":{"create":false,"secretName":"falcone-webhook-signing-key-c25-legacy","secretKey":"key","adoption":{"mode":"legacy","requestId":"c25-staging-adopt-20260723-01"},"rotation":{"action":"none","requestId":"","sourceSecretName":"","sourceSecretKey":"","rotationId":"","recoveryWindowSeconds":604800}}}}'
+legacy_values='{"global":{"webhookSigningKey":{"create":false,"secretName":"falcone-webhook-signing-key-c25-legacy","secretKey":"key","adoption":{"mode":"legacy","requestId":"c25-staging-adopt-20260723-01"},"rotation":{"action":"none","requestId":"","sourceSecretName":"","sourceSecretKey":"","rotationId":"","recoveryWindowSeconds":604800}}},"documentdb":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"kafka":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"observability":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"postgresql":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"seaweedfs":{"filer":{"data":{"storageClass":"hcloud-volumes","size":"10Gi"}},"master":{"data":{"storageClass":"hcloud-volumes","size":"10Gi"}}}}'
 failed_hook_description='Upgrade "falcone" failed: pre-upgrade hooks failed: job falcone-in-falcone-webhook-key-credential failed: CREDENTIAL_MANAGED_SECRET_MISSING'
+r22_immutable_description='Upgrade "falcone" failed: cannot patch "falcone-documentdb-data" with kind PersistentVolumeClaim: PersistentVolumeClaim "falcone-documentdb-data" is invalid: spec.storageClassName: Forbidden: field is immutable (local-path -> null); cannot patch "falcone-kafka-data" with kind PersistentVolumeClaim: PersistentVolumeClaim "falcone-kafka-data" is invalid: spec.storageClassName: Forbidden: field is immutable (local-path -> null); cannot patch "falcone-observability-data" with kind PersistentVolumeClaim: PersistentVolumeClaim "falcone-observability-data" is invalid: spec.storageClassName: Forbidden: field is immutable (local-path -> null); cannot patch "falcone-postgresql-data" with kind PersistentVolumeClaim: PersistentVolumeClaim "falcone-postgresql-data" is invalid: spec.storageClassName: Forbidden: field is immutable (local-path -> null); cannot patch "falcone-seaweedfs-filer" with kind StatefulSet: StatefulSet.apps "falcone-seaweedfs-filer" is invalid: spec: Forbidden: immutable StatefulSet fields changed; cannot patch "falcone-seaweedfs-master" with kind StatefulSet: StatefulSet.apps "falcone-seaweedfs-master" is invalid: spec: Forbidden: immutable StatefulSet fields changed'
 
 require_repair_version() {
   case " $* " in
@@ -31,6 +32,11 @@ case "$scenario" in
   phase-a-complete|phase-a-attestation-*|forward-*)
     release_revision=23
     release_chart="$repair_chart"
+    ;;
+  r22-immutable-*)
+    release_revision=22
+    release_chart="in-falcone-0.4.8"
+    release_status="failed"
     ;;
   wrong-start-chart)
     release_chart="in-falcone-0.4.2"
@@ -51,6 +57,8 @@ case "$scenario" in
   failed-resume-list-status-drift) release_status="pending-upgrade" ;;
   failed-resume-list-revision-drift) release_revision=22 ;;
   failed-resume-list-chart-drift) release_chart="in-falcone-0.4.6" ;;
+  r22-immutable-status-drift) release_status="pending-upgrade" ;;
+  r22-immutable-chart-drift) release_chart="in-falcone-0.4.7" ;;
 esac
 if [ "$upgrade_count" -gt 0 ]; then
   release_revision=$((release_revision + upgrade_count))
@@ -170,6 +178,29 @@ case "${1:-}" in
       "$release_revision" "$release_chart" "$release_status"
     ;;
   history)
+    case "$scenario" in
+      r22-immutable-*)
+        r22_status="failed"
+        r22_chart="in-falcone-0.4.8"
+        r22_description="$r22_immutable_description"
+        case "$scenario" in
+          r22-immutable-status-drift) r22_status="pending-upgrade" ;;
+          r22-immutable-chart-drift) r22_chart="in-falcone-0.4.7" ;;
+          r22-immutable-description-drift)
+            r22_description='Upgrade "falcone" failed: cannot patch "falcone-documentdb-data" with kind PersistentVolumeClaim: spec.storageClassName is immutable'
+            ;;
+        esac
+        jq -nc \
+          --arg r22_status "$r22_status" --arg r22_chart "$r22_chart" \
+          --arg r22_description "$r22_description" --arg r21_description "$failed_hook_description" \
+          '[
+            {revision:20,status:"deployed",chart:"in-falcone-0.4.1",description:"Upgrade complete"},
+            {revision:21,status:"failed",chart:"in-falcone-0.4.7",description:$r21_description},
+            {revision:22,status:$r22_status,chart:$r22_chart,description:$r22_description}
+          ]'
+        exit 0
+        ;;
+    esac
     history_revision=21
     history_chart="in-falcone-0.4.7"
     history_status="failed"

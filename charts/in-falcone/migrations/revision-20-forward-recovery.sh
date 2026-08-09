@@ -8,7 +8,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.8"
+EXPECTED_REPAIR_VERSION="0.4.9"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -77,6 +77,19 @@ actual_revision="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0]
 actual_chart="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].chart else empty end')"
 actual_status="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].status else empty end')"
 [[ "$actual_release" == "$EXPECTED_RELEASE" && -n "$actual_revision" && -n "$actual_chart" && -n "$actual_status" ]] || die "TARGET_RELEASE_MISSING"
+
+# Revision 22 is a failed Phase-A apply, so a successful Phase-A attestation
+# cannot exist yet. Reuse the single Phase-A implementation and its two health
+# gates instead of fabricating evidence or duplicating the repair logic here.
+if [[ "$actual_revision" == 22 ]]; then
+  delegated_args=(--phase-a)
+  [[ "$apply" == true ]] && delegated_args+=(--apply)
+  [[ -z "$confirm_target" ]] || delegated_args+=(--confirm-target "$confirm_target")
+  [[ -z "$backup_reference" ]] || delegated_args+=(--backup-reference "$backup_reference")
+  [[ -z "$backup_attestation" ]] || delegated_args+=(--backup-attestation "$backup_attestation")
+  [[ -z "$parity_attestation" ]] || delegated_args+=(--parity-attestation "$parity_attestation")
+  exec "$script_dir/revision-20-repair.sh" "${delegated_args[@]}"
+fi
 
 if [[ "$actual_revision" == 21 ]]; then
   [[ "$actual_status" == "failed" ]] || die "FAILED_RESUME_LIST_STATUS_UNSAFE"
@@ -189,6 +202,12 @@ fi
 
 args=(
   -f "$staging_values"
+  --set-string documentdb.persistence.storageClass=local-path --set documentdb.persistence.size=10Gi
+  --set-string kafka.persistence.storageClass=local-path --set kafka.persistence.size=10Gi
+  --set-string observability.persistence.storageClass=local-path --set observability.persistence.size=10Gi
+  --set-string postgresql.persistence.storageClass=local-path --set postgresql.persistence.size=10Gi
+  --set-string seaweedfs.filer.data.storageClass=hcloud-volumes --set seaweedfs.filer.data.size=10Gi
+  --set-string seaweedfs.master.data.storageClass=hcloud-volumes --set seaweedfs.master.data.size=10Gi
   --set global.webhookSigningKey.create=false
   --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
   --set-string global.webhookSigningKey.secretKey=key

@@ -12,6 +12,8 @@
   production/base/HA/OpenShift drift.
 - [x] Add dry-run-first revision-20 Phase A/Phase B and forward recovery tools,
   structured target/package evidence, semantic owner gates and fail-forward errors.
+- [x] Add revision-22 failed-apply recovery with exact list/history fingerprint,
+  live immutable-storage gates and explicit non-secret preservation overrides.
 - [x] Update schemas, chart versions, release notes, detailed runbooks and OpenSpec.
 - [x] Run and record complete source/package validation on the final diff.
 - [ ] Independent system-reviewer decision.

@@ -37,9 +37,9 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const phaseAAttestationTemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
-const repairDigest = 'sha256:0480480480480480480480480480480480480480480480480480480480480480'
-const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.8/${repairDigest}`
-const phaseBConfirmation = `default/in-falcone-staging/falcone@23/in-falcone-0.4.8/${repairDigest}`
+const repairDigest = 'sha256:0490490490490490490490490490490490490490490490490490490490490490'
+const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.9/${repairDigest}`
+const phaseBConfirmation = `default/in-falcone-staging/falcone@23/in-falcone-0.4.9/${repairDigest}`
 const upgradeEvidenceArgs = [
   '--set-string', 'deployment.upgrade.currentVersion=0.3.1',
   '--set', 'global.webhookDatabase.migration.backupVerified=true',
@@ -112,11 +112,11 @@ function materializeAttestation(template, work, filename, mutate = () => {}) {
   document.evidence.observedAt = new Date(now - 60_000).toISOString()
   document.evidence.validUntil = new Date(now + 10 * 60_000).toISOString()
   if (document.repair) {
-    document.repair.chart = 'in-falcone-0.4.8'
+    document.repair.chart = 'in-falcone-0.4.9'
     document.repair.packageDigest = repairDigest
   }
   if (document.result) {
-    document.result.chart = 'in-falcone-0.4.8'
+    document.result.chart = 'in-falcone-0.4.9'
     document.result.packageDigest = repairDigest
   }
   mutate(document)
@@ -730,21 +730,21 @@ test('OpenShift strips every fixed FerretDB UID/GID at pod, main, and init scope
 })
 
 // bbx-repair-staging-029 | fn-repair-chart-version | OpenSpec #### Scenario: PVC state changes
-test('repair and forward-recovery pin chart 0.4.8 and reject 0.4.7 through 0.4.3 target confirmations', () => {
+test('repair and forward-recovery pin chart 0.4.9 and reject 0.4.8 through 0.4.3 target confirmations', () => {
   for (const [label, tool, args, scenario] of [
     ['repair', repairTool, phaseAArgs, 'safe'],
     ['forward-recovery', recoveryTool, forwardArgs, 'forward-complete'],
   ]) {
     const invocation = invokeMigration(tool, args, scenario)
     try {
-      assertSuccess(invocation.result, `${label} with the immutable 0.4.8 repair package`)
+      assertSuccess(invocation.result, `${label} with the immutable 0.4.9 repair package`)
       const chartCalls = invocation.helmCalls.filter((line) => /^(?:template|diff upgrade|upgrade)(?:\s|$)/.test(line))
       assert.ok(chartCalls.some((line) => /^template(?:\s|$)/.test(line)), `${label} did not render the repair chart`)
       assert.ok(chartCalls.some((line) => /^diff upgrade(?:\s|$)/.test(line)), `${label} did not diff the repair chart`)
       assert.ok(chartCalls.some((line) => /^upgrade(?:\s|$)/.test(line)), `${label} did not apply the repair chart`)
       for (const call of chartCalls) {
-        assert.match(call, /(?:^|\s)--version 0\.4\.8(?:\s|$)/, `${label} did not select chart 0.4.8`)
-        assert.doesNotMatch(call, /(?:^|\s)--version 0\.4\.[34567](?:\s|$)/,
+        assert.match(call, /(?:^|\s)--version 0\.4\.9(?:\s|$)/, `${label} did not select chart 0.4.9`)
+        assert.doesNotMatch(call, /(?:^|\s)--version 0\.4\.[345678](?:\s|$)/,
           `${label} selected a historical immutable chart`)
       }
     } finally {
@@ -752,8 +752,8 @@ test('repair and forward-recovery pin chart 0.4.8 and reject 0.4.7 through 0.4.3
     }
   }
 
-  for (const historicalVersion of ['0.4.7', '0.4.6', '0.4.5', '0.4.4', '0.4.3']) {
-    const obsoleteConfirmation = phaseBConfirmation.replace('in-falcone-0.4.8', `in-falcone-${historicalVersion}`)
+  for (const historicalVersion of ['0.4.8', '0.4.7', '0.4.6', '0.4.5', '0.4.4', '0.4.3']) {
+    const obsoleteConfirmation = phaseBConfirmation.replace('in-falcone-0.4.9', `in-falcone-${historicalVersion}`)
     for (const [label, tool, args, scenario] of [
       ['repair', repairTool, (work) => phaseBArgsWithConfirmation(work, obsoleteConfirmation), 'phase-a-complete'],
       ['forward-recovery', recoveryTool, (work) => forwardArgs(work, obsoleteConfirmation), 'forward-complete'],
@@ -763,7 +763,7 @@ test('repair and forward-recovery pin chart 0.4.8 and reject 0.4.7 through 0.4.3
         assert.notEqual(invocation.result.status, 0,
           `${label} accepted historical chart ${historicalVersion} target confirmation`)
         assert.match(combined(invocation.result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
-        assert.match(combined(invocation.result), /in-falcone-0\.4\.8/)
+        assert.match(combined(invocation.result), /in-falcone-0\.4\.9/)
         assert.deepEqual(invocation.helmMutations, [], `${label} mutated before rejecting the mismatched chart`)
       } finally {
         invocation.cleanup()
@@ -787,7 +787,7 @@ test('repair and forward use the packaged chart top-level version and reject a w
       if (!valid.helmCalls.some((line) => /^pull(?:\s|$)/.test(line))) {
         violations.push(`${label}:package-not-pulled`)
       }
-      if (!valid.helmCalls.includes('fixture-package first-version=0.2.2 top-level-version=0.4.8')) {
+      if (!valid.helmCalls.includes('fixture-package first-version=0.2.2 top-level-version=0.4.9')) {
         violations.push(`${label}:dependency-first-package-not-proven`)
       }
       if (valid.result.status !== 0) {

@@ -12,8 +12,8 @@
   },
   "result": {
     "revision": "23",
-    "chart": "in-falcone-0.4.8",
-    "packageDigest": "sha256:0480480480480480480480480480480480480480480480480480480480480480"
+    "chart": "in-falcone-0.4.9",
+    "packageDigest": "sha256:0490490490490490490490490490490490490490490490490490490490490490"
   },
   "health": {
     "recoveryRootAllowed": false,

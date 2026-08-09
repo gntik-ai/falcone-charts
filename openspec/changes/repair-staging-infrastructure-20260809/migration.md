@@ -1,25 +1,28 @@
-# Migration: Revision 20 to chart 0.4.8
+# Migration: Revision 20 to chart 0.4.9
 
 Before mutation, repair validates the non-secret legacy C-25 webhook custody
 contract stored in Helm revision 20 and passes explicit legacy overrides to
 every render and upgrade. A failed pre-hook is resumable only for the known
 `CREDENTIAL_MANAGED_SECRET_MISSING` revision whose deployed source is revision
-20; arbitrary failed Helm revisions are rejected.
+20, or the exact revision-22/chart-0.4.8 immutable-storage failure. Arbitrary
+failed Helm revisions are rejected.
 
 ## Preconditions and evidence
 
 - Exact context `default`, namespace `in-falcone-staging`, release `falcone`,
   revision `20`, and starting chart `in-falcone-0.4.1`.
-- A published chart 0.4.8 package digest, not a source-only estimate. Chart
+- A published chart 0.4.9 package digest, not a source-only estimate. Chart
   0.4.5 remains the historical artifact blocked by nested dependency-version
   parsing. Chart 0.4.6 remains the historical artifact whose live apply reached
   Helm's existing-object ownership gate. Neither artifact is overwritten or
-  used as the active repair target.
+  used as the active repair target. Chart 0.4.8 remains the immutable historical
+  artifact that proved the non-secret r20 storage values also need explicit
+  preservation.
 - Separate, fresh `Revision20BackupEvidence` and `Revision20ParityEvidence`
   documents. Both bind the exact source target and repair package; parity names
   the exact backup reference it verified. Their observation windows must still
   be valid when apply begins.
-- Apply pulls the published 0.4.8 OCI artifact, verifies the registry-reported
+- Apply pulls the published 0.4.9 OCI artifact, verifies the registry-reported
   digest against the attestations, and uses the staging profile extracted from
   that same artifact; a local checkout is not the production apply source.
 - Secret-suppressed semantic diff shows no create/update/removal among the
@@ -32,7 +35,7 @@ every render and upgrade. A failed pre-hook is resumable only for the known
 
 Run `revision-20-repair.sh --phase-a` first; it is read-only by default. Apply
 requires both structured evidence files and an exact confirmation containing
-20, source chart 0.4.1, target chart 0.4.8 and package digest. It retains the
+20, source chart 0.4.1, target chart 0.4.9 and package digest. It retains the
 immutable hcloud-volumes claim contract, applies repairs, verifies exact owner
 metadata/images/store/fourteen unique Ready ExternalSecrets/auth/FerretDB/
 endpoints, disables recovery-root, and repeats the complete gate. The final auth
@@ -69,6 +72,6 @@ All mutation paths are fail-forward. There is no atomic apply or rollback path.
 A failed mutation prints `FORWARD_RECOVERY_REQUIRED`. The recovery tool defaults
 to read-only, revalidates the three structured attestations, actual current
 revision/chart/package confirmation, semantic external-owner diff and exact owner
-metadata, and reapplies chart 0.4.8. It never deletes storage. Once data exists,
+metadata, and reapplies chart 0.4.9. It never deletes storage. Once data exists,
 claim deletion is forbidden until a separately approved backup/restore and P13
 parity proof.

@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.8"
+EXPECTED_REPAIR_VERSION="0.4.9"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -102,9 +102,29 @@ validate_failed_resume_state() {
   history="$(helm history "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" -o json)" || die "HELM_HISTORY_UNAVAILABLE"
   latest="$(printf '%s' "$history" | jq -c 'sort_by(.revision) | last')"
   prior="$(printf '%s' "$history" | jq -c 'sort_by(.revision) | map(select(.revision == 20)) | last')"
-  printf '%s' "$latest" | jq -e '.revision == 21 and .status == "failed" and .chart == "in-falcone-0.4.7" and ((.description // "") | test("falcone-in-falcone-webhook-key-credential"))' >/dev/null || die "FAILED_RESUME_STATE_UNSAFE"
+  printf '%s' "$latest" | jq -e \
+    --arg revision "$actual_revision" --arg chart "$actual_chart" --arg status "$actual_status" \
+    '(.revision | tostring) == $revision and .chart == $chart and .status == $status' >/dev/null || \
+    die "FAILED_RESUME_LIST_HISTORY_MISMATCH"
+  printf '%s' "$latest" | jq -e '
+    if .revision == 22 then
+      .status == "failed" and .chart == "in-falcone-0.4.8"
+      and ((.description // "") as $description
+        | all([
+            "falcone-documentdb-data",
+            "falcone-kafka-data",
+            "falcone-observability-data",
+            "falcone-postgresql-data",
+            "falcone-seaweedfs-filer",
+            "falcone-seaweedfs-master"
+          ][]; $description | contains(.))
+        and ($description | contains("Forbidden")))
+    elif .revision == 21 then
+      .status == "failed" and .chart == "in-falcone-0.4.7"
+      and ((.description // "") | test("falcone-in-falcone-webhook-key-credential"))
+    else false end' >/dev/null || die "FAILED_RESUME_STATE_UNSAFE"
   printf '%s' "$prior" | jq -e '.revision == 20 and .status == "deployed" and .chart == "in-falcone-0.4.1"' >/dev/null || die "FAILED_RESUME_SOURCE_UNSAFE"
-  printf 'failed-resume=validated failedRevision=21 sourceRevision=20 sourceChart=in-falcone-0.4.1\n'
+  printf 'failed-resume=validated failedRevision=%s sourceRevision=20 sourceChart=in-falcone-0.4.1\n' "$(printf '%s' "$latest" | jq -r .revision)"
 }
 
 validate_legacy_webhook_contract() {
@@ -135,17 +155,73 @@ validate_legacy_webhook_contract() {
   printf 'legacy-webhook-contract=validated sourceRevision=20 secretName=falcone-webhook-signing-key-c25-legacy adoption=legacy rotation=none\n'
 }
 
-if [[ "$actual_revision" == 21 ]]; then
+validate_revision22_storage_contract() {
+  [[ "$actual_revision" == 22 ]] || return 0
+  local values object name component claim child
+  values="$(helm get values "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" --revision 20 -o json)" || \
+    die "LEGACY_STORAGE_VALUES_UNAVAILABLE"
+  printf '%s' "$values" | jq -e '
+    all([.documentdb, .kafka, .observability, .postgresql][];
+      .persistence.storageClass == "local-path" and .persistence.size == "10Gi")
+    and .seaweedfs.filer.data.storageClass == "hcloud-volumes"
+    and .seaweedfs.filer.data.size == "10Gi"
+    and .seaweedfs.master.data.storageClass == "hcloud-volumes"
+    and .seaweedfs.master.data.size == "10Gi"' >/dev/null || die "LEGACY_STORAGE_CONTRACT_DRIFT"
+
+  for name in falcone-documentdb-data falcone-kafka-data falcone-observability-data falcone-postgresql-data; do
+    object="$(kubectl -n "$EXPECTED_NAMESPACE" get pvc "$name" -o json)" || die "IMMUTABLE_STORAGE_RESOURCE_MISSING name=${name}"
+    printf '%s' "$object" | jq -e --arg name "$name" --arg namespace "$EXPECTED_NAMESPACE" '
+      .metadata.name == $name and .metadata.namespace == $namespace
+      and .status.phase == "Bound" and .spec.storageClassName == "local-path"
+      and .spec.resources.requests.storage == "10Gi"
+      and (.spec.volumeName | type == "string" and length > 0)' >/dev/null || \
+      die "IMMUTABLE_STORAGE_CONTRACT_DRIFT resource=PersistentVolumeClaim/${name}"
+  done
+
+  for component in filer master; do
+    name="falcone-seaweedfs-${component}"
+    if [[ "$component" == filer ]]; then claim=data-filer; else claim=data-in-falcone-staging; fi
+    object="$(kubectl -n "$EXPECTED_NAMESPACE" get statefulset "$name" -o json)" || \
+      die "IMMUTABLE_STORAGE_RESOURCE_MISSING name=${name}"
+    printf '%s' "$object" | jq -e \
+      --arg name "$name" --arg component "$component" --arg claim "$claim" '
+      .metadata.name == $name and .metadata.namespace == "in-falcone-staging"
+      and .spec.serviceName == $name
+      and .spec.selector.matchLabels["app.kubernetes.io/name"] == "seaweedfs"
+      and .spec.selector.matchLabels["app.kubernetes.io/instance"] == "falcone"
+      and .spec.selector.matchLabels["app.kubernetes.io/component"] == $component
+      and (.spec.volumeClaimTemplates | length) == 1
+      and .spec.volumeClaimTemplates[0].metadata.name == $claim
+      and .spec.volumeClaimTemplates[0].spec.accessModes == ["ReadWriteOnce"]
+      and .spec.volumeClaimTemplates[0].spec.storageClassName == "hcloud-volumes"
+      and .spec.volumeClaimTemplates[0].spec.resources.requests.storage == "10Gi"' >/dev/null || \
+      die "IMMUTABLE_STORAGE_CONTRACT_DRIFT resource=StatefulSet/${name}"
+
+    child="${claim}-${name}-0"
+    object="$(kubectl -n "$EXPECTED_NAMESPACE" get pvc "$child" -o json)" || \
+      die "IMMUTABLE_STORAGE_RESOURCE_MISSING name=${child}"
+    printf '%s' "$object" | jq -e --arg name "$child" --arg namespace "$EXPECTED_NAMESPACE" '
+      .metadata.name == $name and .metadata.namespace == $namespace
+      and .status.phase == "Bound" and .spec.storageClassName == "local-path"
+      and .spec.resources.requests.storage == "10Gi"
+      and (.spec.volumeName | type == "string" and length > 0)' >/dev/null || \
+      die "IMMUTABLE_STORAGE_CONTRACT_DRIFT resource=PersistentVolumeClaim/${child}"
+  done
+  printf 'immutable-storage-contract=validated sourceRevision=20 failedRevision=22 standalonePvcs=4 seaweedfsStatefulSets=2 childPvcs=2\n'
+}
+
+if [[ "$actual_revision" == 21 || "$actual_revision" == 22 ]]; then
   [[ "$actual_status" == "failed" ]] || die "FAILED_RESUME_LIST_STATUS_UNSAFE"
   validate_failed_resume_state
 fi
 validate_legacy_webhook_contract
+validate_revision22_storage_contract
 
 if [[ "$mode" == phase-a || "$mode" == preflight ]]; then
-  [[ "$actual_revision" == "$EXPECTED_SOURCE_REVISION" || "$actual_revision" == 21 ]] || \
+  [[ "$actual_revision" == "$EXPECTED_SOURCE_REVISION" || "$actual_revision" == 21 || "$actual_revision" == 22 ]] || \
     die "REVISION_GATE_FAILED expected=${EXPECTED_SOURCE_REVISION} actual=${actual_revision}; use forward recovery after Phase A"
-  [[ "$actual_revision" == 21 || "$actual_status" == "deployed" ]] || die "SOURCE_RELEASE_STATUS_UNSAFE actual=${actual_status}"
-  [[ "$actual_revision" == 21 || "$actual_chart" == "$EXPECTED_SOURCE_CHART" ]] || \
+  [[ "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_status" == "deployed" ]] || die "SOURCE_RELEASE_STATUS_UNSAFE actual=${actual_status}"
+  [[ "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_chart" == "$EXPECTED_SOURCE_CHART" ]] || \
     die "STARTING_CHART_MISMATCH expected=${EXPECTED_SOURCE_CHART} actual=${actual_chart}"
 fi
 
@@ -267,9 +343,10 @@ fi
 # Give an inexact Phase-A target a useful JIT error before loading evidence.
 if [[ "$apply" == true && "$mode" == phase-a \
    && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"* \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/"* ]]; then
-  if [[ "$actual_revision" == 21 && "$actual_status" == failed ]]; then
-    die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/${actual_chart}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/"* \
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@22/"* ]]; then
+  if [[ ( "$actual_revision" == 21 || "$actual_revision" == 22 ) && "$actual_status" == failed ]]; then
+    die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${actual_revision}/${actual_chart}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
   fi
   die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}/${EXPECTED_SOURCE_CHART}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
 fi
@@ -316,6 +393,12 @@ diff_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision20-diff.XXXXXX")"
 
 phase_a_args=(
   -f "$staging_values"
+  --set-string documentdb.persistence.storageClass=local-path --set documentdb.persistence.size=10Gi
+  --set-string kafka.persistence.storageClass=local-path --set kafka.persistence.size=10Gi
+  --set-string observability.persistence.storageClass=local-path --set observability.persistence.size=10Gi
+  --set-string postgresql.persistence.storageClass=local-path --set postgresql.persistence.size=10Gi
+  --set-string seaweedfs.filer.data.storageClass=hcloud-volumes --set seaweedfs.filer.data.size=10Gi
+  --set-string seaweedfs.master.data.storageClass=hcloud-volumes --set seaweedfs.master.data.size=10Gi
   --set global.webhookSigningKey.create=false
   --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
   --set-string global.webhookSigningKey.secretKey=key
@@ -336,6 +419,12 @@ phase_a_args=(
 )
 phase_a_no_root_args=(
   -f "$staging_values"
+  --set-string documentdb.persistence.storageClass=local-path --set documentdb.persistence.size=10Gi
+  --set-string kafka.persistence.storageClass=local-path --set kafka.persistence.size=10Gi
+  --set-string observability.persistence.storageClass=local-path --set observability.persistence.size=10Gi
+  --set-string postgresql.persistence.storageClass=local-path --set postgresql.persistence.size=10Gi
+  --set-string seaweedfs.filer.data.storageClass=hcloud-volumes --set seaweedfs.filer.data.size=10Gi
+  --set-string seaweedfs.master.data.storageClass=hcloud-volumes --set seaweedfs.master.data.size=10Gi
   --set global.webhookSigningKey.create=false
   --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
   --set-string global.webhookSigningKey.secretKey=key
@@ -356,6 +445,12 @@ phase_a_no_root_args=(
 )
 phase_b_args=(
   -f "$staging_values"
+  --set-string documentdb.persistence.storageClass=local-path --set documentdb.persistence.size=10Gi
+  --set-string kafka.persistence.storageClass=local-path --set kafka.persistence.size=10Gi
+  --set-string observability.persistence.storageClass=local-path --set observability.persistence.size=10Gi
+  --set-string postgresql.persistence.storageClass=local-path --set postgresql.persistence.size=10Gi
+  --set-string seaweedfs.filer.data.storageClass=hcloud-volumes --set seaweedfs.filer.data.size=10Gi
+  --set-string seaweedfs.master.data.storageClass=hcloud-volumes --set seaweedfs.master.data.size=10Gi
   --set global.webhookSigningKey.create=false
   --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
   --set-string global.webhookSigningKey.secretKey=key
@@ -580,8 +675,8 @@ fi
 if [[ "$mode" == phase-a ]]; then
   if [[ "$fixture_failure_seam" == true ]]; then
     expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"
-  elif [[ "$actual_revision" == 21 ]]; then
-    expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/${actual_chart}->${EXPECTED_REPAIR_CHART}/${package_digest}"
+  elif [[ "$actual_revision" == 21 || "$actual_revision" == 22 ]]; then
+    expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${actual_revision}/${actual_chart}->${EXPECTED_REPAIR_CHART}/${package_digest}"
   else
     expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}/${EXPECTED_SOURCE_CHART}->${EXPECTED_REPAIR_CHART}/${package_digest}"
   fi

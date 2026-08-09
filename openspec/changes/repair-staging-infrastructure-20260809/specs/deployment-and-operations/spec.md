@@ -129,8 +129,20 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.8,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.9,
   and neither path uses atomic upgrade or rollback to revision 20
+
+#### Scenario: Phase A encounters the admitted revision-22 immutable-field failure
+
+- **WHEN** Helm history proves revision 22 failed on chart 0.4.8 after rejecting
+  the exact four standalone PVCs and the filer/master StatefulSets
+- **THEN** Phase A validates the bound PVC, SeaweedFS claim-template and child-PVC
+  metadata without reading Secret or volume data
+- **AND** every render, diff and upgrade explicitly preserves the validated
+  non-secret storageClass and size values without `--reuse-values`
+- **AND** any identity, status, chart, failure-description, UID, binding,
+  storageClass, size, selector, serviceName or claim-template drift fails before
+  mutation
 
 ### Requirement: Phase-A completion SHALL prove final no-root health
 
