@@ -8,7 +8,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.4"
+EXPECTED_REPAIR_VERSION="0.4.5"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -175,7 +175,10 @@ if helm plugin list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx diff; then
   helm diff upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --suppress-secrets "${args[@]}" >"$diff_file" || status=$?
   [[ "$status" == 0 || "$status" == 2 ]] || die "HELM_DIFF_FAILED"
   diff_headers="$(grep -Ei '^[^[:space:]].*(has (been )?(added|removed)|has changed):$' "$diff_file" || true)"
-  if printf '%s\n' "$diff_headers" | grep -Eiq '(^|[, /])external-secrets([, /]|$)|external-secrets-controller|external-secrets-cert-controller|externalsecret-validate|secretstore-validate|clustersecretstores\.external-secrets\.io'; then
+  # Match only the exact 21 ESO owner identities.  The Falcone integration
+  # ExternalSecret external-secrets/eso-openbao-auth is intentionally allowed.
+  protected_owner_names='external-secrets|external-secrets-cert-controller|external-secrets-webhook|external-secrets-metrics|external-secrets-cert-controller-metrics|external-secrets-webhook-metrics|external-secrets-leaderelection|external-secrets-controller|external-secrets-edit|external-secrets-view|external-secrets-servicebindings|externalsecret-validate|secretstore-validate'
+  if printf '%s\n' "$diff_headers" | grep -Eiq ",[[:space:]]*(${protected_owner_names})([[:space:],/]|$)|clustersecretstores\.external-secrets\.io"; then
     die "EXTERNAL_ESO_SEMANTIC_DIFF"
   fi
 else

@@ -37,9 +37,9 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const phaseAAttestationTemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
-const repairDigest = 'sha256:0440440440440440440440440440440440440440440440440440440440440440'
-const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.4/${repairDigest}`
-const phaseBConfirmation = `default/in-falcone-staging/falcone@22/in-falcone-0.4.4/${repairDigest}`
+const repairDigest = 'sha256:0450450450450450450450450450450450450450450450450450450450450450'
+const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.5/${repairDigest}`
+const phaseBConfirmation = `default/in-falcone-staging/falcone@22/in-falcone-0.4.5/${repairDigest}`
 const upgradeEvidenceArgs = [
   '--set-string', 'deployment.upgrade.currentVersion=0.3.1',
   '--set', 'global.webhookDatabase.migration.backupVerified=true',
@@ -117,7 +117,7 @@ function materializeAttestation(template, work, filename, mutate = () => {}) {
   return path
 }
 
-function invokeMigration(tool, argsOrBuilder, scenario = 'safe') {
+function invokeMigration(tool, argsOrBuilder, scenario = 'safe', extraEnv = {}) {
   const work = mkdtempSync(resolve(tmpdir(), 'falcone-reviewer-bbx-'))
   const helmLog = resolve(work, 'helm.log')
   const kubectlLog = resolve(work, 'kubectl.log')
@@ -138,6 +138,7 @@ function invokeMigration(tool, argsOrBuilder, scenario = 'safe') {
       FALCONE_STAGING_SCENARIO: scenario,
       FALCONE_STAGING_EXTERNAL_SECRETS_FIXTURE: externalSecretsFixture,
       FALCONE_STAGING_REVISION20_MANIFEST: revision20Manifest,
+      ...extraEnv,
     },
     timeout: 30_000,
   })
@@ -151,6 +152,16 @@ function invokeMigration(tool, argsOrBuilder, scenario = 'safe') {
     helmMutations: helmCalls.filter((line) => /^(?:install|rollback|uninstall|upgrade)(?:\s|$)/.test(line)),
     cleanup: () => rmSync(work, { recursive: true, force: true }),
   }
+}
+
+function assertSecretSuppressedSemanticDiff(invocation, label) {
+  const diffCalls = invocation.helmCalls.filter((line) => /^diff upgrade(?:\s|$)/.test(line))
+  assert.ok(diffCalls.length > 0, `${label} did not execute the semantic diff gate`)
+  for (const call of diffCalls) assert.match(call, /(?:^|\s)--suppress-secrets(?:\s|$)/)
+  assert.ok(!invocation.helmCalls.some((line) => /^get manifest(?:\s|$)/.test(line)),
+    `${label} read a potentially secret-bearing live Helm manifest`)
+  assert.doesNotMatch(combined(invocation.result), /(?:^|\n)kind:\s*Secret(?:\s|$)|(?:^|\n)(?:data|stringData):/,
+    `${label} exposed a Secret payload surface`)
 }
 
 function renderUpgrade() {
@@ -522,6 +533,61 @@ test('semantic owner gate rejects cluster-scoped and namespaced external-owner c
   assert.deepEqual(unsafe, [])
 })
 
+// bbx-repair-staging-030 | fn-external-owner-semantic-boundary | OpenSpec #### Scenario: External controller is reused
+test('repair and forward allow exact Falcone integration migration but reject every external ESO owner object', () => {
+  const fixture = JSON.parse(readFileSync(revision20Manifest, 'utf8'))
+  assert.equal(fixture.falconeIntegrationResources.length, 15)
+  assert.equal(fixture.liveExternalOwnerResources.length, 21)
+  assert.ok(fixture.liveExternalOwnerResources.some((resource) => resource.namespace !== null),
+    'external ESO owner fixture lacks namespaced resources')
+  assert.ok(fixture.liveExternalOwnerResources.some((resource) => resource.namespace === null),
+    'external ESO owner fixture lacks cluster-scoped resources')
+  const violations = []
+  const executables = [
+    ['repair', repairTool, phaseAArgs, 'safe'],
+    ['forward-recovery', recoveryTool, forwardArgs, 'forward-complete'],
+  ]
+
+  for (const [label, tool, args, baseScenario] of executables) {
+    const allowed = invokeMigration(tool, args, 'falcone-integration-and-legacy-sa-migration', {
+      FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO: baseScenario,
+    })
+    try {
+      assertSecretSuppressedSemanticDiff(allowed, `${label} allowed migration`)
+      if (allowed.result.status !== 0) {
+        const code = /EXTERNAL_ESO_SEMANTIC_DIFF/.test(combined(allowed.result))
+          ? 'EXTERNAL_ESO_SEMANTIC_DIFF'
+          : 'unexpected-error'
+        violations.push(`${label}:known-falcone-migration-rejected:${code}`)
+      }
+    } finally {
+      allowed.cleanup()
+    }
+
+    for (const resource of fixture.liveExternalOwnerResources) {
+      const identity = `${resource.kind}/${resource.namespace ?? '<cluster>'}/${resource.name}`
+      const invocation = invokeMigration(tool, args, 'external-owner-exact-resource', {
+        FALCONE_STAGING_EXTERNAL_OWNER_API_VERSION: resource.apiVersion,
+        FALCONE_STAGING_EXTERNAL_OWNER_KIND: resource.kind,
+        FALCONE_STAGING_EXTERNAL_OWNER_NAME: resource.name,
+        FALCONE_STAGING_EXTERNAL_OWNER_NAMESPACE: resource.namespace ?? '',
+        FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO: baseScenario,
+      })
+      try {
+        assertSecretSuppressedSemanticDiff(invocation, `${label} ${identity}`)
+        if (invocation.result.status === 0) violations.push(`${label}:${identity}:accepted`)
+        if (!/EXTERNAL_ESO_SEMANTIC_DIFF/.test(combined(invocation.result))) {
+          violations.push(`${label}:${identity}:failure-code-missing`)
+        }
+        if (invocation.helmMutations.length > 0) violations.push(`${label}:${identity}:mutated`)
+      } finally {
+        invocation.cleanup()
+      }
+    }
+  }
+  assert.deepEqual(violations, [])
+})
+
 // bbx-repair-staging-025 | fn-external-owner-before-after | OpenSpec #### Scenario: External controller is reused
 test('external ESO owner metadata is identical before and after each repaired-chart pass', () => {
   const invocation = invokeMigration(repairTool, phaseAArgs, 'external-owner-changed-after-apply')
@@ -653,40 +719,44 @@ test('OpenShift strips every fixed FerretDB UID/GID at pod, main, and init scope
 })
 
 // bbx-repair-staging-029 | fn-repair-chart-version | OpenSpec #### Scenario: PVC state changes
-test('repair and forward-recovery pin chart 0.4.4 and reject a 0.4.3 target confirmation', () => {
+test('repair and forward-recovery pin chart 0.4.5 and reject 0.4.4 and 0.4.3 target confirmations', () => {
   for (const [label, tool, args, scenario] of [
     ['repair', repairTool, phaseAArgs, 'safe'],
     ['forward-recovery', recoveryTool, forwardArgs, 'forward-complete'],
   ]) {
     const invocation = invokeMigration(tool, args, scenario)
     try {
-      assertSuccess(invocation.result, `${label} with the immutable 0.4.4 repair package`)
+      assertSuccess(invocation.result, `${label} with the immutable 0.4.5 repair package`)
       const chartCalls = invocation.helmCalls.filter((line) => /^(?:template|diff upgrade|upgrade)(?:\s|$)/.test(line))
       assert.ok(chartCalls.some((line) => /^template(?:\s|$)/.test(line)), `${label} did not render the repair chart`)
       assert.ok(chartCalls.some((line) => /^diff upgrade(?:\s|$)/.test(line)), `${label} did not diff the repair chart`)
       assert.ok(chartCalls.some((line) => /^upgrade(?:\s|$)/.test(line)), `${label} did not apply the repair chart`)
       for (const call of chartCalls) {
-        assert.match(call, /(?:^|\s)--version 0\.4\.4(?:\s|$)/, `${label} did not select chart 0.4.4`)
-        assert.doesNotMatch(call, /(?:^|\s)--version 0\.4\.3(?:\s|$)/, `${label} selected immutable chart 0.4.3`)
+        assert.match(call, /(?:^|\s)--version 0\.4\.5(?:\s|$)/, `${label} did not select chart 0.4.5`)
+        assert.doesNotMatch(call, /(?:^|\s)--version 0\.4\.[34](?:\s|$)/,
+          `${label} selected a historical immutable chart`)
       }
     } finally {
       invocation.cleanup()
     }
   }
 
-  const obsoleteConfirmation = phaseBConfirmation.replace('in-falcone-0.4.4', 'in-falcone-0.4.3')
-  for (const [label, tool, args, scenario] of [
-    ['repair', repairTool, (work) => phaseBArgsWithConfirmation(work, obsoleteConfirmation), 'phase-a-complete'],
-    ['forward-recovery', recoveryTool, (work) => forwardArgs(work, obsoleteConfirmation), 'forward-complete'],
-  ]) {
-    const invocation = invokeMigration(tool, args, scenario)
-    try {
-      assert.notEqual(invocation.result.status, 0, `${label} accepted an immutable 0.4.3 target confirmation`)
-      assert.match(combined(invocation.result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
-      assert.match(combined(invocation.result), /in-falcone-0\.4\.4/)
-      assert.deepEqual(invocation.helmMutations, [], `${label} mutated before rejecting the mismatched chart`)
-    } finally {
-      invocation.cleanup()
+  for (const historicalVersion of ['0.4.4', '0.4.3']) {
+    const obsoleteConfirmation = phaseBConfirmation.replace('in-falcone-0.4.5', `in-falcone-${historicalVersion}`)
+    for (const [label, tool, args, scenario] of [
+      ['repair', repairTool, (work) => phaseBArgsWithConfirmation(work, obsoleteConfirmation), 'phase-a-complete'],
+      ['forward-recovery', recoveryTool, (work) => forwardArgs(work, obsoleteConfirmation), 'forward-complete'],
+    ]) {
+      const invocation = invokeMigration(tool, args, scenario)
+      try {
+        assert.notEqual(invocation.result.status, 0,
+          `${label} accepted historical chart ${historicalVersion} target confirmation`)
+        assert.match(combined(invocation.result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
+        assert.match(combined(invocation.result), /in-falcone-0\.4\.5/)
+        assert.deepEqual(invocation.helmMutations, [], `${label} mutated before rejecting the mismatched chart`)
+      } finally {
+        invocation.cleanup()
+      }
     }
   }
 })
