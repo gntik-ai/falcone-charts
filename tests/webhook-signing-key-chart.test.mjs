@@ -755,23 +755,27 @@ check('SeaweedFS post-upgrade hooks cannot block a restricted lifecycle upgrade'
   }
 
   const openbaoInit = documentWith(rendered, 'kind: Job', 'name: openbao-init');
-  assert.ok(openbaoInit, 'the OpenBao convergence hook renders');
+  assert.equal(openbaoInit, undefined, 'the full OpenBao payload/policy bootstrap is fresh-install-only');
+  const openbaoReconcile = documentWith(rendered, 'kind: Job', 'name: openbao-auth-reconcile');
+  assert.ok(openbaoReconcile, 'the OpenBao auth-metadata convergence hook renders');
   assert.match(
-    openbaoInit,
+    openbaoReconcile,
     /"helm\.sh\/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed/,
     'the sensitive hook Pod must be deleted on success or failure',
   );
-  assert.match(openbaoInit, /ttlSecondsAfterFinished: 300/);
+  assert.match(openbaoReconcile, /ttlSecondsAfterFinished: 300/);
   assert.match(
-    openbaoInit,
+    openbaoReconcile,
     /securityContext:\s+runAsNonRoot: true\s+runAsUser: 1000\s+seccompProfile:\s+type: RuntimeDefault/,
   );
-  for (const container of ['platform-credential-loader', 'openbao-init']) {
+  for (const container of ['request-no-kv-canary-token', 'auth-metadata-reconciler']) {
     assert.match(
-      openbaoInit,
+      openbaoReconcile,
       new RegExp(`name: ${container}[\\s\\S]*?securityContext:\\s+allowPrivilegeEscalation: false[\\s\\S]*?capabilities:\\s+drop:\\s+- ALL[\\s\\S]*?runAsNonRoot: true`),
     );
   }
+  assert.doesNotMatch(openbaoReconcile, /\bbao\s+kv\b|\bbao\s+policy\s+(?:read|write|delete)\b/);
+  assert.match(openbaoReconcile, /token_reviewer_jwt=""/);
 
   const documentdbInit = documentWith(rendered, 'kind: Job', 'name: falcone-documentdb-init');
   assert.ok(documentdbInit, 'the DocumentDB convergence hook renders');

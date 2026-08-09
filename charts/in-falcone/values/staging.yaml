@@ -1,6 +1,15 @@
 global:
   namespace: in-falcone-staging
   environment: staging
+  # repair-staging-infrastructure-20260809: consume the administrator-owned External
+  # Secrets Operator (issue #908 "externally managed ESO" mode). Falcone renders NO
+  # object into this namespace and never adopts or mutates its resources; it owns only
+  # its ClusterSecretStore, fourteen ExternalSecrets and the eso-system auth identity.
+  # operatorServiceAccount names the external controller identity that is granted the
+  # least-privilege TokenRequest Role for eso-system/eso-openbao-auth.
+  externalSecrets:
+    operatorNamespace: external-secrets
+    operatorServiceAccount: external-secrets
 publicSurface:
   hostnames:
     api: api.staging.in-falcone.example.com
@@ -33,12 +42,60 @@ config:
 deployment:
   topology:
     clusterRef: cluster-staging-shared
+# repair-staging-infrastructure-20260809: disable the bundled ESO controller/CRDs so the
+# release installs beside the administrator-owned controller named by
+# global.externalSecrets.operatorNamespace. The Falcone auth identity stays in eso-system.
+eso:
+  external-secrets:
+    enabled: false
+  eso:
+    namespace: eso-system
+openbao:
+  eso:
+    namespace: eso-system
+  openbao:
+    authReconcile:
+      allowRecoveryRoot: false
 apisix:
   replicas: 3
 controlPlane:
   replicas: 2
+  # Immutable first-party image digests from the approved staging rollout. Helm becomes
+  # authoritative for these Deployments without reverting them to older chart defaults.
+  # Only digests (never mutable tags, never `kubectl set image`) are a supported staging
+  # rollout path; re-verify each digest against the approved live/main rollout before an
+  # upgrade. A digest wins over the chart-default tag in component-wrapper.renderImage.
+  image:
+    digest: sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a
+  functionExecutor:
+    runtimeImage:
+      digest: sha256:4fe7a77b01e7e49cd97722a3f55808ec4a09c0c0886680389011ba43796382ba
+controlPlaneExecutor:
+  image:
+    digest: sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d
 webConsole:
   replicas: 2
+  image:
+    digest: sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34
+workflowWorker:
+  image:
+    digest: sha256:2669be573ec5d461f8a1e21c58c13817fd1bc14a947dba845ce1cfac8368a054
+mcp:
+  runtimeImage:
+    digest: sha256:ef4bf4a350388508f301f6ea4f39012b412b7bb625314e136812ba8cc53efb99
+# repair-staging-infrastructure-20260809: staging-only pgvector storage contract.
+# The evidenced cluster exposes only the default `local-path` StorageClass (no HCloud
+# CSI/`hcloud-volumes`), so the claim selects local-path and pins first placement to the
+# durable Hetzner `fsn1` node — never the ephemeral kind/github-actions test nodes.
+# WARNING: this profile is single-replica, node-local, `Delete` reclaim and NOT HA. It is
+# a staging development contract only; base/prod/HA/OpenShift storage defaults are
+# unchanged and MUST NOT inherit local-path. Loss/replacement of the fsn1 node loses the
+# volume. See docs/staging-storage-and-dr.md.
+postgresqlVector:
+  persistence:
+    storageClass: local-path
+  nodeSelector:
+    topology.kubernetes.io/region: fsn1
 gatewayPolicy:
   passthrough:
     mode: disabled

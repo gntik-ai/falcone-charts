@@ -19,6 +19,9 @@ global:
   # for compatibility preflight and OpenBao NetworkPolicy ingress.
   externalSecrets:
     operatorNamespace: ""
+    # Exact controller ServiceAccount used only for TokenRequest in externally
+    # managed mode. Falcone never creates or mutates this identity.
+    operatorServiceAccount: ""
   # One immutable SeaweedFS image contract is inherited by the vendored
   # data-plane workloads and by control-plane-created IAM Jobs.
   seaweedfs:
@@ -2641,9 +2644,29 @@ ferretdb:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true
         runAsNonRoot: true
+        # repair-staging-infrastructure: pin the engine image's numeric postgres UID.
+        # The postgres-documentdb image declares USER root (drops to postgres via gosu),
+        # so runAsNonRoot:true alone leaves kubelet unable to verify a non-root UID and it
+        # rejects the pod ("container has runAsNonRoot and image will run as root"). The
+        # engine's postgres UID is 999 (see documentdb/postgresqlVector podSecurityContext).
+        # The OpenShift overlay nulls this so the SCC injects a namespace-range UID.
+        runAsUser: 999
         capabilities:
           drop:
             - ALL
+  # repair-staging-infrastructure: availability-preserving rollout for the document path.
+  # maxUnavailable:0 keeps the old healthy ReplicaSet serving every prior Ready endpoint
+  # until a corrected replacement pod passes readiness; maxSurge:1 brings up one new pod at
+  # a time; the bounded progress deadline fails the rollout (without scaling old endpoints
+  # away) if the replacement never becomes Ready; revisionHistoryLimit retains prior
+  # ReplicaSets for rollback. The OpenShift overlay leaves these untouched.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  progressDeadlineSeconds: 600
+  revisionHistoryLimit: 10
   volumePermissions:
     enabled: false
     image:
@@ -4857,6 +4880,15 @@ openbao:
       # Default to self-signed bootstrap so kind/default fresh installs do not require cert-manager.
       mode: self-signed
       clientCaSecretName: in-falcone-openbao-client-ca
+    authReconcile:
+      enabled: true
+      useLocalReviewerJWT: true
+      roleName: eso-role
+      roleTTLSeconds: 86400
+      tokenExpirationSeconds: 600
+      activeDeadlineSeconds: 300
+      allowRecoveryRoot: false
+      evidenceMode: metadata-only
 
 # ---------------------------------------------------------------------------
 # Temporal — durable workflow (flows) engine. INTERNAL-ONLY platform component.

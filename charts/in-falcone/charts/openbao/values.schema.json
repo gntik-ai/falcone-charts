@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "openbao": {
+      "type": "object",
+      "properties": {
+        "authReconcile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "useLocalReviewerJWT",
+            "roleName",
+            "roleTTLSeconds",
+            "tokenExpirationSeconds",
+            "activeDeadlineSeconds",
+            "allowRecoveryRoot",
+            "evidenceMode"
+          ],
+          "properties": {
+            "enabled": {"type": "boolean", "enum": [true]},
+            "useLocalReviewerJWT": {"type": "boolean", "enum": [true]},
+            "roleName": {"type": "string", "const": "eso-role"},
+            "roleTTLSeconds": {"type": "integer", "minimum": 60, "maximum": 86400},
+            "tokenExpirationSeconds": {"type": "integer", "minimum": 600, "maximum": 3600},
+            "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 900},
+            "allowRecoveryRoot": {"type": "boolean", "default": false},
+            "evidenceMode": {"type": "string", "const": "metadata-only"}
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

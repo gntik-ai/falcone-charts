@@ -174,10 +174,17 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "operatorNamespace"
+            "operatorNamespace",
+            "operatorServiceAccount"
           ],
           "properties": {
             "operatorNamespace": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$",
+              "default": ""
+            },
+            "operatorServiceAccount": {
               "type": "string",
               "maxLength": 63,
               "pattern": "^$|^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$",
@@ -2192,7 +2199,16 @@
       "type": "object",
       "properties": {
         "openbao": {
-          "$ref": "#/definitions/coreEnabledReplicaRole"
+          "allOf": [
+            {
+              "$ref": "#/definitions/coreEnabledReplicaRole"
+            }
+          ],
+          "properties": {
+            "authReconcile": {
+              "$ref": "#/definitions/openbaoAuthReconcile"
+            }
+          }
         }
       },
       "additionalProperties": true
@@ -2203,6 +2219,30 @@
     }
   },
   "definitions": {
+    "openbaoAuthReconcile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "useLocalReviewerJWT",
+        "roleName",
+        "roleTTLSeconds",
+        "tokenExpirationSeconds",
+        "activeDeadlineSeconds",
+        "allowRecoveryRoot",
+        "evidenceMode"
+      ],
+      "properties": {
+        "enabled": {"type": "boolean", "enum": [true]},
+        "useLocalReviewerJWT": {"type": "boolean", "enum": [true]},
+        "roleName": {"type": "string", "const": "eso-role"},
+        "roleTTLSeconds": {"type": "integer", "minimum": 60, "maximum": 86400},
+        "tokenExpirationSeconds": {"type": "integer", "minimum": 600, "maximum": 3600},
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 900},
+        "allowRecoveryRoot": {"type": "boolean", "default": false},
+        "evidenceMode": {"type": "string", "const": "metadata-only"}
+      }
+    },
     "postgresqlRoleName": {
       "type": "string",
       "minLength": 1,
@@ -2529,8 +2569,74 @@
         "initContainers": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "securityContext": {
+                "type": "object",
+                "properties": {
+                  "runAsUser": {
+                    "not": {
+                      "const": 0
+                    }
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
           }
+        },
+        "revisionHistoryLimit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "progressDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "strategy": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "RollingUpdate",
+                "Recreate"
+              ]
+            },
+            "rollingUpdate": {
+              "type": "object",
+              "properties": {
+                "maxUnavailable": {
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "maxSurge": {
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        "updateStrategy": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "RollingUpdate",
+                "OnDelete"
+              ]
+            }
+          },
+          "additionalProperties": true
         },
         "volumePermissions": {
           "type": "object",

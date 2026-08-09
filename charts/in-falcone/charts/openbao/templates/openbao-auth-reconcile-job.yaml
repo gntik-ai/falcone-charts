@@ -1,0 +1,175 @@
+{{- if .Values.openbao.authReconcile.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openbao-auth-reconcile
+  namespace: {{ .Values.openbao.namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ .Values.openbao.authReconcile.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openbao-auth-reconcile
+        app.kubernetes.io/component: secrets-auth-metadata
+    spec:
+      serviceAccountName: openbao
+      restartPolicy: OnFailure
+      {{- include "openbao.imagePullSecrets" . | nindent 6 }}
+      securityContext: {{- toYaml .Values.openbao.jobPodSecurityContext | nindent 8 }}
+      initContainers:
+        - name: request-no-kv-canary-token
+          image: {{ include "openbao.image" (dict "root" . "image" .Values.openbao.credentialSync.image) | quote }}
+          imagePullPolicy: {{ .Values.openbao.credentialSync.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.openbao.jobSecurityContext | nindent 12 }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              kubectl -n {{ .Values.eso.namespace | quote }} create token \
+                {{ .Values.eso.serviceAccountName | default "eso-openbao-auth" | quote }} \
+                --duration={{ printf "%ds" (.Values.openbao.authReconcile.tokenExpirationSeconds | int) | quote }} \
+                > /canary/token
+              test -s /canary/token
+          volumeMounts:
+            - name: canary
+              mountPath: /canary
+      containers:
+        - name: auth-metadata-reconciler
+          image: {{ include "openbao.image" (dict "root" . "image" .Values.openbao.image) | quote }}
+          imagePullPolicy: {{ .Values.openbao.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.openbao.jobSecurityContext | nindent 12 }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              export BAO_ADDR="https://openbao.{{ .Values.openbao.namespace }}.svc.cluster.local:8200"
+              export BAO_CACERT=/openbao/tls/ca.crt
+              export HOME=/tmp
+              role={{ .Values.openbao.authReconcile.roleName | quote }}
+              desired_name={{ .Values.eso.serviceAccountName | default "eso-openbao-auth" | quote }}
+              desired_namespace={{ .Values.eso.namespace | default "eso-system" | quote }}
+              desired_ttl={{ .Values.openbao.authReconcile.roleTTLSeconds | int | quote }}
+              desired_policies="functions,gateway,iam,platform"
+              changed=false
+
+              fail() {
+                echo "result=error code=$1" >&2
+                exit 1
+              }
+              field() {
+                bao read -field="$1" "$2" 2>/dev/null || true
+              }
+              normalize_list() {
+                printf '%s' "$1" | tr -d '[],"' | tr ' ' '\n' | sed '/^$/d' | sort | paste -sd, -
+              }
+
+              i=0
+              until bao status >/dev/null 2>&1; do
+                i=$((i+1)); [ "$i" -ge 60 ] && fail OPENBAO_UNAVAILABLE
+                sleep 2
+              done
+
+              login_json="$(bao write -format=json auth/kubernetes/login \
+                role=openbao-init-role \
+                jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" 2>/dev/null || true)"
+              BAO_TOKEN="$(printf '%s' "$login_json" | sed -n 's/.*"client_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+              if [ -z "$BAO_TOKEN" ]; then
+                {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
+                [ -s /openbao-recovery/root-token ] || fail AUTHENTICATION_UNAVAILABLE
+                BAO_TOKEN="$(cat /openbao-recovery/root-token)"
+                echo "auth_source=recovery_root result=accepted"
+                {{- else }}
+                fail AUTHENTICATION_UNAVAILABLE
+                {{- end }}
+              fi
+              export BAO_TOKEN
+
+              bao auth list -format=json 2>/dev/null | grep -q '"kubernetes/"' || fail AUTH_MOUNT_MISSING
+              for policy in platform functions gateway iam; do
+                bao policy list 2>/dev/null | grep -qx "$policy" || fail REQUIRED_POLICY_NAME_MISSING
+              done
+
+              actual_host="$(field kubernetes_host auth/kubernetes/config)"
+              actual_local="$(field disable_local_ca_jwt auth/kubernetes/config)"
+              reviewer_set="$(field token_reviewer_jwt_set auth/kubernetes/config)"
+              if [ "$actual_host" != "https://kubernetes.default.svc:443" ] \
+                || [ "$actual_local" != "false" ] \
+                || [ "$reviewer_set" != "false" ]; then
+                bao write auth/kubernetes/config \
+                  kubernetes_host="https://kubernetes.default.svc:443" \
+                  disable_local_ca_jwt=false \
+                  kubernetes_ca_cert="" \
+                  token_reviewer_jwt="" >/dev/null || fail AUTH_CONFIG_WRITE_FAILED
+                changed=true
+              fi
+
+              actual_name="$(normalize_list "$(field bound_service_account_names "auth/kubernetes/role/$role")")"
+              actual_namespace="$(normalize_list "$(field bound_service_account_namespaces "auth/kubernetes/role/$role")")"
+              actual_policies="$(normalize_list "$(field token_policies "auth/kubernetes/role/$role")")"
+              actual_ttl="$(field token_ttl "auth/kubernetes/role/$role")"
+              role_matched=true
+              if [ "$actual_name" != "$desired_name" ] \
+                || [ "$actual_namespace" != "$desired_namespace" ] \
+                || [ "$actual_policies" != "$desired_policies" ] \
+                || [ "$actual_ttl" != "$desired_ttl" ]; then
+                role_matched=false
+                bao write "auth/kubernetes/role/$role" \
+                  bound_service_account_names="$desired_name" \
+                  bound_service_account_namespaces="$desired_namespace" \
+                  token_policies=platform,functions,gateway,iam \
+                  token_ttl="${desired_ttl}s" >/dev/null || fail ROLE_WRITE_FAILED
+                changed=true
+              fi
+
+              [ "$(normalize_list "$(field bound_service_account_names "auth/kubernetes/role/$role")")" = "$desired_name" ] || fail ROLE_VERIFY_FAILED
+              [ "$(normalize_list "$(field bound_service_account_namespaces "auth/kubernetes/role/$role")")" = "$desired_namespace" ] || fail ROLE_VERIFY_FAILED
+              [ "$(normalize_list "$(field token_policies "auth/kubernetes/role/$role")")" = "$desired_policies" ] || fail ROLE_VERIFY_FAILED
+              [ "$(field token_ttl "auth/kubernetes/role/$role")" = "$desired_ttl" ] || fail ROLE_VERIFY_FAILED
+
+              canary_json="$(bao write -format=json auth/kubernetes/login \
+                role="$role" jwt="$(cat /canary/token)" 2>/dev/null || true)"
+              canary_token="$(printf '%s' "$canary_json" | sed -n 's/.*"client_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+              if [ -z "$canary_token" ]; then
+                [ "$role_matched" = "true" ] && fail ROLE_MATCHES_AUTH_STILL_DENIED
+                fail AUTH_CANARY_DENIED
+              fi
+              BAO_TOKEN="$canary_token"; export BAO_TOKEN
+              bao read auth/token/lookup-self >/dev/null || fail AUTH_CANARY_LOOKUP_FAILED
+              bao write -force auth/token/revoke-self >/dev/null || fail AUTH_CANARY_REVOKE_FAILED
+              unset BAO_TOKEN canary_token canary_json login_json
+
+              if [ "$changed" = "true" ]; then
+                echo "result=changed code=AUTH_METADATA_CONVERGED canary=passed"
+              else
+                echo "result=unchanged code=AUTH_METADATA_MATCHED canary=passed"
+              fi
+          volumeMounts:
+            - name: tls
+              mountPath: /openbao/tls
+              readOnly: true
+            - name: canary
+              mountPath: /canary
+              readOnly: true
+            {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
+            - name: recovery
+              mountPath: /openbao-recovery
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.openbao.tls.secretName }}
+        - name: canary
+          emptyDir:
+            medium: Memory
+        {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
+        - name: recovery
+          secret:
+            secretName: {{ .Values.openbao.recovery.secretName }}
+        {{- end }}
+{{- end }}

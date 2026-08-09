@@ -19,6 +19,7 @@ import {
 const adoptedArgs = [
   '--set', 'eso.external-secrets.enabled=false',
   '--set-string', 'global.externalSecrets.operatorNamespace=external-secrets',
+  '--set-string', 'global.externalSecrets.operatorServiceAccount=external-secrets',
 ]
 
 function renderWithCrds(args = []) {
@@ -71,6 +72,7 @@ test('adopted ESO requires a distinct, explicit external controller namespace', 
     '--namespace', 'falcone-bbx',
     '--set', 'eso.external-secrets.enabled=false',
     '--set-string', 'global.externalSecrets.operatorNamespace=eso-system',
+    '--set-string', 'global.externalSecrets.operatorServiceAccount=external-secrets',
   ])
   assert.notEqual(shared.status, 0, 'adopted ESO unexpectedly allowed Falcone to own the external namespace')
   assert.match(combined(shared), /must differ from eso\.eso\.namespace/)
@@ -123,6 +125,7 @@ test('adopted ESO renders only Falcone-owned integration resources and never tou
   assertSuccess(syntax, 'rendered adopted ESO preflight shell syntax')
   assert.match(script, /eso_managed="false"/)
   assert.match(script, /external_eso_namespace="external-secrets"/)
+  assert.match(script, /external_eso_service_account="external-secrets"/)
   assert.match(script, /availableReplicas/)
   assert.match(script, /api-resources --api-group=external-secrets\.io/)
 })

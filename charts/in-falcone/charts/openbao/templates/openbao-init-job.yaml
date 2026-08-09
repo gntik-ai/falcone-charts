@@ -1,10 +1,11 @@
+{{- if .Release.IsInstall }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: openbao-init
   namespace: {{ .Values.openbao.namespace }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": post-install
     "helm.sh/hook-weight": "-4"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
 spec:
@@ -181,8 +182,9 @@ spec:
               bao auth enable kubernetes >/dev/null 2>&1 || true
               bao write auth/kubernetes/config \
                 kubernetes_host="https://kubernetes.default.svc:443" \
-                kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-                token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" >/dev/null
+                disable_local_ca_jwt=false \
+                kubernetes_ca_cert="" \
+                token_reviewer_jwt="" >/dev/null
               bao secrets enable -path=secret kv-v2 >/dev/null 2>&1 || true
               bao audit enable file file_path=/openbao/audit/openbao-audit.log >/dev/null 2>&1 || true
               for policy in init platform tenant functions gateway iam; do
@@ -316,3 +318,4 @@ spec:
                   name: openbao-policy-gateway
               - configMap:
                   name: openbao-policy-iam
+{{- end }}

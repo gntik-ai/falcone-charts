@@ -13,11 +13,8 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: openbao-kubernetes-auth
+  name: openbao-token-reviewer
 rules:
-  - apiGroups: [""]
-    resources: ["serviceaccounts", "serviceaccounts/token", "nodes"]
-    verbs: ["get", "create"]
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
@@ -25,18 +22,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: openbao-kubernetes-auth
+  name: openbao-token-reviewer
 subjects:
   - kind: ServiceAccount
     name: openbao
     namespace: {{ .Values.openbao.namespace }}
-  - kind: ServiceAccount
-    name: {{ .Values.eso.serviceAccountName | default "eso-openbao-auth" }}
-    namespace: {{ .Values.eso.namespace | default "eso-system" }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: openbao-kubernetes-auth
+  name: openbao-token-reviewer
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

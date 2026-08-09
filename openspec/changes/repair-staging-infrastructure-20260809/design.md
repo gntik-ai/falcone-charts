@@ -1,0 +1,46 @@
+# Design: Revision-20 staging infrastructure repair
+
+## Decisions
+
+1. Falcone consumes the existing ESO controller. `external-secrets` namespace
+   ownership never transfers. The external controller and OpenBao canary receive
+   `create` only on `eso-system/eso-openbao-auth` TokenRequest; only OpenBao may
+   create TokenReviews.
+2. `openbao-init` renders only on install. `openbao-auth-reconcile` renders on
+   install/upgrade, authenticates through `openbao-init-role`, optionally uses the
+   retained recovery credential for the one revision-20 repair, reads sanitized
+   auth/role metadata, clears static reviewer JWT/CA configuration, normalizes the
+   exact role, verifies, and runs login/lookup-self/revoke-self. Canonical values
+   disable recovery-root use immediately afterward.
+3. Routine reconciliation never executes KV, policy-document read/write/delete,
+   secrets-engine mutation, export, or migration. Policy existence is checked by
+   name. Result codes contain metadata only.
+4. FerretDB's pinned engine image/UID is one contract. Kubernetes uses UID 999;
+   OpenShift restricted mode removes the fixed UID for SCC assignment. Deployment
+   uses maxUnavailable 0, maxSurge 1, 600-second deadline and retained history.
+5. Only staging chooses local-path/fsn1. It is one replica, node-local, Delete
+   reclaim, non-HA. All other profiles remain unchanged.
+6. Six digests live in staging values: control-plane, executor, web, workflow,
+   function runtime, and MCP runtime. Helm, never imperative patches, is authority.
+7. Migration is split: Phase A retains the immutable hcloud-volumes value while
+   applying reversible repairs; Phase B rechecks exact PVC UID/Pending/no-volume/
+   no-PV/no-Pod evidence, requires JIT confirmation, deletes that PVC only, and
+   immediately applies canonical local-path values. Recovery after deletion is
+   forward-only.
+
+## Failure and rollback
+
+Auth mismatch or canary failure stops before ESO CR refresh and never falls back
+to payload operations. A matching role plus denial reports
+`ROLE_MATCHES_AUTH_STILL_DENIED`. Ferret failure leaves old Ready endpoints.
+Unexpected PVC binding/data invalidates Phase B. Before Phase A, revision 20 is
+untouched; after Phase A, prefer repaired-chart reapply; after PVC deletion,
+revision-20 rollback is storage-incompatible. Data-bearing storage changes require
+a separate backup/restore and isolation-parity design.
+
+## Verification
+
+Strict lint/schema, managed/external ESO renders, upgrade render, black-box
+contracts, non-staging storage non-regression, six digest assertions, shell syntax,
+OpenSpec strict validation, and package checksum validation run on the source
+commit. Independent disposable live verification occurs after maker handoff.
