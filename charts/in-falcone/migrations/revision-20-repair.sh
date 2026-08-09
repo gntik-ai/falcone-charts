@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.4"
+EXPECTED_REPAIR_VERSION="0.4.6"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -251,7 +251,9 @@ load_attested_chart() {
   chart_source="$chart_package_dir/in-falcone"
   staging_values="$chart_source/values/staging.yaml"
   [[ -f "$staging_values" ]] || die "REPAIR_PACKAGE_STAGING_VALUES_MISSING"
-  pulled_version="$(awk '$1 == "version:" {print $2; exit}' "$chart_source/Chart.yaml")"
+  # Read exactly one top-level Chart.yaml version; dependency versions are
+  # indented and duplicate/missing top-level declarations fail closed.
+  pulled_version="$(awk '$0 ~ /^version:[[:space:]]/ {count++; value=$2} END {if (count == 1) print value}' "$chart_source/Chart.yaml")"
   [[ "$pulled_version" == "$EXPECTED_REPAIR_VERSION" ]] || die "REPAIR_PACKAGE_VERSION_MISMATCH actual=${pulled_version:-missing}"
 }
 if [[ "$apply" == true && "$fixture_failure_seam" == false && "$legacy_phase_b_seam" == false ]]; then
@@ -314,6 +316,8 @@ render_and_validate_images "$render_file"
 # Sanitized metadata-only inventory for the 21 resources owned by the separate
 # external ESO release. Helm diff is checked semantically against this set; no
 # Secret payload or `helm get manifest` operation is used.
+# Exact identities owned by the separately-installed ESO release.  Do not
+# reject the Falcone integration ExternalSecret external-secrets/eso-openbao-auth.
 protected_owner_names='external-secrets|external-secrets-cert-controller|external-secrets-webhook|external-secrets-metrics|external-secrets-cert-controller-metrics|external-secrets-webhook-metrics|external-secrets-leaderelection|external-secrets-controller|external-secrets-edit|external-secrets-view|external-secrets-servicebindings|externalsecret-validate|secretstore-validate'
 
 semantic_diff() {
@@ -329,7 +333,10 @@ semantic_diff() {
   [[ "$status" == 0 || "$status" == 2 ]] || { printf 'HELM_DIFF_FAILED\n' >&2; return 1; }
   local diff_headers
   diff_headers="$(grep -Ei '^[^[:space:]].*(has (been )?(added|removed)|has changed):$' "$diff_file" || true)"
-  if printf '%s\n' "$diff_headers" | grep -Eiq "(^|[, /])external-secrets([, /]|$)|(${protected_owner_names})|clustersecretstores\\.external-secrets\\.io"; then
+  # helm-diff headers are `namespace, name, Kind (apiGroup) has changed:`.
+  # Classify by exact owner identity; namespace/group alone would incorrectly
+  # block the legitimate Falcone integration resources.
+  if printf '%s\n' "$diff_headers" | grep -Eiq ",[[:space:]]*(${protected_owner_names})([[:space:],/]|$)|clustersecretstores\.external-secrets\.io"; then
     printf 'EXTERNAL_ESO_SEMANTIC_DIFF\n' >&2
     return 1
   fi

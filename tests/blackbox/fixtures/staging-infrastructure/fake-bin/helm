@@ -7,12 +7,13 @@ scenario="${FALCONE_STAGING_SCENARIO:-safe}"
 helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${FALCONE_STAGING_STATE_FILE:?}.helm}"
 upgrade_count=0
 [ ! -f "$helm_state" ] || upgrade_count="$(cat "$helm_state")"
+real_helm="${FALCONE_STAGING_HELM_DELEGATE:-${FALCONE_STAGING_REAL_HELM:-}}"
 
 require_repair_version() {
   case " $* " in
-    *" --version 0.4.4 "*) ;;
+    *" --version 0.4.6 "*) ;;
     *)
-      printf 'REPAIR_CHART_VERSION_MISMATCH expected=0.4.4 call=%s\n' "$*" >&2
+      printf 'REPAIR_CHART_VERSION_MISMATCH expected=0.4.6 call=%s\n' "$*" >&2
       exit 64
       ;;
   esac
@@ -23,15 +24,21 @@ release_chart="in-falcone-0.4.1"
 case "$scenario" in
   phase-a-complete|phase-a-attestation-*|forward-*)
     release_revision=22
-    release_chart="in-falcone-0.4.4"
+    release_chart="in-falcone-0.4.6"
     ;;
   wrong-start-chart)
     release_chart="in-falcone-0.4.2"
     ;;
 esac
+case "${FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO:-}" in
+  forward-*)
+    release_revision=22
+    release_chart="in-falcone-0.4.6"
+    ;;
+esac
 if [ "$upgrade_count" -gt 0 ]; then
   release_revision=$((release_revision + upgrade_count))
-  release_chart="in-falcone-0.4.4"
+  release_chart="in-falcone-0.4.6"
 fi
 
 case "${1:-}" in
@@ -39,9 +46,37 @@ case "${1:-}" in
     printf '[{"name":"falcone","namespace":"in-falcone-staging","revision":"%s","chart":"%s","app_version":"0.3.1","status":"deployed"}]\n' \
       "$release_revision" "$release_chart"
     ;;
+  pull)
+    require_repair_version "$@"
+    untar_dir=""
+    requested_version=""
+    previous=""
+    for argument in "$@"; do
+      case "$previous" in
+        --untardir) untar_dir="$argument" ;;
+        --version) requested_version="$argument" ;;
+      esac
+      previous="$argument"
+    done
+    [ -n "$untar_dir" ] || { printf 'missing --untardir in synthetic pull\n' >&2; exit 65; }
+    [ -n "$requested_version" ] || { printf 'missing --version in synthetic pull\n' >&2; exit 65; }
+    [ -n "$real_helm" ] || { printf 'missing real Helm delegate\n' >&2; exit 65; }
+    package_version="${FALCONE_STAGING_PACKAGED_TOP_LEVEL_VERSION:-$requested_version}"
+    "$real_helm" package "${FALCONE_STAGING_PACKAGED_CHART_SOURCE:?}" \
+      --destination "$untar_dir" --version "$package_version" >/dev/null
+    tar -xzf "$untar_dir/in-falcone-$package_version.tgz" -C "$untar_dir"
+    packaged_chart="$untar_dir/in-falcone/Chart.yaml"
+    first_version="$(awk '$1 == "version:" { print $2; exit }' "$packaged_chart")"
+    top_level_version="$(awk '$0 ~ /^version:[[:space:]]/ { print $2; exit }' "$packaged_chart")"
+    printf 'fixture-package first-version=%s top-level-version=%s\n' \
+      "$first_version" "$top_level_version" >>"${FALCONE_STAGING_HELM_LOG:?}"
+    printf 'Pulled: ghcr.io/gntik-ai/charts/in-falcone:%s\n' "$requested_version"
+    printf 'Digest: %s\n' "${FALCONE_STAGING_REPAIR_PACKAGE_DIGEST:?}"
+    ;;
   template)
     require_repair_version "$@"
-    "${FALCONE_STAGING_REAL_HELM:?}" "$@"
+    [ -n "$real_helm" ] || { printf 'missing real Helm delegate\n' >&2; exit 65; }
+    "$real_helm" "$@"
     if [ "${FALCONE_STAGING_ASSUME_APPROVED_RENDER:-false}" = "true" ]; then
       # Downstream gate tests model a render that has already passed the image
       # authority preflight. The unmodified render is used by the dry-run test.
@@ -61,13 +96,31 @@ case "${1:-}" in
     require_repair_version "$@"
     case "$scenario" in
       external-owner-cluster-create)
-        printf 'in-falcone, clustersecretstores.external-secrets.io, CustomResourceDefinition (apiextensions.k8s.io) has been added:\n'
+        printf ', external-secrets-controller, ClusterRole (rbac.authorization.k8s.io) has been added:\n'
         ;;
       external-owner-namespaced-update)
         printf 'external-secrets, external-secrets, Deployment (apps) has changed:\n'
         ;;
       external-owner-cluster-remove)
         printf 'in-falcone, externalsecret-validate, ValidatingWebhookConfiguration (admissionregistration.k8s.io) has been removed:\n'
+        ;;
+      falcone-integration-and-legacy-sa-migration)
+        printf ', openbao-backend, ClusterSecretStore (external-secrets.io) has changed:\n'
+        jq -r '.falconeIntegrationResources[] | select(.kind == "ExternalSecret") | .name' \
+          "${FALCONE_STAGING_REVISION20_MANIFEST:?}" | while IFS= read -r resource_name; do
+          printf 'in-falcone-staging, %s, ExternalSecret (external-secrets.io) has changed:\n' "$resource_name"
+        done
+        printf 'external-secrets, eso-openbao-auth, ServiceAccount (v1) has been removed:\n'
+        ;;
+      external-owner-exact-resource)
+        api_version="${FALCONE_STAGING_EXTERNAL_OWNER_API_VERSION:?}"
+        api_group="${api_version%/*}"
+        [ "$api_group" != "$api_version" ] || api_group="$api_version"
+        printf '%s, %s, %s (%s) has changed:\n' \
+          "${FALCONE_STAGING_EXTERNAL_OWNER_NAMESPACE-}" \
+          "${FALCONE_STAGING_EXTERNAL_OWNER_NAME:?}" \
+          "${FALCONE_STAGING_EXTERNAL_OWNER_KIND:?}" \
+          "$api_group"
         ;;
     esac
     exit 0
