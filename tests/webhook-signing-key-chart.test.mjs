@@ -756,14 +756,25 @@ check('SeaweedFS post-upgrade hooks cannot block a restricted lifecycle upgrade'
 
   const openbaoInit = documentWith(rendered, 'kind: Job', 'name: openbao-init');
   assert.equal(openbaoInit, undefined, 'the full OpenBao payload/policy bootstrap is fresh-install-only');
+  const signingKeyCredential = documentWith(
+    rendered,
+    'kind: Job',
+    'app.kubernetes.io/component: webhook-key-credential',
+  );
+  assert.ok(signingKeyCredential, 'the sensitive webhook signing-key hook renders');
+  assert.match(
+    signingKeyCredential,
+    /"helm\.sh\/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed/,
+    'the sensitive webhook signing-key hook Pod must be deleted on success or failure',
+  );
   const openbaoReconcile = documentWith(rendered, 'kind: Job', 'name: openbao-auth-reconcile');
   assert.ok(openbaoReconcile, 'the OpenBao auth-metadata convergence hook renders');
-  assert.match(
+  assert.doesNotMatch(
     openbaoReconcile,
-    /"helm\.sh\/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed/,
-    'the sensitive hook Pod must be deleted on success or failure',
+    /"helm\.sh\/hook-delete-policy":[^\n]*hook-failed/,
+    'failed OpenBao reconciliation Jobs must remain available for diagnosis',
   );
-  assert.match(openbaoReconcile, /ttlSecondsAfterFinished: 300/);
+  assert.doesNotMatch(openbaoReconcile, /ttlSecondsAfterFinished:/);
   assert.match(
     openbaoReconcile,
     /securityContext:\s+runAsNonRoot: true\s+runAsUser: 1000\s+seccompProfile:\s+type: RuntimeDefault/,
@@ -775,7 +786,7 @@ check('SeaweedFS post-upgrade hooks cannot block a restricted lifecycle upgrade'
     );
   }
   assert.doesNotMatch(openbaoReconcile, /\bbao\s+kv\b|\bbao\s+policy\s+(?:read|write|delete)\b/);
-  assert.match(openbaoReconcile, /token_reviewer_jwt=""/);
+  assert.doesNotMatch(openbaoReconcile, /token_reviewer_jwt=/);
 
   const documentdbInit = documentWith(rendered, 'kind: Job', 'name: falcone-documentdb-init');
   assert.ok(documentdbInit, 'the DocumentDB convergence hook renders');
