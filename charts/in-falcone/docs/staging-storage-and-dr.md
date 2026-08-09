@@ -13,15 +13,21 @@ Node loss/replacement, PVC deletion, or StorageClass reclaim can lose all data.
 Alert before 80% use and keep application-level backups outside the node.
 
 Revision 20's exact claim `falcone-postgresql-vector-data` is Pending, unbound,
-and has no PV/data in the approved evidence. Deletion is still destructive and
-requires the JIT UID/state gate in `migrations/revision-20-repair.sh`. If it ever
-becomes Bound, gains a volumeName/PV claimRef, is referenced by a Pod, or has any
-data evidence, the empty-claim shortcut is permanently invalid. Use a separately
+and has no PV/data in the approved evidence. The expected StatefulSet may still
+have one Pending Pod referencing that claim; this is not data evidence, but it
+must be scaled to zero and observed terminated before the final evidence reread.
+Deletion is still destructive and requires the JIT UID/state gate in
+`migrations/revision-20-repair.sh`. If it ever becomes Bound, gains a
+volumeName/PV claimRef, is referenced by any unexpected Pod, or has any data
+evidence, the empty-claim shortcut is permanently invalid. Use a separately
 approved backup/restore migration to a new PV, verify schema/row/vector-index
 parity and P13 isolation, then cut over.
 
-After Phase B, forward-reapply chart 0.4.3 on failure. Do not roll back to revision
-20: its absent `hcloud-volumes` contract cannot recreate service. Do not delete a
-data-bearing claim to retry provisioning. Future production/HCloud CSI work needs
+Phase B requires distinct, fresh, exact-target backup and parity attestations,
+the fresh final Phase-A attestation, a current revision/chart/package-bound
+confirmation, and a separate exact PVC name/UID confirmation. After Phase B,
+forward-reapply chart 0.4.3 on failure. Do not return to revision 20: its absent
+`hcloud-volumes` contract cannot recreate service. Do not delete a data-bearing
+claim to retry provisioning. Future production/HCloud CSI work needs
 an explicit component owner, cloud credential custody, pinned provisioner,
 snapshots, topology, restore rehearsal, monitoring, migration, and rollback plan.

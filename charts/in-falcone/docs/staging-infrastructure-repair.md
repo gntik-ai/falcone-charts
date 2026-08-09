@@ -30,10 +30,18 @@ must not label, annotate, patch, delete, force, take ownership of, or adopt thos
 objects. Falcone owns `ClusterSecretStore/openbao-backend`, fourteen
 `ExternalSecret` declarations, `eso-system/eso-openbao-auth`, and exact RBAC:
 
-- `external-secrets/external-secrets` and the metadata-only OpenBao canary may
-  create a token only for `eso-system/eso-openbao-auth`;
-- `secret-store/openbao` may create TokenReviews and receives no generic
-  ServiceAccount, node, or Secret authority from that role;
+- `external-secrets/external-secrets` and
+  `secret-store/openbao-auth-reconciler` may create a token only for
+  `eso-system/eso-openbao-auth`;
+- `secret-store/openbao` is used only by the OpenBao StatefulSet, may create
+  TokenReviews, and cannot read or write platform/recovery Secrets;
+- `secret-store/openbao-bootstrap` is used by fresh bootstrap and the disabled
+  migration placeholder; it can read only the fourteen named bootstrap Secrets
+  and can create or update only the recovery Secret needed for initial custody;
+- `secret-store/openbao-auth-reconciler` uses a dedicated OpenBao policy that
+  can reconcile only Kubernetes-auth config and `eso-role` metadata plus perform
+  token self-lookup/revocation; it cannot access KV, mounts, audit configuration,
+  policy documents, or the bootstrap identity;
 - the identity-only `eso-openbao-auth` ServiceAccount receives no Secret
   mutation, TokenReview, or cluster-wide permission;
 - OpenBao NetworkPolicy remains limited to DNS plus Kubernetes API ports 443 and
@@ -82,6 +90,8 @@ before installing. Fresh installation runs the complete OpenBao bootstrap once:
 initialization/unseal recovery handling, auth/mount/audit enablement, established
 policy documents and initial KV seeding. The following auth hook then normalizes
 only Kubernetes auth metadata and executes a no-KV login/lookup/revoke canary.
+The server, bootstrap and reconciler Jobs use the distinct ServiceAccounts
+`openbao`, `openbao-bootstrap`, and `openbao-auth-reconciler`, respectively.
 
 An upgrade render never contains `Job/openbao-init`; it contains only
 `Job/openbao-auth-reconcile`. Routine upgrades neither load platform Secrets nor
@@ -101,8 +111,10 @@ Read only auth metadata, in this order:
    and `token_reviewer_jwt_set=false`. Never print JWT or CA bytes.
 3. Verify `eso-role` binds exactly `eso-system/eso-openbao-auth`, policy names
    `platform,functions,gateway,iam`, and TTL 86400 seconds.
-4. Verify `secret-store/openbao` can create TokenReviews and the exact ESO
-   controller can request only the named auth ServiceAccount token.
+4. Verify `secret-store/openbao` can create only TokenReviews, and that the exact
+   ESO controller plus `secret-store/openbao-auth-reconciler` can request only
+   the named auth ServiceAccount token. Confirm the bootstrap identity is not a
+   subject of either permission.
 5. Verify DNS and API egress on 53, 443, and 6443.
 6. Inspect the bounded reconcile result code and OpenBao audit operation path,
    not request bodies.
@@ -139,15 +151,32 @@ The migration executable defaults to preflight and makes no mutation:
 
 ```bash
 charts/in-falcone/migrations/revision-20-repair.sh \
-  --phase-a \
-  --backup-reference BACKUP-EVIDENCE-ID
+  --phase-a
 ```
 
 Expected: it confirms context `default`, namespace `in-falcone-staging`, release
-`falcone`, revision `20`; renders all six digests; retains the existing immutable
-`hcloud-volumes` PVC contract for Phase A; and runs a secret-suppressed Helm diff.
-The apply path refuses to run without the Helm diff plugin, backup reference,
-and exact just-in-time target confirmation displayed by the dry run.
+`falcone`, revision `20`, and source chart `in-falcone-0.4.1`; renders all six
+digests; retains the existing immutable `hcloud-volumes` PVC contract for Phase
+A; and runs a secret-suppressed Helm diff. The diff is checked semantically
+against the sanitized 21-object inventory of the separate ESO owner, including
+cluster-scoped objects. It never reads a Helm release manifest or Secret data.
+
+Before apply, create two separate, current, metadata-only JSON attestations:
+
+- `Revision20BackupEvidence` identifies exact context/namespace/release,
+  revision 20, chart 0.4.1, target repair chart 0.4.3, published package digest,
+  a non-secret backup reference, `verified: true`, `observedAt`, and
+  `validUntil`;
+- `Revision20ParityEvidence` binds the same target and package digest to a
+  distinct parity run and names the exact backup reference it verified.
+
+Opaque strings are not apply evidence. Expired, malformed, reused, differently
+targeted, or package-mismatched attestations fail before mutation.
+For a real apply the tool pulls chart 0.4.3 from
+`oci://ghcr.io/gntik-ai/charts/in-falcone`, verifies the registry-reported digest
+against both attestations, and renders/applies that extracted artifact and its
+own staging profile. It does not apply an unbound checkout after merely comparing
+a digest-shaped string.
 
 After authorized disposable proof and a separate environment approval, the
 applying invocation is:
@@ -155,33 +184,43 @@ applying invocation is:
 ```bash
 charts/in-falcone/migrations/revision-20-repair.sh \
   --phase-a --apply \
-  --backup-reference BACKUP-EVIDENCE-ID \
-  --confirm-target default/in-falcone-staging/falcone@20
+  --backup-attestation /secure/path/revision20-backup.json \
+  --parity-attestation /secure/path/revision20-parity.json \
+  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.3/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 Phase A uses the retained recovery credential for one bounded auth repair when
-revision 20's expired reviewer mode prevents `openbao-init-role` login, then
+revision 20's expired reviewer mode prevents dedicated reconciler login, then
 immediately applies an idempotent revision with the recovery-root allowance
-disabled. It must end with the external owner unchanged, the store and fourteen
-ExternalSecrets Ready, auth canary passed, and FerretDB available. Phase A does
-not delete or change the PVC.
+disabled. Both passes compare exact ESO owner metadata captured immediately
+before them. After the no-root pass it repeats the owner/image/store/auth/
+FerretDB/EndpointSlice gates and requires auth `result=unchanged`, the exact
+fourteen unique named ExternalSecrets Ready, FerretDB 2/2, and at least two
+Ready endpoints. Phase A does not delete or change the PVC.
+
+Create a fresh `StagingPhaseAAttestation` from that final metadata-only result.
+It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.3,
+the same package digest, recovery-root disabled, auth unchanged/canary passed,
+store/ExternalSecret/FerretDB health, owner-inventory digest, image-set digest,
+and a short `observedAt`/`validUntil` window. Phase B rejects a missing, stale,
+or live-revision-mismatched Phase-A attestation.
 
 ## Phase B: exact empty-PVC destructive gate
 
 Phase B is a separate maintenance window. Its preflight rechecks exact context,
 namespace, release, PVC name and immutable UID; requires phase `Pending`, empty
-`spec.volumeName`, no PV claimRef, no Pod reference, and no successful vector Pod;
-and renders `local-path`, 10 Gi, RWO and `fsn1`. Unbound plus no PV/Pod is the
-metadata proof that no volume/data exists; if any evidence changes, stop and
-design a real backup/restore migration.
+`spec.volumeName`, no PV claimRef and no successful vector Pod; and renders
+`local-path`, 10 Gi, RWO and `fsn1`. The one admitted initial Pod topology is
+exactly `falcone-postgresql-vector-0`, Pending, controlled by the exact vector
+StatefulSet, and referencing that claim. Any other Pod reference fails closed.
+Unbound plus no PV/data-bearing Pod is the metadata proof that no volume/data
+exists; if any evidence changes, stop and design a real backup/restore migration.
 
 Dry run:
 
 ```bash
 charts/in-falcone/migrations/revision-20-repair.sh \
-  --phase-b \
-  --backup-reference BACKUP-EVIDENCE-ID \
-  --pvc-uid PVC-UID-FROM-PREFLIGHT
+  --phase-b --pvc-uid PVC-UID-FROM-PREFLIGHT
 ```
 
 Only after reviewing that output may the human provide the exact one-use name
@@ -190,16 +229,22 @@ and UID confirmation:
 ```bash
 charts/in-falcone/migrations/revision-20-repair.sh \
   --phase-b --apply \
-  --backup-reference BACKUP-EVIDENCE-ID \
-  --confirm-target default/in-falcone-staging/falcone@20 \
+  --backup-attestation /secure/path/revision20-backup.json \
+  --parity-attestation /secure/path/revision20-parity.json \
+  --phase-a-attestation /secure/path/phase-a.json \
+  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.3/sha256:PUBLISHED_PACKAGE_DIGEST' \
   --pvc-uid PVC-UID-FROM-PREFLIGHT \
   --confirm-pvc falcone-postgresql-vector-data/PVC-UID-FROM-PREFLIGHT
 ```
 
-The script rereads UID/phase/volumeName after confirmation, scales only
-`falcone-postgresql-vector`, deletes only the exact PVC, and immediately applies
-the canonical local-path revision. A changed UID/state invalidates confirmation.
-No wildcard, label-wide deletion, namespace deletion, or blind retry is allowed.
+The script first admits only the exact initial Pending Pod described above. It
+then scales only `falcone-postgresql-vector` to zero, performs a bounded wait for
+that Pod to terminate, and only then rereads UID/phase/volumeName, every matching
+PV claimRef, Pod reference, and successful/data evidence. Immediately before
+the exact delete it also revalidates live revision/chart and unchanged external
+owner metadata. A changed UID/state invalidates confirmation. No wildcard,
+label-wide deletion, namespace deletion, unbounded wait, or blind retry is
+allowed.
 
 ## Health, evidence, and alerts
 
@@ -222,25 +267,29 @@ cookies, Secret data, request bodies, tenant identifiers, and unseal material.
 
 ## Failure, retry, rollback, and forward recovery
 
-Before Phase A, revision 20 is untouched. During a failed Phase A, atomic rollback
-is allowed only if a dry-run proves it will neither mutate external ESO objects
-nor revert approved images. After Phase A succeeds, do not blindly roll back:
-revision 20 reintroduces owner overlap, static reviewer expiry, Ferret init failure,
-and old image defaults. Reapply the repaired chart.
+Before Phase A, revision 20 is untouched. Every mutation path is forward-only:
+the tools do not use atomic upgrade or any rollback operation. A failed apply
+prints `FORWARD_RECOVERY_REQUIRED`; inspect metadata, correct the cause, and
+reapply the same package. Revision 20 reintroduces owner overlap, static reviewer
+expiry, Ferret init failure, and old image defaults.
 
 After PVC deletion, revision 20 cannot restore service because `hcloud-volumes`
 does not exist. Use the dry-run-first forward recovery tool:
 
 ```bash
 charts/in-falcone/migrations/revision-20-forward-recovery.sh \
-  --backup-reference BACKUP-EVIDENCE-ID
+  --backup-attestation /secure/path/revision20-backup.json \
+  --parity-attestation /secure/path/revision20-parity.json \
+  --phase-a-attestation /secure/path/phase-a.json
 ```
 
-After review, its apply requires
-`--confirm-target default/in-falcone-staging/falcone`. It never deletes a PVC or
-uses `helm rollback`; it reapplies canonical values and waits for exact vector
-and Ferret workloads. Once vector data exists, deletion/storage rollback is
-forbidden until an approved logical backup, restore target, parity and P13
+After review, its apply requires the actual
+`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.3/sha256:PUBLISHED_PACKAGE_DIGEST`
+confirmation. It revalidates the same three attestations, secret-suppressed
+semantic owner diff, and external owner metadata. It never deletes a PVC or
+returns to an old release; it reapplies canonical values and waits for exact
+vector and Ferret workloads. Once vector data exists, deletion/storage rollback
+is forbidden until an approved logical backup, restore target, parity and P13
 tenant-isolation proof exist.
 
 ## Persona verification and cleanup

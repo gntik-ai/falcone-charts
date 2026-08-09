@@ -1,0 +1,31 @@
+{
+  "apiVersion": "falcone.gntik.ai/v1",
+  "kind": "StagingPhaseAAttestation",
+  "target": {
+    "context": "default",
+    "namespace": "in-falcone-staging",
+    "release": "falcone"
+  },
+  "source": {
+    "revision": "20",
+    "chart": "in-falcone-0.4.1"
+  },
+  "result": {
+    "revision": "22",
+    "chart": "in-falcone-0.4.3",
+    "packageDigest": "sha256:0430430430430430430430430430430430430430430430430430430430430430"
+  },
+  "health": {
+    "recoveryRootAllowed": false,
+    "openbaoAuth": {"result":"unchanged","canary":"passed"},
+    "clusterSecretStoreReady": true,
+    "externalSecretsFixture": "external-secrets-ready.json",
+    "ferretDb": {"desiredReplicas":2,"availableReplicas":2,"endpointCount":2},
+    "externalEsoOwnerInventoryDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "imageSetDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "evidence": {
+    "observedAt": "__OBSERVED_AT__",
+    "validUntil": "__VALID_UNTIL__"
+  }
+}

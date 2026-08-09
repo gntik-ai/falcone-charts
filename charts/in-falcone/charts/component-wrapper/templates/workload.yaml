@@ -7,6 +7,18 @@
   {{- $_ := unset $podSecurityContext "fsGroupChangePolicy" -}}
   {{- $_ := unset $podSecurityContext "openshiftRestricted" -}}
 {{- end -}}
+{{- /* repair-staging-infrastructure: mirror the pod/init UID stripping on the main
+       container securityContext. Under the OpenShift restricted-v2 overlay the SCC
+       injects a namespace-range UID, so any fixed runAsUser/runAsGroup/fsGroup
+       (e.g. the FerretDB gateway's runAsUser: 1000) must be removed while
+       runAsNonRoot, seccomp, dropped capabilities and no-privilege-escalation are
+       retained. On vanilla Kubernetes the deep copy renders byte-identically. */ -}}
+{{- $containerSecurityContext := deepCopy (default (dict) .Values.securityContext) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $containerSecurityContext "runAsUser" -}}
+  {{- $_ := unset $containerSecurityContext "runAsGroup" -}}
+  {{- $_ := unset $containerSecurityContext "fsGroup" -}}
+{{- end -}}
 {{- /* Normalize pull secrets to a string list: global.imagePullSecrets items may
        be strings or {name: ...} maps; global.privateRegistry.pullSecretNames
        items are strings (per values.schema.json). */ -}}
@@ -379,7 +391,7 @@ spec:
           startupProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.securityContext }}
+          {{- with $containerSecurityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

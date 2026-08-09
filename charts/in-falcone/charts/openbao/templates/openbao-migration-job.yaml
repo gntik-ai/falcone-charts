@@ -9,7 +9,7 @@ metadata:
 spec:
   template:
     spec:
-      serviceAccountName: openbao
+      serviceAccountName: openbao-bootstrap
       restartPolicy: OnFailure
       containers:
         - name: migrate-secrets

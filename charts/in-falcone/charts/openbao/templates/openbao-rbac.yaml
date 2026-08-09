@@ -7,6 +7,12 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  name: openbao-bootstrap
+  namespace: {{ .Values.openbao.namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
   name: {{ .Values.eso.serviceAccountName | default "eso-openbao-auth" }}
   namespace: {{ .Values.eso.namespace | default "eso-system" }}
 ---
@@ -40,7 +46,22 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+    resourceNames:
+      - in-falcone-postgresql
+      - in-falcone-postgresql-vector
+      - in-falcone-documentdb
+      - in-falcone-ferretdb
+      - in-falcone-documentdb-replication
+      - in-falcone-kafka
+      - in-falcone-storage
+      - in-falcone-keycloak-admin
+      - in-falcone-identity-client
+      - in-falcone-superadmin
+      - in-falcone-apisix-admin
+      - in-falcone-gateway-shared-secret
+      - in-falcone-temporal
+      - in-falcone-encryption
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -49,7 +70,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
 subjects:
   - kind: ServiceAccount
-    name: openbao
+    name: openbao-bootstrap
     namespace: {{ .Values.openbao.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -66,7 +87,7 @@ rules:
     resources: ["secrets"]
     resourceNames:
       - {{ .Values.openbao.recovery.secretName }}
-    verbs: ["get", "create", "update", "patch"]
+    verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
@@ -78,7 +99,7 @@ metadata:
   namespace: {{ .Values.openbao.namespace }}
 subjects:
   - kind: ServiceAccount
-    name: openbao
+    name: openbao-bootstrap
     namespace: {{ .Values.openbao.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io

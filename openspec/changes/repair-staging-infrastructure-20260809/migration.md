@@ -1,36 +1,56 @@
 # Migration: Revision 20 to chart 0.4.3
 
-## Preconditions
+## Preconditions and evidence
 
 - Exact context `default`, namespace `in-falcone-staging`, release `falcone`,
-  starting revision `20`, and a reviewed non-secret backup evidence reference.
-- Secret-suppressed diff shows no operation against the external ESO owner and
-  rendered workloads contain all six approved digests.
+  revision `20`, and starting chart `in-falcone-0.4.1`.
+- A published chart 0.4.3 package digest, not a source-only estimate.
+- Separate, fresh `Revision20BackupEvidence` and `Revision20ParityEvidence`
+  documents. Both bind the exact source target and repair package; parity names
+  the exact backup reference it verified. Their observation windows must still
+  be valid when apply begins.
+- Apply pulls the published 0.4.3 OCI artifact, verifies the registry-reported
+  digest against the attestations, and uses the staging profile extracted from
+  that same artifact; a local checkout is not the production apply source.
+- Secret-suppressed semantic diff shows no create/update/removal among the
+  sanitized 21 external ESO owner objects and rendered workloads contain all six
+  approved digests. Neither tool reads a release manifest or Secret data.
 - Procedure already passed in a disposable revision-20 installation; shared
   staging is not the first upgrade/failure/recovery test.
 
 ## Phase A
 
-Run `charts/in-falcone/migrations/revision-20-repair.sh --phase-a` first. It is
-read-only by default. Applying requires `--apply`, backup reference, Helm diff
-plugin, and `--confirm-target default/in-falcone-staging/falcone@20`. It retains
-the existing hcloud-volumes claim contract, repairs ESO/OpenBao/Ferret/images,
-verifies store/fourteen ExternalSecrets/Ferret readiness, and immediately disables
-the one-release recovery-root allowance with an idempotent follow-up revision.
+Run `revision-20-repair.sh --phase-a` first; it is read-only by default. Apply
+requires both structured evidence files and an exact confirmation containing
+20, source chart 0.4.1, target chart 0.4.3 and package digest. It retains the
+immutable hcloud-volumes claim contract, applies repairs, verifies exact owner
+metadata/images/store/fourteen unique Ready ExternalSecrets/auth/FerretDB/
+endpoints, disables recovery-root, and repeats the complete gate. The final auth
+result must be unchanged with the canary passed.
+
+Record those final metadata-only results as a short-lived
+`StagingPhaseAAttestation`: exact source, actual result revision/chart/package,
+recovery-root false, auth unchanged/canary passed, store and fourteen-secret
+health, FerretDB 2/2 and endpoints, plus owner and image-set digests.
 
 ## Phase B
 
-Run `--phase-b` dry-run. Supply the displayed immutable PVC UID. Applying also
-requires the exact `--confirm-pvc falcone-postgresql-vector-data/UID`. The tool
-rechecks Pending, empty volumeName, zero PV claimRefs, zero Pod references and no
-successful vector Pod immediately after confirmation. It scales only the vector
-StatefulSet, deletes only the exact claim, applies canonical staging values, and
-waits for Bound/Ready. Any changed identity/state cancels confirmation.
+Run `--phase-b` dry-run in a separate maintenance window. Apply requires all
+three attestations, package-bound confirmation of the actual Phase-A revision,
+exact PVC UID, and a separate exact PVC name/UID confirmation. Before scale the
+only permitted claim reference is the exact Pending vector StatefulSet Pod. The
+tool scales only that StatefulSet to zero, performs a bounded termination wait,
+then rereads PVC UID/phase/volume, every PV claimRef, Pod reference and successful
+Pod evidence. It revalidates live revision/chart and external owner metadata
+immediately before deleting only the exact still-empty claim. Any drift cancels
+the confirmation.
 
 ## Recovery
 
-Before Phase A, no rollback is needed. A Phase-A atomic rollback is allowed only
-if preflight proves external owner and images remain safe. After Phase A, reapply
-0.4.3. After Phase-B deletion, run the dry-run-first
-`revision-20-forward-recovery.sh`; never blindly restore revision 20. Once data
-exists, forbid claim deletion until approved backup/restore and P13 parity proof.
+All mutation paths are fail-forward. There is no atomic apply or rollback path.
+A failed mutation prints `FORWARD_RECOVERY_REQUIRED`. The recovery tool defaults
+to read-only, revalidates the three structured attestations, actual current
+revision/chart/package confirmation, semantic external-owner diff and exact owner
+metadata, and reapplies chart 0.4.3. It never deletes storage. Once data exists,
+claim deletion is forbidden until a separately approved backup/restore and P13
+parity proof.

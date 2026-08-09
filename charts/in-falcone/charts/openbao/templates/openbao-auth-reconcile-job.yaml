@@ -7,18 +7,17 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-3"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 2
   activeDeadlineSeconds: {{ .Values.openbao.authReconcile.activeDeadlineSeconds }}
-  ttlSecondsAfterFinished: 300
   template:
     metadata:
       labels:
         app.kubernetes.io/name: openbao-auth-reconcile
         app.kubernetes.io/component: secrets-auth-metadata
     spec:
-      serviceAccountName: openbao
+      serviceAccountName: openbao-auth-reconciler
       restartPolicy: OnFailure
       {{- include "openbao.imagePullSecrets" . | nindent 6 }}
       securityContext: {{- toYaml .Values.openbao.jobPodSecurityContext | nindent 8 }}
@@ -49,13 +48,24 @@ spec:
             - |
               export BAO_ADDR="https://openbao.{{ .Values.openbao.namespace }}.svc.cluster.local:8200"
               export BAO_CACERT=/openbao/tls/ca.crt
-              export HOME=/tmp
+              export BAO_CACHE_DIR=/tmp
               role={{ .Values.openbao.authReconcile.roleName | quote }}
               desired_name={{ .Values.eso.serviceAccountName | default "eso-openbao-auth" | quote }}
               desired_namespace={{ .Values.eso.namespace | default "eso-system" | quote }}
               desired_ttl={{ .Values.openbao.authReconcile.roleTTLSeconds | int | quote }}
               desired_policies="functions,gateway,iam,platform"
+              desired_audience=""
+              desired_alias_name_source="serviceaccount_uid"
+              desired_token_max_ttl="$desired_ttl"
+              desired_token_explicit_max_ttl="0"
+              desired_token_period="0"
+              desired_token_num_uses="0"
+              desired_token_no_default_policy="false"
+              desired_token_type="default"
+              desired_token_bound_cidrs=""
+              desired_token_strictly_bind_ip="false"
               changed=false
+              auth_source=dedicated
 
               fail() {
                 echo "result=error code=$1" >&2
@@ -65,7 +75,17 @@ spec:
                 bao read -field="$1" "$2" 2>/dev/null || true
               }
               normalize_list() {
-                printf '%s' "$1" | tr -d '[],"' | tr ' ' '\n' | sed '/^$/d' | sort | paste -sd, -
+                printf '%s' "$1" | tr -d '[]"' | tr ', ' '\n\n' | sed '/^$/d' | sort | paste -sd, -
+              }
+              normalize_empty() {
+                case "$1" in
+                  ""|"<nil>"|"null") printf '' ;;
+                  *) printf '%s' "$1" ;;
+                esac
+              }
+              normalize_default() {
+                value="$(normalize_empty "$1")"
+                if [ -n "$value" ]; then printf '%s' "$value"; else printf '%s' "$2"; fi
               }
 
               i=0
@@ -75,13 +95,14 @@ spec:
               done
 
               login_json="$(bao write -format=json auth/kubernetes/login \
-                role=openbao-init-role \
+                role=openbao-auth-reconcile-role \
                 jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" 2>/dev/null || true)"
               BAO_TOKEN="$(printf '%s' "$login_json" | sed -n 's/.*"client_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
               if [ -z "$BAO_TOKEN" ]; then
                 {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
                 [ -s /openbao-recovery/root-token ] || fail AUTHENTICATION_UNAVAILABLE
                 BAO_TOKEN="$(cat /openbao-recovery/root-token)"
+                auth_source=recovery_root
                 echo "auth_source=recovery_root result=accepted"
                 {{- else }}
                 fail AUTHENTICATION_UNAVAILABLE
@@ -89,7 +110,36 @@ spec:
               fi
               export BAO_TOKEN
 
-              bao auth list -format=json 2>/dev/null | grep -q '"kubernetes/"' || fail AUTH_MOUNT_MISSING
+              {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
+              # The explicitly authorized recovery pass bootstraps the durable,
+              # metadata-only identity used by every subsequent routine upgrade.
+              # That identity cannot read KV data, policy documents, mounts, or
+              # audit configuration and cannot change its own policy or login role.
+              if [ "$auth_source" = "recovery_root" ]; then
+                bao policy write auth-reconcile /openbao-auth-reconcile/auth-reconcile.hcl \
+                  >/dev/null || fail RECONCILER_POLICY_BOOTSTRAP_FAILED
+                bao write auth/kubernetes/role/openbao-init-role \
+                  bound_service_account_names=openbao-bootstrap \
+                  bound_service_account_namespaces={{ .Values.openbao.namespace | quote }} \
+                  token_policies=init \
+                  token_ttl=1h \
+                  token_max_ttl=1h \
+                  token_no_default_policy=true \
+                  alias_name_source=serviceaccount_uid \
+                  >/dev/null || fail BOOTSTRAP_ROLE_REBIND_FAILED
+                bao write auth/kubernetes/role/openbao-auth-reconcile-role \
+                  bound_service_account_names=openbao-auth-reconciler \
+                  bound_service_account_namespaces={{ .Values.openbao.namespace | quote }} \
+                  token_policies=auth-reconcile \
+                  token_ttl={{ printf "%ds" (.Values.openbao.authReconcile.tokenExpirationSeconds | int) | quote }} \
+                  token_max_ttl={{ printf "%ds" (.Values.openbao.authReconcile.tokenExpirationSeconds | int) | quote }} \
+                  token_no_default_policy=true \
+                  alias_name_source=serviceaccount_uid \
+                  >/dev/null || fail RECONCILER_ROLE_BOOTSTRAP_FAILED
+                changed=true
+              fi
+              {{- end }}
+
               for policy in platform functions gateway iam; do
                 bao policy list 2>/dev/null | grep -qx "$policy" || fail REQUIRED_POLICY_NAME_MISSING
               done
@@ -103,26 +153,58 @@ spec:
                 bao write auth/kubernetes/config \
                   kubernetes_host="https://kubernetes.default.svc:443" \
                   disable_local_ca_jwt=false \
-                  kubernetes_ca_cert="" \
-                  token_reviewer_jwt="" >/dev/null || fail AUTH_CONFIG_WRITE_FAILED
+                  >/dev/null || fail AUTH_CONFIG_WRITE_FAILED
                 changed=true
+                actual_host="$(field kubernetes_host auth/kubernetes/config)"; actual_local="$(field disable_local_ca_jwt auth/kubernetes/config)"; reviewer_set="$(field token_reviewer_jwt_set auth/kubernetes/config)"
+                [ "$actual_host" = "https://kubernetes.default.svc:443" ] && [ "$actual_local" = false ] && [ "$reviewer_set" = false ] || fail AUTH_CONFIG_VERIFY_FAILED
               fi
 
               actual_name="$(normalize_list "$(field bound_service_account_names "auth/kubernetes/role/$role")")"
               actual_namespace="$(normalize_list "$(field bound_service_account_namespaces "auth/kubernetes/role/$role")")"
               actual_policies="$(normalize_list "$(field token_policies "auth/kubernetes/role/$role")")"
               actual_ttl="$(field token_ttl "auth/kubernetes/role/$role")"
+              actual_audience="$(normalize_empty "$(field audience "auth/kubernetes/role/$role")")"
+              actual_alias_name_source="$(normalize_default "$(field alias_name_source "auth/kubernetes/role/$role")" serviceaccount_uid)"
+              actual_token_max_ttl="$(field token_max_ttl "auth/kubernetes/role/$role")"
+              actual_token_explicit_max_ttl="$(field token_explicit_max_ttl "auth/kubernetes/role/$role")"
+              actual_token_period="$(field token_period "auth/kubernetes/role/$role")"
+              actual_token_num_uses="$(field token_num_uses "auth/kubernetes/role/$role")"
+              actual_token_no_default_policy="$(field token_no_default_policy "auth/kubernetes/role/$role")"
+              actual_token_type="$(normalize_default "$(field token_type "auth/kubernetes/role/$role")" default)"
+              actual_token_bound_cidrs="$(normalize_list "$(field token_bound_cidrs "auth/kubernetes/role/$role")")"
+              actual_token_strictly_bind_ip="$(normalize_default "$(field token_strictly_bind_ip "auth/kubernetes/role/$role")" false)"
               role_matched=true
               if [ "$actual_name" != "$desired_name" ] \
                 || [ "$actual_namespace" != "$desired_namespace" ] \
                 || [ "$actual_policies" != "$desired_policies" ] \
-                || [ "$actual_ttl" != "$desired_ttl" ]; then
+                || [ "$actual_ttl" != "$desired_ttl" ] \
+                || [ "$actual_audience" != "$desired_audience" ] \
+                || [ "$actual_alias_name_source" != "$desired_alias_name_source" ] \
+                || [ "$actual_token_max_ttl" != "$desired_token_max_ttl" ] \
+                || [ "$actual_token_explicit_max_ttl" != "$desired_token_explicit_max_ttl" ] \
+                || [ "$actual_token_period" != "$desired_token_period" ] \
+                || [ "$actual_token_num_uses" != "$desired_token_num_uses" ] \
+                || [ "$actual_token_no_default_policy" != "$desired_token_no_default_policy" ] \
+                || [ "$actual_token_type" != "$desired_token_type" ] \
+                || [ "$actual_token_bound_cidrs" != "$desired_token_bound_cidrs" ] \
+                || [ "$actual_token_strictly_bind_ip" != "$desired_token_strictly_bind_ip" ]; then
                 role_matched=false
                 bao write "auth/kubernetes/role/$role" \
                   bound_service_account_names="$desired_name" \
                   bound_service_account_namespaces="$desired_namespace" \
                   token_policies=platform,functions,gateway,iam \
-                  token_ttl="${desired_ttl}s" >/dev/null || fail ROLE_WRITE_FAILED
+                  token_ttl="${desired_ttl}s" \
+                  audience="$desired_audience" \
+                  alias_name_source="$desired_alias_name_source" \
+                  token_max_ttl="${desired_token_max_ttl}s" \
+                  token_explicit_max_ttl="$desired_token_explicit_max_ttl" \
+                  token_period="$desired_token_period" \
+                  token_num_uses="$desired_token_num_uses" \
+                  token_no_default_policy="$desired_token_no_default_policy" \
+                  token_type="$desired_token_type" \
+                  token_bound_cidrs="$desired_token_bound_cidrs" \
+                  token_strictly_bind_ip="$desired_token_strictly_bind_ip" \
+                  >/dev/null || fail ROLE_WRITE_FAILED
                 changed=true
               fi
 
@@ -130,6 +212,16 @@ spec:
               [ "$(normalize_list "$(field bound_service_account_namespaces "auth/kubernetes/role/$role")")" = "$desired_namespace" ] || fail ROLE_VERIFY_FAILED
               [ "$(normalize_list "$(field token_policies "auth/kubernetes/role/$role")")" = "$desired_policies" ] || fail ROLE_VERIFY_FAILED
               [ "$(field token_ttl "auth/kubernetes/role/$role")" = "$desired_ttl" ] || fail ROLE_VERIFY_FAILED
+              [ "$(normalize_empty "$(field audience "auth/kubernetes/role/$role")")" = "$desired_audience" ] || fail ROLE_VERIFY_FAILED
+              [ "$(normalize_default "$(field alias_name_source "auth/kubernetes/role/$role")" serviceaccount_uid)" = "$desired_alias_name_source" ] || fail ROLE_VERIFY_FAILED
+              [ "$(field token_max_ttl "auth/kubernetes/role/$role")" = "$desired_token_max_ttl" ] || fail ROLE_VERIFY_FAILED
+              [ "$(field token_explicit_max_ttl "auth/kubernetes/role/$role")" = "$desired_token_explicit_max_ttl" ] || fail ROLE_VERIFY_FAILED
+              [ "$(field token_period "auth/kubernetes/role/$role")" = "$desired_token_period" ] || fail ROLE_VERIFY_FAILED
+              [ "$(field token_num_uses "auth/kubernetes/role/$role")" = "$desired_token_num_uses" ] || fail ROLE_VERIFY_FAILED
+              [ "$(field token_no_default_policy "auth/kubernetes/role/$role")" = "$desired_token_no_default_policy" ] || fail ROLE_VERIFY_FAILED
+              [ "$(normalize_default "$(field token_type "auth/kubernetes/role/$role")" default)" = "$desired_token_type" ] || fail ROLE_VERIFY_FAILED
+              [ "$(normalize_list "$(field token_bound_cidrs "auth/kubernetes/role/$role")")" = "$desired_token_bound_cidrs" ] || fail ROLE_VERIFY_FAILED
+              [ "$(normalize_default "$(field token_strictly_bind_ip "auth/kubernetes/role/$role")" false)" = "$desired_token_strictly_bind_ip" ] || fail ROLE_VERIFY_FAILED
 
               canary_json="$(bao write -format=json auth/kubernetes/login \
                 role="$role" jwt="$(cat /canary/token)" 2>/dev/null || true)"
@@ -139,9 +231,20 @@ spec:
                 fail AUTH_CANARY_DENIED
               fi
               BAO_TOKEN="$canary_token"; export BAO_TOKEN
-              bao read auth/token/lookup-self >/dev/null || fail AUTH_CANARY_LOOKUP_FAILED
+              lookup_json="$(bao read -format=json auth/token/lookup-self 2>/dev/null || true)"
+              [ -n "$lookup_json" ] || fail AUTH_CANARY_LOOKUP_FAILED
+              lookup_compact="$(printf '%s' "$lookup_json" | tr -d '\r\n')"
+              lookup_policies="$(normalize_list "$(printf '%s' "$lookup_compact" | sed -n 's/.*"policies"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')")"
+              lookup_ttl="$(printf '%s' "$lookup_compact" | sed -n 's/.*"ttl"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+              case "$lookup_ttl" in
+                ""|*[!0-9]*) fail AUTH_CANARY_METADATA_INVALID ;;
+              esac
+              [ "$lookup_policies" = "$desired_policies" ] \
+                && [ "$lookup_ttl" -gt 0 ] \
+                && [ "$lookup_ttl" -le "$desired_ttl" ] \
+                || fail AUTH_CANARY_METADATA_INVALID
               bao write -force auth/token/revoke-self >/dev/null || fail AUTH_CANARY_REVOKE_FAILED
-              unset BAO_TOKEN canary_token canary_json login_json
+              unset BAO_TOKEN canary_token canary_json lookup_json lookup_compact login_json
 
               if [ "$changed" = "true" ]; then
                 echo "result=changed code=AUTH_METADATA_CONVERGED canary=passed"
@@ -156,6 +259,9 @@ spec:
               mountPath: /canary
               readOnly: true
             {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
+            - name: auth-reconcile-policy
+              mountPath: /openbao-auth-reconcile
+              readOnly: true
             - name: recovery
               mountPath: /openbao-recovery
               readOnly: true
@@ -168,6 +274,9 @@ spec:
           emptyDir:
             medium: Memory
         {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
+        - name: auth-reconcile-policy
+          configMap:
+            name: openbao-policy-auth-reconcile
         - name: recovery
           secret:
             secretName: {{ .Values.openbao.recovery.secretName }}

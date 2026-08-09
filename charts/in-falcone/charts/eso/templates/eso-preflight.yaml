@@ -88,6 +88,12 @@ spec:
               eso_namespace={{ .Values.eso.namespace | quote }}
               external_eso_namespace={{ $externalEsoNamespace | quote }}
               external_eso_service_account={{ $externalEsoServiceAccount | quote }}
+              # The supported external installation is the administrator-owned
+              # `external-secrets` Helm release. Its controller Deployment uses the
+              # configured controller ServiceAccount name.
+              external_eso_deployment="$external_eso_service_account"
+              external_eso_owner_release="external-secrets"
+              external_eso_owner_namespace="external-secrets"
               openbao_namespace={{ .Values.eso.caProvider.namespace | default "secret-store" | quote }}
               reject_owner_conflict() {
                 echo "$1; Falcone will not adopt or mutate the existing owner" >&2
@@ -109,25 +115,53 @@ spec:
                   reject_owner_conflict "ClusterSecretStore/openbao-backend is not owned by ${release}/${namespace} (found ${owner}/${owner_ns})"
                 fi
               fi
-              deployments_json="$(kubectl get deploy -A -l app.kubernetes.io/name=external-secrets -o json)"
               if [ "$eso_managed" = "false" ]; then
-                compatible_count="$(printf '%s' "$deployments_json" \
-                  | jq -r --arg namespace "$external_eso_namespace" --arg service_account "$external_eso_service_account" '
-                    [.items[]?
-                      | select(
-                          .metadata.namespace == $namespace
-                          and .spec.template.spec.serviceAccountName == $service_account
-                          and ((.status.availableReplicas // 0) >= 1)
-                        )]
-                    | length
-                  ')"
-                if [ "$compatible_count" -lt 1 ]; then
-                  echo "no available External Secrets controller using ${external_eso_namespace}/${external_eso_service_account} was found" >&2
-                  exit 1
+                if ! external_controller="$(kubectl -n "$external_eso_namespace" get deployment "$external_eso_deployment" -o json 2>/dev/null)"; then
+                  reject_owner_conflict "configured External Secrets controller Deployment ${external_eso_namespace}/${external_eso_deployment} was not found"
                 fi
-                if ! kubectl -n "$external_eso_namespace" get serviceaccount "$external_eso_service_account" >/dev/null; then
-                  echo "configured External Secrets controller ServiceAccount ${external_eso_namespace}/${external_eso_service_account} was not found" >&2
-                  exit 1
+                if ! external_service_account="$(kubectl -n "$external_eso_namespace" get serviceaccount "$external_eso_service_account" -o json 2>/dev/null)"; then
+                  reject_owner_conflict "configured External Secrets controller ServiceAccount ${external_eso_namespace}/${external_eso_service_account} was not found"
+                fi
+
+                # Metadata-only ownership boundary: both exact objects must belong to
+                # the canonical administrator Helm release. The Deployment must bind
+                # the configured ServiceAccount, be available, and expose controller
+                # labels consistently on its pod template. Any mismatch is rejected;
+                # this Job never patches or adopts the administrator's objects.
+                if ! printf '%s' "$external_controller" | jq -e \
+                  --arg namespace "$external_eso_namespace" \
+                  --arg deployment "$external_eso_deployment" \
+                  --arg service_account "$external_eso_service_account" \
+                  --arg owner_release "$external_eso_owner_release" \
+                  --arg owner_namespace "$external_eso_owner_namespace" '
+                    .metadata.namespace == $namespace
+                    and .metadata.name == $deployment
+                    and .metadata.annotations["meta.helm.sh/release-name"] == $owner_release
+                    and .metadata.annotations["meta.helm.sh/release-namespace"] == $owner_namespace
+                    and .metadata.labels["app.kubernetes.io/managed-by"] == "Helm"
+                    and .metadata.labels["app.kubernetes.io/name"] == "external-secrets"
+                    and .metadata.labels["app.kubernetes.io/instance"] == $owner_release
+                    and .spec.template.spec.serviceAccountName == $service_account
+                    and .spec.template.metadata.labels["app.kubernetes.io/name"] == .metadata.labels["app.kubernetes.io/name"]
+                    and .spec.template.metadata.labels["app.kubernetes.io/instance"] == .metadata.labels["app.kubernetes.io/instance"]
+                    and ((.status.availableReplicas // 0) >= 1)
+                  ' >/dev/null; then
+                  reject_owner_conflict "configured External Secrets controller Deployment ${external_eso_namespace}/${external_eso_deployment} has incompatible Helm ownership, controller labels, ServiceAccount binding, or readiness"
+                fi
+                if ! printf '%s' "$external_service_account" | jq -e \
+                  --arg namespace "$external_eso_namespace" \
+                  --arg service_account "$external_eso_service_account" \
+                  --arg owner_release "$external_eso_owner_release" \
+                  --arg owner_namespace "$external_eso_owner_namespace" '
+                    .metadata.namespace == $namespace
+                    and .metadata.name == $service_account
+                    and .metadata.annotations["meta.helm.sh/release-name"] == $owner_release
+                    and .metadata.annotations["meta.helm.sh/release-namespace"] == $owner_namespace
+                    and .metadata.labels["app.kubernetes.io/managed-by"] == "Helm"
+                    and .metadata.labels["app.kubernetes.io/name"] == "external-secrets"
+                    and .metadata.labels["app.kubernetes.io/instance"] == $owner_release
+                  ' >/dev/null; then
+                  reject_owner_conflict "configured External Secrets controller ServiceAccount ${external_eso_namespace}/${external_eso_service_account} has incompatible Helm ownership or controller labels"
                 fi
                 api_resources="$(kubectl api-resources --api-group=external-secrets.io -o name)"
                 for required_resource in clustersecretstores.external-secrets.io externalsecrets.external-secrets.io; do
@@ -136,8 +170,9 @@ spec:
                     exit 1
                   fi
                 done
-                echo "using available administrator-owned External Secrets controller in ${external_eso_namespace}"
+                echo "using available administrator-owned External Secrets controller ${external_eso_namespace}/${external_eso_deployment}"
               else
+                deployments_json="$(kubectl get deploy -A -l app.kubernetes.io/name=external-secrets -o json)"
                 conflict="$(printf '%s' "$deployments_json" \
                   | jq -r --arg release "$release" --arg namespace "$namespace" '
                     .items[]?

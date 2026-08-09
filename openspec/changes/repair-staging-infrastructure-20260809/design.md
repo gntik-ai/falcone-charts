@@ -6,9 +6,13 @@
    ownership never transfers. The external controller and OpenBao canary receive
    `create` only on `eso-system/eso-openbao-auth` TokenRequest; only OpenBao may
    create TokenReviews.
-2. `openbao-init` renders only on install. `openbao-auth-reconcile` renders on
-   install/upgrade, authenticates through `openbao-init-role`, optionally uses the
-   retained recovery credential for the one revision-20 repair, reads sanitized
+2. `openbao-init` renders only on install. The OpenBao server, bootstrap and
+   metadata reconciler use distinct Kubernetes identities: the server has only
+   TokenReview, bootstrap owns the exact bootstrap/recovery Secret permissions,
+   and the reconciler owns only exact TokenRequest plus its least-privilege
+   OpenBao metadata role. `openbao-auth-reconcile` renders on install/upgrade,
+   optionally uses the retained recovery credential for the one revision-20
+   repair, reads sanitized
    auth/role metadata, clears static reviewer JWT/CA configuration, normalizes the
    exact role, verifies, and runs login/lookup-self/revoke-self. Canonical values
    disable recovery-root use immediately afterward.
@@ -23,10 +27,22 @@
 6. Six digests live in staging values: control-plane, executor, web, workflow,
    function runtime, and MCP runtime. Helm, never imperative patches, is authority.
 7. Migration is split: Phase A retains the immutable hcloud-volumes value while
-   applying reversible repairs; Phase B rechecks exact PVC UID/Pending/no-volume/
-   no-PV/no-Pod evidence, requires JIT confirmation, deletes that PVC only, and
-   immediately applies canonical local-path values. Recovery after deletion is
-   forward-only.
+   applying non-destructive repairs; Phase B admits only the exact initial
+   Pending StatefulSet Pod, scales that StatefulSet to zero, waits boundedly,
+   then rechecks exact PVC UID/Pending/no-volume/no-PV/no-Pod/no-data evidence,
+   requires JIT confirmation, deletes that PVC only, and immediately applies
+   canonical local-path values.
+8. Apply requires separate fresh backup and parity attestations bound to exact
+   source target, repair chart and published package digest. Phase B additionally
+   requires a fresh Phase-A attestation bound to the live revision and final
+   no-root health. Target confirmation includes current revision, chart and
+   package digest; PVC confirmation remains a separate exact name/UID gate. Real
+   apply pulls the 0.4.3 OCI artifact, verifies its registry-reported digest, and
+   uses the staging values extracted from that artifact.
+9. A secret-suppressed semantic diff protects the sanitized 21-resource external
+   ESO inventory, including cluster-scoped objects. Exact owner metadata is
+   captured before and compared after each repaired-chart pass. No release
+   manifest or Secret payload is read.
 
 ## Failure and rollback
 
@@ -34,9 +50,10 @@ Auth mismatch or canary failure stops before ESO CR refresh and never falls back
 to payload operations. A matching role plus denial reports
 `ROLE_MATCHES_AUTH_STILL_DENIED`. Ferret failure leaves old Ready endpoints.
 Unexpected PVC binding/data invalidates Phase B. Before Phase A, revision 20 is
-untouched; after Phase A, prefer repaired-chart reapply; after PVC deletion,
-revision-20 rollback is storage-incompatible. Data-bearing storage changes require
-a separate backup/restore and isolation-parity design.
+untouched. Once any mutation starts, every failure emits a forward-recovery
+instruction; neither apply tool uses atomic upgrade or rollback. After PVC
+deletion, revision-20 restoration is storage-incompatible. Data-bearing storage
+changes require a separate backup/restore and isolation-parity design.
 
 ## Verification
 

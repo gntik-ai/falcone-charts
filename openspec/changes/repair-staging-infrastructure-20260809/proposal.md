@@ -19,7 +19,8 @@ only destructive empty-PVC transition.
 - Select local-path plus fsn1 only in staging and pin the six approved immutable
   application/runtime digests there.
 - Add dry-run-first revision-20 preflight, two-phase migration, forward recovery,
-  detailed operations/security/storage documentation, and black-box contracts.
+  structured short-lived evidence, semantic external-owner protection, detailed
+  operations/security/storage documentation, and black-box contracts.
 
 ## Impact
 
@@ -35,3 +36,5 @@ read, PVC deletion, deployment, merge, push, or PR occurs. Disposable clean-inst
 and revision-20 upgrade proof plus independent review remain later gates. The
 shared-staging Phase A needs separate environment authorization; Phase B needs an
 immediate exact PVC name/UID confirmation after all state gates pass.
+All mutation paths are fail-forward; no automatic or explicit Helm rollback is
+part of the repair.

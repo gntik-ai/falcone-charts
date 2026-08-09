@@ -28,7 +28,7 @@ subjects:
     namespace: {{ $controllerNamespace }}
   # The metadata-only reconcile hook requests the same bounded canary token.
   - kind: ServiceAccount
-    name: openbao
+    name: openbao-auth-reconciler
     namespace: {{ .Values.eso.caProvider.namespace | default "secret-store" }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io

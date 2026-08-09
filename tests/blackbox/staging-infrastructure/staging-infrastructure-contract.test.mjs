@@ -140,7 +140,7 @@ test('external ESO uses exact TokenRequest/TokenReview authority without adoptin
   })
   assert.deepEqual(
     (requestBinding?.subjects ?? []).map((subject) => `${subject.kind}/${subject.namespace}/${subject.name}`).sort(),
-    ['ServiceAccount/external-secrets/external-secrets', 'ServiceAccount/secret-store/openbao'],
+    ['ServiceAccount/external-secrets/external-secrets', 'ServiceAccount/secret-store/openbao-auth-reconciler'],
   )
 
   const reviewRole = named(objects, 'ClusterRole', 'openbao-token-reviewer')
@@ -181,7 +181,9 @@ test('external ESO uses exact TokenRequest/TokenReview authority without adoptin
 // bbx-repair-staging-002 | fn-openbao-install-bootstrap | OpenSpec #### Scenario: Static reviewer credential is present
 test('fresh install retains full bootstrap while upgrade renders only the auth reconciler', () => {
   const install = render(['-f', stagingValues])
+  const server = named(install.objects, 'StatefulSet', 'openbao', 'secret-store')
   const bootstrap = named(install.objects, 'Job', 'openbao-init', 'secret-store')
+  const reconciler = named(install.objects, 'Job', 'openbao-auth-reconcile', 'secret-store')
   assert.ok(bootstrap, 'fresh install must retain the complete bootstrap')
   assert.equal(bootstrap.metadata?.annotations?.['helm.sh/hook'], 'post-install')
   const bootstrapCommands = JSON.stringify(bootstrap.spec?.template?.spec?.containers ?? [])
@@ -189,8 +191,16 @@ test('fresh install retains full bootstrap while upgrade renders only the auth r
     'fresh-install bootstrap no longer seeds its established KV payloads')
   assert.match(bootstrapCommands, /bao policy write/,
     'fresh-install bootstrap no longer creates its established policies')
-  assert.ok(named(install.objects, 'Job', 'openbao-auth-reconcile', 'secret-store'),
+  assert.ok(reconciler,
     'fresh install must verify auth metadata after bootstrap')
+  assert.equal(server?.spec?.template?.spec?.serviceAccountName, 'openbao')
+  assert.equal(bootstrap.spec?.template?.spec?.serviceAccountName, 'openbao-bootstrap')
+  assert.equal(reconciler.spec?.template?.spec?.serviceAccountName, 'openbao-auth-reconciler')
+  assert.equal(new Set([
+    server.spec?.template?.spec?.serviceAccountName,
+    bootstrap.spec?.template?.spec?.serviceAccountName,
+    reconciler.spec?.template?.spec?.serviceAccountName,
+  ]).size, 3, 'server, bootstrap, and metadata-only reconciler identities must remain separate')
 
   const upgrade = render(['--is-upgrade', '-f', stagingValues, ...upgradeEvidenceArgs])
   assert.equal(named(upgrade.objects, 'Job', 'openbao-init', 'secret-store'), undefined,
@@ -205,7 +215,7 @@ test('upgrade reconciler selects rotating local reviewer mode and forbids KV or 
   const reconcile = named(objects, 'Job', 'openbao-auth-reconcile', 'secret-store')
   assert.ok(reconcile)
   assert.equal(reconcile.metadata?.annotations?.['helm.sh/hook'], 'post-install,post-upgrade')
-  assert.equal(reconcile.spec?.template?.spec?.serviceAccountName, 'openbao')
+  assert.equal(reconcile.spec?.template?.spec?.serviceAccountName, 'openbao-auth-reconciler')
   assert.notEqual(reconcile.spec?.template?.spec?.automountServiceAccountToken, false,
     'OpenBao auth reconciliation needs the rotating local pod token')
 
@@ -218,8 +228,10 @@ test('upgrade reconciler selects rotating local reviewer mode and forbids KV or 
 
   const script = reconcile.spec?.template?.spec?.containers?.find((container) => container.name === 'auth-metadata-reconciler')?.args?.[0] ?? ''
   assertSuccess(run('/bin/sh', ['-n'], { input: script }), 'rendered OpenBao auth reconciler shell syntax')
-  assert.match(script, /token_reviewer_jwt=""/)
-  assert.match(script, /kubernetes_ca_cert=""/)
+  assert.doesNotMatch(script, /token_reviewer_jwt=/,
+    'routine reconciliation must not clear or replace a persisted reviewer credential')
+  assert.doesNotMatch(script, /kubernetes_ca_cert=/,
+    'routine reconciliation must not clear or replace persisted Kubernetes CA material')
   assert.match(script, /disable_local_ca_jwt=false/)
   assert.match(script, /reviewer_set=.*token_reviewer_jwt_set/)
   assert.match(script, /desired_name="eso-openbao-auth"/)
@@ -238,6 +250,18 @@ test('upgrade reconciler selects rotating local reviewer mode and forbids KV or 
     /\bsys\/policies\/acl\//,
   ]
   for (const operation of forbidden) assert.doesNotMatch(script, operation)
+
+  const recovery = render([
+    '--is-upgrade', '-f', stagingValues, ...upgradeEvidenceArgs,
+    '--set', 'openbao.openbao.authReconcile.allowRecoveryRoot=true',
+  ])
+  const recoveryJob = named(recovery.objects, 'Job', 'openbao-auth-reconcile', 'secret-store')
+  const recoveryScript = recoveryJob?.spec?.template?.spec?.containers
+    ?.find((container) => container.name === 'auth-metadata-reconciler')?.args?.[0] ?? ''
+  assert.match(recoveryScript, /if \[ "\$auth_source" = "recovery_root" \]; then[\s\S]*bao policy write auth-reconcile/,
+    'only the explicitly authorized recovery render may bootstrap the dedicated metadata policy')
+  assert.match(recoveryScript, /auth\/kubernetes\/role\/openbao-auth-reconcile-role/)
+  assert.match(recoveryScript, /\/openbao-recovery\/root-token/)
   const mountsAndVolumes = JSON.stringify({
     mounts: reconcile.spec?.template?.spec?.containers?.flatMap((container) => container.volumeMounts ?? []),
     volumes: reconcile.spec?.template?.spec?.volumes,

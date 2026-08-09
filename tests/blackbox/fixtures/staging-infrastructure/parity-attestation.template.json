@@ -1,0 +1,22 @@
+{
+  "apiVersion": "falcone.gntik.ai/v1",
+  "kind": "Revision20ParityEvidence",
+  "target": {
+    "context": "default",
+    "namespace": "in-falcone-staging",
+    "release": "falcone",
+    "revision": "20",
+    "chart": "in-falcone-0.4.1"
+  },
+  "repair": {
+    "chart": "in-falcone-0.4.3",
+    "packageDigest": "sha256:0430430430430430430430430430430430430430430430430430430430430430"
+  },
+  "evidence": {
+    "reference": "bbx-parity-revision20",
+    "backupReference": "bbx-backup-revision20",
+    "observedAt": "__OBSERVED_AT__",
+    "validUntil": "__VALID_UNTIL__",
+    "verified": true
+  }
+}

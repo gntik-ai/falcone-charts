@@ -10,7 +10,8 @@
   ReplicaSet history with OpenShift SCC compatibility.
 - [x] Add staging-only local-path/fsn1 and all six approved digests without
   production/base/HA/OpenShift drift.
-- [x] Add dry-run-first revision-20 Phase A/Phase B and forward recovery tools.
+- [x] Add dry-run-first revision-20 Phase A/Phase B and forward recovery tools,
+  structured target/package evidence, semantic owner gates and fail-forward errors.
 - [x] Update schemas, chart versions, release notes, detailed runbooks and OpenSpec.
 - [x] Run and record complete source/package validation on the final diff.
 - [ ] Independent system-reviewer decision.

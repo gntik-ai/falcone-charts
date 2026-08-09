@@ -1,0 +1,93 @@
+#!/usr/bin/env sh
+set -eu
+
+printf '%s\n' "$*" >>"${FALCONE_OPENBAO_LOG:?}"
+scenario="${FALCONE_OPENBAO_SCENARIO:-matching}"
+state_dir="${FALCONE_OPENBAO_STATE_DIR:?}"
+
+field=""
+path=""
+for arg in "$@"; do
+  path="$arg"
+  case "$arg" in
+    -field=*) field="${arg#-field=}" ;;
+  esac
+done
+
+case "$*" in
+  status)
+    exit 0
+    ;;
+  "auth list -format=json")
+    printf '{"kubernetes/":{"type":"kubernetes"}}\n'
+    exit 0
+    ;;
+  "policy list")
+    printf 'functions\ngateway\niam\nplatform\n'
+    exit 0
+    ;;
+esac
+
+case "$*" in
+  write*"auth/kubernetes/login"*)
+    printf '{"auth":{"client_token":"bbx-ephemeral"}}\n'
+    exit 0
+    ;;
+  write*"auth/kubernetes/config"*)
+    printf '%s' written >"$state_dir/config-written"
+    exit 0
+    ;;
+  write*"auth/kubernetes/role/eso-role"*)
+    printf '%s' written >"$state_dir/role-written"
+    exit 0
+    ;;
+  write*"auth/token/revoke-self"*)
+    exit 0
+    ;;
+esac
+
+if [ -n "$field" ]; then
+  case "$path:$field" in
+    auth/kubernetes/config:kubernetes_host)
+      if [ "$scenario" = "config-remains-static" ]; then
+        printf 'https://legacy-reviewer.example.invalid:443\n'
+      else
+        printf 'https://kubernetes.default.svc:443\n'
+      fi
+      ;;
+    auth/kubernetes/config:disable_local_ca_jwt)
+      if [ "$scenario" = "config-remains-static" ]; then printf 'true\n'; else printf 'false\n'; fi
+      ;;
+    auth/kubernetes/config:token_reviewer_jwt_set)
+      if [ "$scenario" = "config-remains-static" ]; then printf 'true\n'; else printf 'false\n'; fi
+      ;;
+    auth/kubernetes/role/eso-role:bound_service_account_names) printf 'eso-openbao-auth\n' ;;
+    auth/kubernetes/role/eso-role:bound_service_account_namespaces) printf 'eso-system\n' ;;
+    auth/kubernetes/role/eso-role:token_policies) printf '[functions, gateway, iam, platform]\n' ;;
+    auth/kubernetes/role/eso-role:token_ttl) printf '86400\n' ;;
+    auth/kubernetes/role/eso-role:token_max_ttl)
+      if [ "$scenario" = "role-token-field-drift" ] && [ ! -f "$state_dir/role-written" ]; then printf '172800\n'; else printf '86400\n'; fi
+      ;;
+    auth/kubernetes/role/eso-role:token_explicit_max_ttl) printf '0\n' ;;
+    auth/kubernetes/role/eso-role:token_period) printf '0\n' ;;
+    auth/kubernetes/role/eso-role:token_num_uses) printf '0\n' ;;
+    auth/kubernetes/role/eso-role:token_no_default_policy) printf 'false\n' ;;
+    auth/kubernetes/role/eso-role:token_type) printf 'default\n' ;;
+    *) printf 'unexpected bao field read: %s %s\n' "$path" "$field" >&2; exit 2 ;;
+  esac
+  exit 0
+fi
+
+case "$*" in
+  read*"auth/token/lookup-self"*)
+    if [ "$scenario" = "lookup-invalid" ]; then
+      printf '{"data":{"policies":["default"],"ttl":30}}\n'
+    else
+      printf '{"data":{"policies":["functions","gateway","iam","platform"],"ttl":3600}}\n'
+    fi
+    exit 0
+    ;;
+esac
+
+printf 'unexpected bao fixture invocation: %s\n' "$*" >&2
+exit 2
