@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -154,6 +155,28 @@ function named(objects, kind, name, namespace) {
     && (namespace === undefined || object?.metadata?.namespace === namespace))
 }
 
+function networkNamespaceState() {
+  const readNamespace = (path) => {
+    try {
+      return { path, identity: readlinkSync(path), error: null }
+    } catch (error) {
+      return {
+        path,
+        identity: null,
+        error: { name: error.name, message: error.message, code: error.code },
+      }
+    }
+  }
+  const self = readNamespace('/proc/self/ns/net')
+  const init = readNamespace('/proc/1/ns/net')
+  return {
+    self,
+    init,
+    comparable: self.identity !== null && init.identity !== null,
+    outerIsolated: self.identity !== null && init.identity !== null && self.identity !== init.identity,
+  }
+}
+
 function runOpenBaoReconciler(script, scenario) {
   const work = mkdtempSync(resolve(tmpdir(), 'falcone-openbao-bbx-'))
   const state = resolve(work, 'state')
@@ -168,27 +191,71 @@ function runOpenBaoReconciler(script, scenario) {
   writeFileSync(resolve(canary, 'token'), 'synthetic-bbx-canary')
   writeFileSync(resolve(tls, 'ca.crt'), 'synthetic-bbx-ca')
   const log = resolve(work, 'bao.log')
-  const isolatedScript = script
-    .replaceAll('/canary/token', '/tmp/work/canary/token')
-    .replaceAll('/openbao/tls/ca.crt', '/tmp/work/tls/ca.crt')
-    .replaceAll('/var/run/secrets/kubernetes.io/serviceaccount/token', '/tmp/work/serviceaccount/token')
-  const result = run('bwrap', [
-    '--ro-bind', '/', '/',
-    '--dev', '/dev',
-    '--proc', '/proc',
-    '--tmpfs', '/tmp',
-    '--dir', '/tmp/work',
-    '--bind', work, '/tmp/work',
-    '--setenv', 'PATH', `${fakeBin}:${process.env.PATH}`,
-    '--setenv', 'FALCONE_OPENBAO_LOG', '/tmp/work/bao.log',
-    '--setenv', 'FALCONE_OPENBAO_STATE_DIR', '/tmp/work/state',
-    '--setenv', 'FALCONE_OPENBAO_SCENARIO', scenario,
-    '/bin/sh', '-ec', isolatedScript,
-  ], { timeout: 30_000 })
+  const networkNamespace = networkNamespaceState()
+  let executionMode
+  let result
+  if (networkNamespace.outerIsolated) {
+    executionMode = 'outer-network-namespace'
+    const directScript = script
+      .replaceAll('/canary/token', resolve(canary, 'token'))
+      .replaceAll('/openbao/tls/ca.crt', resolve(tls, 'ca.crt'))
+      .replaceAll('/var/run/secrets/kubernetes.io/serviceaccount/token', resolve(serviceAccount, 'token'))
+    result = run('/bin/sh', ['-ec', directScript], {
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        FALCONE_OPENBAO_LOG: log,
+        FALCONE_OPENBAO_STATE_DIR: state,
+        FALCONE_OPENBAO_SCENARIO: scenario,
+      },
+      timeout: 30_000,
+    })
+  } else {
+    executionMode = 'bubblewrap'
+    const isolatedScript = script
+      .replaceAll('/canary/token', '/tmp/work/canary/token')
+      .replaceAll('/openbao/tls/ca.crt', '/tmp/work/tls/ca.crt')
+      .replaceAll('/var/run/secrets/kubernetes.io/serviceaccount/token', '/tmp/work/serviceaccount/token')
+    result = run('bwrap', [
+      '--ro-bind', '/', '/',
+      '--dev', '/dev',
+      '--proc', '/proc',
+      '--tmpfs', '/tmp',
+      '--dir', '/tmp/work',
+      '--bind', work, '/tmp/work',
+      '--setenv', 'PATH', `${fakeBin}:${process.env.PATH}`,
+      '--setenv', 'FALCONE_OPENBAO_LOG', '/tmp/work/bao.log',
+      '--setenv', 'FALCONE_OPENBAO_STATE_DIR', '/tmp/work/state',
+      '--setenv', 'FALCONE_OPENBAO_SCENARIO', scenario,
+      '/bin/sh', '-ec', isolatedScript,
+    ], { timeout: 30_000 })
+  }
   return {
     result,
     calls: readLines(log),
+    executionMode,
+    networkNamespace,
     cleanup: () => rmSync(work, { recursive: true, force: true }),
+  }
+}
+
+function reconcilerProcessDiagnostics(invocation) {
+  const error = invocation.result.error
+  return {
+    executionMode: invocation.executionMode,
+    networkNamespace: invocation.networkNamespace,
+    status: invocation.result.status,
+    signal: invocation.result.signal ?? null,
+    error: error ? {
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      errno: error.errno,
+      syscall: error.syscall,
+      path: error.path,
+    } : null,
+    output: combined(invocation.result),
+    calls: invocation.calls,
   }
 }
 
@@ -499,10 +566,17 @@ test('executable OpenBao reconciliation omits static reviewer fields, rereads co
   const script = job?.spec?.template?.spec?.containers?.find((container) => container.name === 'auth-metadata-reconciler')?.args?.[0] ?? ''
   const violations = []
   const diagnostics = {}
+  const captureProcess = (label, invocation) => {
+    const processState = reconcilerProcessDiagnostics(invocation)
+    diagnostics[label] = processState
+    if (processState.status === null) violations.push(`${label}-process-status-null`)
+    if (processState.signal !== null) violations.push(`${label}-process-signal:${processState.signal}`)
+    if (processState.error !== null) violations.push(`${label}-process-error:${processState.error.code ?? processState.error.name}`)
+  }
 
   const config = runOpenBaoReconciler(script, 'config-remains-static')
   try {
-    diagnostics.config = { status: config.result.status, output: combined(config.result), calls: config.calls }
+    captureProcess('config', config)
     if (config.result.status === 0) violations.push('config-not-reread')
     const configReads = config.calls.filter((line) => /-field=(?:kubernetes_host|disable_local_ca_jwt|token_reviewer_jwt_set) auth\/kubernetes\/config/.test(line))
     if (configReads.length < 6) violations.push('config-fields-not-reread-after-write')
@@ -516,7 +590,7 @@ test('executable OpenBao reconciliation omits static reviewer fields, rereads co
 
   const role = runOpenBaoReconciler(script, 'role-token-field-drift')
   try {
-    diagnostics.role = { status: role.result.status, output: combined(role.result), calls: role.calls }
+    captureProcess('role', role)
     if (role.result.status !== 0 || !/result=changed/.test(combined(role.result))) violations.push('security-token-field-drift-ignored')
     for (const field of ['token_max_ttl', 'token_explicit_max_ttl', 'token_period', 'token_num_uses', 'token_no_default_policy', 'token_type']) {
       if (!role.calls.some((line) => line.includes(`-field=${field}`))) violations.push(`role-field-not-normalized:${field}`)
@@ -527,7 +601,7 @@ test('executable OpenBao reconciliation omits static reviewer fields, rereads co
 
   const lookup = runOpenBaoReconciler(script, 'lookup-invalid')
   try {
-    diagnostics.lookup = { status: lookup.result.status, output: combined(lookup.result), calls: lookup.calls }
+    captureProcess('lookup', lookup)
     if (lookup.result.status === 0) violations.push('invalid-lookup-metadata-accepted')
     if (!/AUTH_CANARY_METADATA_INVALID/.test(combined(lookup.result))) violations.push('lookup-validation-code-missing')
   } finally {
