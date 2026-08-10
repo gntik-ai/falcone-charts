@@ -703,7 +703,9 @@ check('legacy adoption renders an ordered restricted maintenance hook', () => {
   const lifecycle = documentWith(rendered, 'kind: Job', 'app.kubernetes.io/component: webhook-key-lifecycle');
   const role = documentWith(rendered, 'kind: Role', 'app.kubernetes.io/component: webhook-key-lifecycle');
   assert.match(credential, /hook-weight": "-45"/);
-  assert.match(lifecycle, /hook-weight": "-35"/);
+  // The quiesce sorts last among pre-upgrade hooks (charts#11); the invariant behind
+  // this literal is pinned in tests/webhook-key-lifecycle-hook-order.test.mjs.
+  assert.match(lifecycle, /hook-weight": "5"/);
   assert.match(lifecycle, /WEBHOOK_KEY_LIFECYCLE_ACTION\s+value: "adopt"/);
   assert.match(lifecycle, /WEBHOOK_SIGNING_KEY\s+valueFrom:\s+secretKeyRef:[\s\S]*optional: false/);
   assertLifecycleDeploymentRbac(rendered, 'legacy adoption');

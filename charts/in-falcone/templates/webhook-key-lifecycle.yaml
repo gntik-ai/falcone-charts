@@ -167,6 +167,27 @@ spec:
 {{- $runAdoption := and (eq $action "none") (eq $key.adoption.mode "legacy") -}}
 {{- $runLifecycle := or $runAdoption (ne $action "none") -}}
 {{- if $runLifecycle }}
+{{/*
+  The lifecycle Job quiesces the control plane (scales it to 0) and, on success,
+  deliberately leaves it there: it reports workloadAction=apply-target and relies on
+  Helm's main upgrade apply to restore .Values.controlPlane.replicas. That is only
+  safe while NOTHING can fail between the quiesce and that apply — every pre-upgrade
+  hook that runs after it turns its own failure into an unbounded control-plane
+  outage, because Helm aborts before the apply and no hook runs on the abort path
+  (Helm has no failure hook, and post-upgrade does not fire when pre-upgrade fails).
+
+  So these four resources sort AFTER every other pre-upgrade hook in the chart and
+  its sub-charts. They were at -37/-35, which left five Jobs behind them
+  (credential-bootstrap, eso-preflight, temporal-db-bootstrap, temporal-schema,
+  openbao-tls-bootstrap); eso-preflight and temporal-schema each did exactly this on
+  in-falcone-staging while upgrading 0.3.1 -> 0.4.1. See gntik-ai/falcone-charts#11.
+
+  Ordinary upgrades do not render this Job at all, so those five Jobs already run
+  with the control plane up on every release that has no key lifecycle work — moving
+  the quiesce behind them puts both paths on identical footing rather than adding a
+  new one. tests/webhook-key-lifecycle-hook-order.test.mjs pins the invariant so a
+  hook added later cannot silently re-open the window.
+*/}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -178,7 +199,7 @@ metadata:
     app.kubernetes.io/component: webhook-key-lifecycle
   annotations:
     "helm.sh/hook": pre-upgrade
-    "helm.sh/hook-weight": "-37"
+    "helm.sh/hook-weight": "3"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 automountServiceAccountToken: true
 ---
@@ -192,7 +213,7 @@ metadata:
     app.kubernetes.io/component: webhook-key-lifecycle
   annotations:
     "helm.sh/hook": pre-upgrade
-    "helm.sh/hook-weight": "-37"
+    "helm.sh/hook-weight": "3"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
   - apiGroups: ["apps"]
@@ -220,7 +241,7 @@ metadata:
     app.kubernetes.io/component: webhook-key-lifecycle
   annotations:
     "helm.sh/hook": pre-upgrade
-    "helm.sh/hook-weight": "-37"
+    "helm.sh/hook-weight": "3"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 subjects:
   - kind: ServiceAccount
@@ -241,7 +262,7 @@ metadata:
     app.kubernetes.io/component: webhook-key-lifecycle
   annotations:
     "helm.sh/hook": pre-upgrade
-    "helm.sh/hook-weight": "-35"
+    "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 1

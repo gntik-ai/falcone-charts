@@ -30,7 +30,8 @@ for suite in \
   tests/tls-bootstrap-chart.test.mjs \
   tests/webhook-signing-key-chart.test.mjs \
   tests/webhook-database-credential-script.test.mjs \
-  tests/webhook-database-principals-chart.test.mjs
+  tests/webhook-database-principals-chart.test.mjs \
+  tests/webhook-key-lifecycle-hook-order.test.mjs
 do
   node --check "$suite"
 done
@@ -42,6 +43,7 @@ node tests/tls-bootstrap-chart.test.mjs
 node tests/webhook-signing-key-chart.test.mjs
 node tests/webhook-database-credential-script.test.mjs
 node tests/webhook-database-principals-chart.test.mjs
+node tests/webhook-key-lifecycle-hook-order.test.mjs
 sh tests/webhook-database-bootstrap-postgres16.test.sh
 
 helm lint --strict "$chart"
