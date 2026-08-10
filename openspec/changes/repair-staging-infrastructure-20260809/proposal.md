@@ -24,8 +24,14 @@ only destructive empty-PVC transition.
   structured short-lived evidence, semantic external-owner protection, detailed
   operations/security/storage documentation, and black-box contracts.
 - Extend fail-forward recovery to the exact revision-23 chart-0.4.9 named-user
-  rollout failure, targeting immutable chart 0.4.10 and rejecting evidence drift
+  rollout failure, targeting immutable chart 0.4.11 and rejecting evidence drift
   before mutation.
+- Admit the one exact observed partial manual recovery in which APISIX is 3/3
+  Ready through an exact Deployment→ReplicaSet→Pod UID/revision owner chain as
+  runtime UID/GID 636 with the existing standalone ConfigMap mounted, while
+  observability retains the sole named-user failure; make that mount and numeric
+  identity declarative in staging without adopting the ConfigMap, and prove
+  both APISIX and Prometheus numeric convergence after each upgrade pass.
 
 ## Impact
 
@@ -36,10 +42,10 @@ must recover their journeys and P13 remains the adjacent-tenant negative lens.
 
 ## Exclusions and gates
 
-No cluster is contacted by implementation. No ESO owner adoption, Secret value
-read, PVC deletion, deployment, merge, push, or PR occurs. Disposable clean-install
-and revision-20 upgrade proof plus independent review remain later gates. The
-shared-staging Phase A needs separate environment authorization; Phase B needs an
-immediate exact PVC name/UID confirmation after all state gates pass.
+Packaging and source validation do not mutate a cluster. No ESO owner adoption,
+Secret value read, PVC deletion, merge, or automatic rollback is part of the
+implementation. A shared-staging rollout is a later, separately gated operation;
+Phase B still needs an immediate exact PVC name/UID confirmation after all state
+gates pass.
 All mutation paths are fail-forward; no automatic or explicit Helm rollback is
 part of the repair.

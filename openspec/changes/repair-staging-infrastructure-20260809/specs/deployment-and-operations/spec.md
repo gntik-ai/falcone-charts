@@ -150,7 +150,7 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.10,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.11,
   and neither path uses atomic upgrade or rollback to revision 20
 
 #### Scenario: Phase A encounters the admitted revision-22 immutable-field failure
@@ -174,13 +174,40 @@ confirmation.
   one new observability Pod are Pending with their full named-user
   `CreateContainerConfigError`, while three APISIX and one observability replicas
   from the prior ReplicaSets remain Ready
-- **THEN** Phase A targets immutable chart 0.4.10 and requires fresh backup and
+- **THEN** Phase A targets immutable chart 0.4.11 and requires fresh backup and
   parity evidence plus the exact source/target/package confirmation
 - **AND** it delegates to the existing two-pass Phase-A implementation without a
   fabricated Phase-A attestation, rollback, atomic upgrade or PVC deletion
 - **AND** any history, description, image, label, owner, rollout count,
   generation, availability, waiting reason/message, storage or cancellation
   drift fails before mutation
+
+#### Scenario: Phase A admits only the exact revision-23 partial manual recovery
+
+- **WHEN** the exact revision-20/revision-22/revision-23 history and immutable
+  storage anchor still holds after a partial `kubectl-patch`
+- **AND** APISIX generation 7 is exactly 3/3 Ready on one revision-7 ReplicaSet
+  whose controller owner name and UID match the observed Deployment, each Pod
+  owner name and UID match that ReplicaSet, each Pod has pod UID 636 but no pod
+  GID, reports runtime UID/GID 636:636 with zero restarts, and mounts
+  `falcone-apisix-standalone` at the exact standalone path
+- **AND** that existing ConfigMap contains only `apisix.yaml` with the approved
+  SHA-256, observability remains one Ready plus one exact Pending `nobody`
+  named-user failure, and no other namespace has such a failure
+- **THEN** Phase A targets immutable chart 0.4.11, makes the APISIX identity and
+  mount declarative, and requires fresh 0.4.11-bound backup/parity evidence plus
+  the exact one-use target/package confirmation
+- **AND** the rendered target SHALL contain APISIX pod and container UID/GID
+  636:636, and each post-upgrade health gate SHALL observe that APISIX state plus
+  Prometheus container UID/GID 65534:65534 before the next pass may proceed
+- **AND** render validation SHALL parse exactly one structurally matching APISIX
+  Deployment locally and SHALL NOT invoke a Kubernetes create/apply verb
+- **AND** Helm SHALL NOT create or adopt the existing standalone ConfigMap
+- **AND** any precursor or render history, storage, generation, image, label,
+  owner name/UID/revision, mount, mode, UID/GID, restart, count, readiness, error
+  or ConfigMap-content drift SHALL fail before mutation
+- **AND** any post-upgrade UID/GID or readiness drift SHALL fail its health gate,
+  require forward recovery and prevent the next upgrade pass
 
 ### Requirement: Phase-A completion SHALL prove final no-root health
 

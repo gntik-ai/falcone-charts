@@ -39,7 +39,7 @@
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.10 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.11 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
 9. Revision-20 Phase A prevalidates the exact fourteen Falcone-owned
    `ExternalSecret` declarations before apply. It accepts only the all-absent
@@ -67,8 +67,18 @@
     preserved prior availability. The gate binds labels, ReplicaSet ownership,
     images, generations, replica counts and full kubelet error signatures without
     reading logs, Secrets or Helm manifests. Forward recovery delegates to the
-    existing two-pass Phase-A path and requires fresh 0.4.10/package-bound backup
+    existing two-pass Phase-A path and requires fresh 0.4.11/package-bound backup
     and parity evidence, but no fabricated Phase-A attestation.
+14. Chart 0.4.10 remains an immutable published but unapplied artifact. A later
+    `kubectl-patch` left APISIX 3/3 Ready with pod UID 636 and the existing
+    standalone ConfigMap mounted, while Prometheus retained the sole named-user
+    failure. Chart 0.4.11 admits only that exact second precursor, including
+    the Deployment UID/generation → ReplicaSet UID/revision → Pod UID owner
+    chain, runtime UID/GID, mount, ConfigMap SHA-256 and global error
+    cardinality. Its staging profile makes the mount and numeric pod identity
+    declarative but neither creates nor adopts the external ConfigMap. The
+    rendered target is checked before mutation and both APISIX and Prometheus
+    numeric identities are checked live after each upgrade pass.
 
 ## Failure and rollback
 

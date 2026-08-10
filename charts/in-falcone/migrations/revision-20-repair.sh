@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.10"
+EXPECTED_REPAIR_VERSION="0.4.11"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -79,9 +79,10 @@ trap cleanup EXIT
 
 die() { printf '%s\n' "$1" >&2; exit 1; }
 
-for command_name in kubectl helm jq; do
+for command_name in kubectl helm jq sha256sum python3; do
   command -v "$command_name" >/dev/null || { printf 'missing command: %s\n' "$command_name" >&2; exit 2; }
 done
+python3 -c 'import yaml' >/dev/null 2>&1 || { printf 'missing Python module: yaml (PyYAML)\n' >&2; exit 2; }
 [[ -f "$staging_values" ]] || { printf 'staging values not found: %s\n' "$staging_values" >&2; exit 2; }
 
 actual_context="$(kubectl config current-context)"
@@ -230,15 +231,18 @@ validate_failed_storage_contract() {
   printf 'immutable-storage-contract=validated sourceRevision=20 failedRevision=%s standalonePvcs=4 seaweedfsStatefulSets=2 childPvcs=2\n' "$actual_revision"
 }
 
+revision23_state=""
 validate_revision23_named_user_failure() {
   [[ "$actual_revision" == 23 ]] || return 0
-  local deployments pods
+  local deployments pods all_pods configmap config_hash replicasets
+  local apisix_deployment_uid apisix_deployment_generation active_apisix_replicaset
+  local active_apisix_replicaset_name active_apisix_replicaset_uid
   deployments="$(kubectl -n "$EXPECTED_NAMESPACE" get deployments \
     -l app.kubernetes.io/instance="$EXPECTED_RELEASE" -o json)" || die "REVISION23_DEPLOYMENTS_UNAVAILABLE"
   pods="$(kubectl -n "$EXPECTED_NAMESPACE" get pods \
     -l app.kubernetes.io/instance="$EXPECTED_RELEASE" -o json)" || die "REVISION23_PODS_UNAVAILABLE"
 
-  printf '%s' "$deployments" | jq -e \
+  if printf '%s' "$deployments" | jq -e \
     --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" \
     --arg apisix_image "docker.io/apache/apisix:3.10.0-debian" \
     --arg observability_image "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62" '
@@ -267,9 +271,81 @@ validate_revision23_named_user_failure() {
             and (.securityContext | has("runAsGroup") | not)) ] | length) == 1);
     exact_deployment("falcone-apisix"; "apisix"; $apisix_image; 3; 3)
     and exact_deployment("falcone-observability"; "observability"; $observability_image; 1; 1)' \
-    >/dev/null || die "REVISION23_DEPLOYMENT_EVIDENCE_DRIFT"
+    >/dev/null; then
+    revision23_state="named-user-failure"
+  elif printf '%s' "$deployments" | jq -e \
+    --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" \
+    --arg apisix_image "docker.io/apache/apisix:3.10.0-debian" \
+    --arg observability_image "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62" '
+    def one($name): [.items[] | select(.metadata.name == $name)] | if length == 1 then .[0] else null end;
+    def identity($deployment; $component):
+      $deployment.metadata.namespace == $namespace
+      and $deployment.metadata.labels["app.kubernetes.io/name"] == $component
+      and $deployment.metadata.labels["app.kubernetes.io/instance"] == $release
+      and $deployment.spec.selector.matchLabels["app.kubernetes.io/name"] == $component
+      and $deployment.spec.selector.matchLabels["app.kubernetes.io/instance"] == $release
+      and $deployment.spec.template.metadata.labels["app.kubernetes.io/name"] == $component
+      and $deployment.spec.template.metadata.labels["app.kubernetes.io/instance"] == $release;
+    def exact_apisix:
+      one("falcone-apisix") as $deployment
+      | $deployment != null and identity($deployment; "apisix")
+      and ($deployment.metadata.uid | type == "string" and length > 0)
+      and $deployment.metadata.generation == 7
+      and $deployment.status.observedGeneration == 7
+      and $deployment.spec.replicas == 3
+      and $deployment.status.replicas == 3
+      and $deployment.status.updatedReplicas == 3
+      and $deployment.status.readyReplicas == 3
+      and $deployment.status.availableReplicas == 3
+      and (($deployment.status.unavailableReplicas // 0) == 0)
+      and ($deployment.spec.template.spec.securityContext as $security
+        | $security.fsGroup == 1001
+        and $security.fsGroupChangePolicy == "OnRootMismatch"
+        and $security.runAsNonRoot == true
+        and $security.runAsUser == 636
+        and $security.seccompProfile.type == "RuntimeDefault"
+        and ($security | has("runAsGroup") | not))
+      and ([ $deployment.spec.template.spec.containers[]
+        | select(.name == "apisix" and .image == $apisix_image
+          and .securityContext.runAsNonRoot == true
+          and (.securityContext | has("runAsUser") | not)
+          and (.securityContext | has("runAsGroup") | not)
+          and (.volumeMounts // []) == [{
+            "name": "standalone-config",
+            "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+            "subPath": "apisix.yaml"
+          }]) ] | length) == 1
+      and ($deployment.spec.template.spec.volumes // []) == [{
+        "name": "standalone-config",
+        "configMap": {
+          "name": "falcone-apisix-standalone",
+          "defaultMode": 420
+        }
+      }];
+    def exact_observability:
+      one("falcone-observability") as $deployment
+      | $deployment != null and identity($deployment; "observability")
+      and $deployment.metadata.generation == 5
+      and $deployment.status.observedGeneration == 5
+      and $deployment.spec.replicas == 1
+      and $deployment.status.replicas == 2
+      and $deployment.status.updatedReplicas == 1
+      and $deployment.status.readyReplicas == 1
+      and $deployment.status.availableReplicas == 1
+      and $deployment.status.unavailableReplicas == 1
+      and ([ $deployment.spec.template.spec.containers[]
+        | select(.name == "observability" and .image == $observability_image
+          and .securityContext.runAsNonRoot == true
+          and (.securityContext | has("runAsUser") | not)
+          and (.securityContext | has("runAsGroup") | not)) ] | length) == 1;
+    exact_apisix and exact_observability' >/dev/null; then
+    revision23_state="partial-manual-recovery"
+  else
+    die "REVISION23_DEPLOYMENT_EVIDENCE_DRIFT"
+  fi
 
-  printf '%s' "$pods" | jq -e \
+  if [[ "$revision23_state" == "named-user-failure" ]]; then
+    printf '%s' "$pods" | jq -e \
     --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" \
     --arg apisix_image "docker.io/apache/apisix:3.10.0-debian" \
     --arg observability_image "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62" '
@@ -311,8 +387,151 @@ validate_revision23_named_user_failure() {
               | contains("container has runAsNonRoot and image has non-numeric user ("))
             and (.state.waiting.message | contains("cannot verify user is non-root")))]
         | select(length > 0)] | length) == 2)' \
+      >/dev/null || die "REVISION23_POD_EVIDENCE_DRIFT"
+    printf 'revision23-failure=validated chart=in-falcone-0.4.9 cause=named-image-users deployments=2 pendingPods=2 readyPods=4\n'
+    return 0
+  fi
+
+  configmap="$(kubectl -n "$EXPECTED_NAMESPACE" get configmap falcone-apisix-standalone -o json)" || \
+    die "REVISION23_APISIX_CONFIGMAP_UNAVAILABLE"
+  printf '%s' "$configmap" | jq -e --arg namespace "$EXPECTED_NAMESPACE" '
+    .metadata.name == "falcone-apisix-standalone"
+    and .metadata.namespace == $namespace
+    and (.data | keys) == ["apisix.yaml"]
+    and (((.binaryData // {}) | keys) | length) == 0
+    and (.data["apisix.yaml"] | type == "string" and length > 0)' >/dev/null || \
+    die "REVISION23_APISIX_CONFIGMAP_DRIFT"
+  config_hash="$(printf '%s' "$configmap" | jq -j '.data["apisix.yaml"]' | sha256sum | awk '{print $1}')"
+  [[ "$config_hash" == "28aa61f223b1306a9604817f44abf6c8c1c867e6ba9020bc9ff85235dd2c555b" ]] || \
+    die "REVISION23_APISIX_CONFIGMAP_DRIFT"
+
+  apisix_deployment_uid="$(printf '%s' "$deployments" | jq -er \
+    '[.items[] | select(.metadata.name == "falcone-apisix")]
+      | if length == 1 then .[0].metadata.uid else error("deployment cardinality") end')" || \
+    die "REVISION23_REPLICASET_EVIDENCE_DRIFT"
+  apisix_deployment_generation="$(printf '%s' "$deployments" | jq -er \
+    '[.items[] | select(.metadata.name == "falcone-apisix")]
+      | if length == 1 then (.[0].metadata.generation | tostring) else error("deployment cardinality") end')" || \
+    die "REVISION23_REPLICASET_EVIDENCE_DRIFT"
+  replicasets="$(kubectl -n "$EXPECTED_NAMESPACE" get replicasets.apps \
+    -l app.kubernetes.io/instance="$EXPECTED_RELEASE",app.kubernetes.io/name=apisix -o json)" || \
+    die "REVISION23_REPLICASETS_UNAVAILABLE"
+  active_apisix_replicaset="$(printf '%s' "$replicasets" | jq -ce \
+    --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" \
+    --arg deployment_uid "$apisix_deployment_uid" --arg deployment_generation "$apisix_deployment_generation" '
+    [.items[] | select(
+      .apiVersion == "apps/v1" and .kind == "ReplicaSet"
+      and .metadata.namespace == $namespace
+      and (.metadata.uid | type == "string" and length > 0)
+      and .metadata.labels["app.kubernetes.io/name"] == "apisix"
+      and .metadata.labels["app.kubernetes.io/instance"] == $release
+      and .metadata.annotations["deployment.kubernetes.io/revision"] == $deployment_generation
+      and .spec.replicas == 3
+      and .status.replicas == 3
+      and .status.readyReplicas == 3
+      and .status.availableReplicas == 3
+      and ([.metadata.ownerReferences[]? | select(
+        .apiVersion == "apps/v1" and .kind == "Deployment"
+        and .name == "falcone-apisix" and .uid == $deployment_uid
+        and .controller == true)] | length) == 1)]
+    | if length == 1 then .[0] else error("active ReplicaSet cardinality") end')" || \
+    die "REVISION23_REPLICASET_EVIDENCE_DRIFT"
+  active_apisix_replicaset_name="$(printf '%s' "$active_apisix_replicaset" | jq -er '.metadata.name')" || \
+    die "REVISION23_REPLICASET_EVIDENCE_DRIFT"
+  active_apisix_replicaset_uid="$(printf '%s' "$active_apisix_replicaset" | jq -er '.metadata.uid')" || \
+    die "REVISION23_REPLICASET_EVIDENCE_DRIFT"
+
+  all_pods="$(kubectl get pods -A -o json)" || die "REVISION23_GLOBAL_PODS_UNAVAILABLE"
+  printf '%s' "$pods" | jq -e \
+    --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" \
+    --arg active_apisix_replicaset_name "$active_apisix_replicaset_name" \
+    --arg active_apisix_replicaset_uid "$active_apisix_replicaset_uid" \
+    --arg apisix_image "docker.io/apache/apisix:3.10.0-debian" \
+    --arg observability_image "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62" '
+    def owned_by_replicaset:
+      ([.metadata.ownerReferences[]?
+        | select(.apiVersion == "apps/v1" and .kind == "ReplicaSet" and .controller == true
+          and (.name | type == "string" and length > 0))] | length) == 1;
+    def owner_name:
+      [.metadata.ownerReferences[]?
+        | select(.apiVersion == "apps/v1" and .kind == "ReplicaSet" and .controller == true)][0].name;
+    def owned_by_active_apisix_replicaset:
+      ([.metadata.ownerReferences[]?
+        | select(.apiVersion == "apps/v1" and .kind == "ReplicaSet" and .controller == true
+          and .name == $active_apisix_replicaset_name
+          and .uid == $active_apisix_replicaset_uid)] | length) == 1;
+    def target($component; $image):
+      select(.metadata.namespace == $namespace
+        and .metadata.labels["app.kubernetes.io/name"] == $component
+        and .metadata.labels["app.kubernetes.io/instance"] == $release
+        and owned_by_replicaset
+        and ([.spec.containers[] | select(.name == $component and .image == $image)] | length) == 1);
+    def exact_apisix_ready:
+      .status.phase == "Running"
+      and any(.status.conditions[]?; .type == "Ready" and .status == "True")
+      and (.spec.securityContext.fsGroup == 1001)
+      and (.spec.securityContext.fsGroupChangePolicy == "OnRootMismatch")
+      and (.spec.securityContext.runAsNonRoot == true)
+      and (.spec.securityContext.runAsUser == 636)
+      and (.spec.securityContext.seccompProfile.type == "RuntimeDefault")
+      and (.spec.securityContext | has("runAsGroup") | not)
+      and ([.spec.containers[] | select(.name == "apisix"
+        and .image == $apisix_image
+        and .securityContext.runAsNonRoot == true
+        and (.securityContext | has("runAsUser") | not)
+        and (.securityContext | has("runAsGroup") | not)
+        and (.volumeMounts // []) == [{
+          "name": "standalone-config",
+          "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+          "subPath": "apisix.yaml"
+        }])] | length) == 1
+      and (.spec.volumes // []) == [{
+        "name": "standalone-config",
+        "configMap": {
+          "name": "falcone-apisix-standalone",
+          "defaultMode": 420
+        }
+      }]
+      and ([.status.containerStatuses[]? | select(.name == "apisix"
+        and .image == $apisix_image
+        and .ready == true
+        and .restartCount == 0
+        and .state.running != null
+        and (.state | has("waiting") | not)
+        and .user.linux.uid == 636
+        and .user.linux.gid == 636)] | length) == 1;
+    def waiting_observability:
+      .status.phase == "Pending"
+      and ([.status.containerStatuses[]? | select(.name == "observability"
+        and .ready == false
+        and .state.waiting.reason == "CreateContainerConfigError"
+        and (.state.waiting.message
+          | contains("container has runAsNonRoot and image has non-numeric user (nobody)"))
+        and (.state.waiting.message | contains("cannot verify user is non-root")))] | length) == 1;
+    def ready_observability:
+      .status.phase == "Running"
+      and any(.status.conditions[]?; .type == "Ready" and .status == "True")
+      and any(.status.containerStatuses[]?; .name == "observability" and .ready == true);
+    ([.items[] | target("apisix"; $apisix_image)] as $apisix
+      | [.items[] | target("observability"; $observability_image)] as $observability
+      | ($apisix | length) == 3
+      and ([$apisix[] | select(exact_apisix_ready)] | length) == 3
+      and ([$apisix[] | owner_name] | unique | length) == 1
+      and all($apisix[]; owned_by_active_apisix_replicaset)
+      and ($observability | length) == 2
+      and ([$observability[] | select(waiting_observability)] | length) == 1
+      and ([$observability[] | select(ready_observability)] | length) == 1)' \
     >/dev/null || die "REVISION23_POD_EVIDENCE_DRIFT"
-  printf 'revision23-failure=validated chart=in-falcone-0.4.9 cause=named-image-users deployments=2 pendingPods=2 readyPods=4\n'
+  printf '%s' "$all_pods" | jq -e '
+    ([.items[]
+      | select([.status.containerStatuses[]?
+        | select(.state.waiting.reason == "CreateContainerConfigError"
+          and (.state.waiting.message
+            | contains("container has runAsNonRoot and image has non-numeric user ("))
+          and (.state.waiting.message | contains("cannot verify user is non-root")))]
+        | length > 0)] | length) == 1' >/dev/null || die "REVISION23_GLOBAL_POD_EVIDENCE_DRIFT"
+
+  printf 'revision23-partial-manual-recovery=validated chart=in-falcone-0.4.9 apisixReady=3 observabilityPending=1 configHash=sha256:%s\n' "$config_hash"
 }
 
 if [[ "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 ]]; then
@@ -592,6 +811,79 @@ function-executor-runtime|value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:
 mcp-runtime-image|MCP_RUNTIME_IMAGE: "ghcr.io/gntik-ai/in-falcone-mcp-runtime:0.3.0"
 mcp-runtime-image-digest|MCP_RUNTIME_IMAGE_DIGEST: "sha256:f0bb4c639f08c40c650e3f2b45a0d3c546fa84b0ae5d2eb9a4153860ec06a162"
 DIGESTS
+  python3 - "$output" <<'PY' || {
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    documents = [document for document in yaml.safe_load_all(stream) if isinstance(document, dict)]
+
+matches = [
+    document
+    for document in documents
+    if document.get("apiVersion") == "apps/v1"
+    and document.get("kind") == "Deployment"
+    and document.get("metadata", {}).get("name") == "falcone-apisix"
+]
+if len(matches) != 1:
+    raise SystemExit(1)
+
+deployment = matches[0]
+metadata = deployment.get("metadata", {})
+spec = deployment.get("spec", {})
+template = spec.get("template", {})
+pod_spec = template.get("spec", {})
+expected_labels = {
+    "app.kubernetes.io/name": "apisix",
+    "app.kubernetes.io/instance": "falcone",
+}
+if any(metadata.get("labels", {}).get(key) != value for key, value in expected_labels.items()):
+    raise SystemExit(1)
+if spec.get("replicas") != 3 or spec.get("selector", {}).get("matchLabels") != expected_labels:
+    raise SystemExit(1)
+if template.get("metadata", {}).get("labels") != expected_labels:
+    raise SystemExit(1)
+if pod_spec.get("securityContext") != {
+    "fsGroup": 1001,
+    "fsGroupChangePolicy": "OnRootMismatch",
+    "runAsGroup": 636,
+    "runAsNonRoot": True,
+    "runAsUser": 636,
+    "seccompProfile": {"type": "RuntimeDefault"},
+}:
+    raise SystemExit(1)
+
+containers = pod_spec.get("containers", [])
+if len(containers) != 1:
+    raise SystemExit(1)
+container = containers[0]
+if container.get("name") != "apisix" or container.get("image") != "docker.io/apache/apisix:3.10.0-debian":
+    raise SystemExit(1)
+if container.get("securityContext") != {
+    "allowPrivilegeEscalation": False,
+    "capabilities": {"drop": ["ALL"]},
+    "readOnlyRootFilesystem": False,
+    "runAsGroup": 636,
+    "runAsNonRoot": True,
+    "runAsUser": 636,
+}:
+    raise SystemExit(1)
+if container.get("volumeMounts") != [{
+    "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+    "name": "standalone-config",
+    "subPath": "apisix.yaml",
+}]:
+    raise SystemExit(1)
+if pod_spec.get("volumes") != [{
+    "configMap": {"defaultMode": 420, "name": "falcone-apisix-standalone"},
+    "name": "standalone-config",
+}]:
+    raise SystemExit(1)
+PY
+      printf 'APISIX_RENDER_CONVERGENCE_DRIFT reason=contract\n' >&2
+      return 1
+    }
   if grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$output"; then
     printf 'EXTERNAL_ESO_OWNER_RENDERED\n' >&2
     return 1
@@ -733,6 +1025,69 @@ OWNER_INVENTORY
 
 expected_external_secret_names='["gateway-apisix-credentials","gateway-shared-secret","iam-identity-client","iam-keycloak-credentials","iam-superadmin","platform-documentdb-credentials","platform-documentdb-replication","platform-encryption-key","platform-ferretdb-credentials","platform-kafka-credentials","platform-postgresql-credentials","platform-postgresql-vector-credentials","platform-s3-credentials","platform-temporal-credentials"]'
 
+validate_revision23_numeric_user_convergence() {
+  local apisix_json observability_json
+  apisix_json="$(kubectl -n "$EXPECTED_NAMESPACE" get deployment falcone-apisix -o json)" || return 1
+  observability_json="$(kubectl -n "$EXPECTED_NAMESPACE" get deployment falcone-observability -o json)" || return 1
+  printf '%s' "$apisix_json" | jq -e --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" '
+    .apiVersion == "apps/v1" and .kind == "Deployment"
+    and .metadata.name == "falcone-apisix" and .metadata.namespace == $namespace
+    and .metadata.labels["app.kubernetes.io/name"] == "apisix"
+    and .metadata.labels["app.kubernetes.io/instance"] == $release
+    and .status.observedGeneration == .metadata.generation
+    and .spec.replicas == 3
+    and .status.updatedReplicas == 3
+    and .status.readyReplicas == 3
+    and .status.availableReplicas == 3
+    and ((.status.unavailableReplicas // 0) == 0)
+    and (.spec.template.spec.securityContext as $pod
+      | $pod.fsGroup == 1001
+      and $pod.fsGroupChangePolicy == "OnRootMismatch"
+      and $pod.runAsNonRoot == true
+      and $pod.runAsUser == 636
+      and $pod.runAsGroup == 636
+      and $pod.seccompProfile.type == "RuntimeDefault")
+    and ([.spec.template.spec.containers[] | select(
+      .name == "apisix"
+      and .image == "docker.io/apache/apisix:3.10.0-debian"
+      and .securityContext.runAsNonRoot == true
+      and .securityContext.runAsUser == 636
+      and .securityContext.runAsGroup == 636
+      and (.volumeMounts // []) == [{
+        "name": "standalone-config",
+        "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+        "subPath": "apisix.yaml"
+      }])] | length) == 1
+    and (.spec.template.spec.volumes // []) == [{
+      "name": "standalone-config",
+      "configMap": {"name": "falcone-apisix-standalone", "defaultMode": 420}
+    }]' >/dev/null || return 1
+  printf '%s' "$observability_json" | jq -e --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" '
+    .apiVersion == "apps/v1" and .kind == "Deployment"
+    and .metadata.name == "falcone-observability" and .metadata.namespace == $namespace
+    and .metadata.labels["app.kubernetes.io/name"] == "observability"
+    and .metadata.labels["app.kubernetes.io/instance"] == $release
+    and .status.observedGeneration == .metadata.generation
+    and .spec.replicas == 1
+    and .status.updatedReplicas == 1
+    and .status.readyReplicas == 1
+    and .status.availableReplicas == 1
+    and ((.status.unavailableReplicas // 0) == 0)
+    and (.spec.template.spec.securityContext as $pod
+      | $pod.fsGroup == 1001
+      and $pod.fsGroupChangePolicy == "OnRootMismatch"
+      and $pod.runAsNonRoot == true
+      and ($pod | has("runAsUser") | not)
+      and ($pod | has("runAsGroup") | not)
+      and $pod.seccompProfile.type == "RuntimeDefault")
+    and ([.spec.template.spec.containers[] | select(
+      .name == "observability"
+      and .image == "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62"
+      and .securityContext.runAsNonRoot == true
+      and .securityContext.runAsUser == 65534
+      and .securityContext.runAsGroup == 65534)] | length) == 1' >/dev/null
+}
+
 health_gate() {
   local expected_owner="$1" final="$2" failed=0 owner_json current_owner ferret_json endpoints_json secrets_json auth_log health_render
   current_owner="$(owner_metadata)" || failed=1
@@ -745,6 +1100,12 @@ health_gate() {
   health_render="$(mktemp "${TMPDIR:-/tmp}/falcone-revision20-health.XXXXXX")"
   render_and_validate_images "$health_render" || failed=1
   rm -f "$health_render"
+  if [[ "$revision23_state" == partial-manual-recovery ]]; then
+    validate_revision23_numeric_user_convergence || {
+      printf 'REVISION23_NUMERIC_USER_CONVERGENCE_DRIFT\n' >&2
+      failed=1
+    }
+  fi
   kubectl -n "$EXPECTED_NAMESPACE" wait --for=condition=Available deployment/falcone-ferretdb --timeout=10m >/dev/null || failed=1
   ferret_json="$(kubectl -n "$EXPECTED_NAMESPACE" get deployment falcone-ferretdb -o json)" || failed=1
   printf '%s' "${ferret_json:-}" | jq -e '.spec.replicas == 2 and .status.availableReplicas == 2 and .status.updatedReplicas == 2 and (.status.unavailableReplicas // 0) == 0' >/dev/null || failed=1

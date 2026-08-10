@@ -347,6 +347,32 @@ test('staging alone selects local-path/fsn1 and renders all six exact approved d
   assert.equal(vectorPvc?.spec?.resources?.requests?.storage, '10Gi')
   assert.equal(vectorStatefulSet?.spec?.template?.spec?.nodeSelector?.['topology.kubernetes.io/region'], 'fsn1')
 
+  const apisixDeployment = named(objects, 'Deployment', 'falcone-bbx-apisix')
+  const apisixPodSpec = apisixDeployment?.spec?.template?.spec
+  assert.equal(apisixPodSpec?.securityContext?.runAsUser, 636)
+  assert.equal(apisixPodSpec?.securityContext?.runAsGroup, 636)
+  assert.equal(apisixPodSpec?.securityContext?.runAsNonRoot, true)
+  assert.equal(apisixPodSpec?.securityContext?.fsGroup, 1001)
+  assert.equal(apisixPodSpec?.securityContext?.fsGroupChangePolicy, 'OnRootMismatch')
+  assert.equal(apisixPodSpec?.securityContext?.seccompProfile?.type, 'RuntimeDefault')
+
+  const apisixVolumes = apisixPodSpec?.volumes?.filter((volume) => volume.name === 'standalone-config') ?? []
+  assert.equal(apisixVolumes.length, 1, 'APISIX must have exactly one standalone-config volume')
+  assert.equal(apisixVolumes[0]?.configMap?.name, 'falcone-apisix-standalone')
+  assert.equal(apisixVolumes[0]?.configMap?.defaultMode, 420)
+
+  const apisixContainer = apisixPodSpec?.containers?.find((container) => container.name === 'apisix')
+  const apisixMounts = apisixContainer?.volumeMounts?.filter((mount) => mount.name === 'standalone-config') ?? []
+  assert.equal(apisixMounts.length, 1, 'APISIX must have exactly one standalone-config mount')
+  assert.equal(apisixMounts[0]?.mountPath, '/usr/local/apisix/conf/apisix.yaml')
+  assert.equal(apisixMounts[0]?.subPath, 'apisix.yaml')
+  assert.equal(
+    objects.filter((object) => object?.kind === 'ConfigMap'
+      && object?.metadata?.name === 'falcone-apisix-standalone').length,
+    0,
+    'the staging render must reference, not create, the live APISIX standalone ConfigMap',
+  )
+
   const rendered = JSON.stringify(objects)
   const violations = []
   for (const [path, digest] of approvedDigests) {
