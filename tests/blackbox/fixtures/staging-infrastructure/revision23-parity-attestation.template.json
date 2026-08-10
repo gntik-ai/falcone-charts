@@ -13,8 +13,8 @@
     "packageDigest": "sha256:0410041004100410041004100410041004100410041004100410041004100410"
   },
   "evidence": {
-    "reference": "bbx-parity-revision20",
-    "backupReference": "bbx-backup-revision20",
+    "reference": "bbx-parity-revision20-for-r23",
+    "backupReference": "bbx-backup-revision20-for-r23",
     "observedAt": "__OBSERVED_AT__",
     "validUntil": "__VALID_UNTIL__",
     "verified": true

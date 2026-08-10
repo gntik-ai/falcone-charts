@@ -5,7 +5,7 @@
  * process-isolated fake kubectl/helm/curl PATH. It never addresses a real Kubernetes API server.
  */
 import assert from 'node:assert/strict'
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
@@ -52,6 +52,42 @@ function canonical(value, field = '') {
     return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key], key)]))
   }
   return value
+}
+
+function localDependencyArchives(chart) {
+  const charts = resolve(chart, 'charts')
+  if (!existsSync(charts)) return []
+  return readdirSync(charts, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(resolve(charts, entry.name, 'Chart.yaml')))
+    .map((entry) => readYaml(resolve(charts, entry.name, 'Chart.yaml')))
+    .map((metadata) => resolve(charts, `${metadata.name}-${metadata.version}.tgz`))
+    .filter(existsSync)
+    .sort()
+}
+
+function dependencyArchiveManifest(chart) {
+  return localDependencyArchives(chart).map((archive) => ({
+    archive,
+    digest: sha256(readFileSync(archive)),
+    size: statSync(archive).size,
+  }))
+}
+
+function isolateUmbrellaChart() {
+  const directory = mkdtempSync(resolve(tmpdir(), 'falcone-umbrella-baseline-bbx-'))
+  const chart = resolve(directory, 'in-falcone')
+  const duplicateArchives = new Set(localDependencyArchives(umbrellaChart))
+  // Dependency builds may replace these archives while the public source chart is rendered.
+  // Prefer its unpacked dependency when both representations exist, and never read the archive.
+  cpSync(umbrellaChart, chart, {
+    recursive: true,
+    filter: (source) => !duplicateArchives.has(resolve(source)),
+  })
+  return {
+    chart,
+    excludedArchives: [...duplicateArchives],
+    cleanup: () => rmSync(directory, { recursive: true, force: true }),
+  }
 }
 
 function packageManagedChart() {
@@ -368,16 +404,43 @@ test('umbrella schema exposes exactly managed, external, disabled and defaults t
 // bbx-8-003 | fn-managed-knative-default-compatibility | OpenSpec #### Scenario: Disabled mode adds no mount or env change
 test('default umbrella stays at its approved baseline and explicit disabled adds no runtime wiring', () => {
   const baseline = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/umbrella-default-render.sha256'), 'utf8').trim()
-  const defaults = render(umbrellaChart)
-  const disabled = render(umbrellaChart, ['--set-string', 'global.knativeRuntime.mode=disabled'])
-  const defaultCanonical = JSON.stringify(canonical(defaults.objects))
-  const disabledCanonical = JSON.stringify(canonical(disabled.objects))
-  assert.equal(sha256(defaultCanonical), baseline, 'default umbrella render drifted from the approved public baseline')
-  assert.equal(disabledCanonical, defaultCanonical, 'explicit disabled mode must remain identical to the default render')
-  assert.equal(runtimeContainers(defaults.objects).length, 0)
-  assert.equal(runtimeContainers(disabled.objects).length, 0)
-  assert.doesNotMatch(defaults.text, /falcone\.knative-(?:runtime|lifecycle)\/v1/)
-  assert.doesNotMatch(disabled.text, /falcone\.knative-(?:runtime|lifecycle)\/v1/)
+  const sourceArchives = dependencyArchiveManifest(umbrellaChart)
+  const isolated = isolateUmbrellaChart()
+  try {
+    const sourceArchivesAfterSetup = dependencyArchiveManifest(umbrellaChart)
+    assert.deepEqual(
+      sourceArchivesAfterSetup,
+      sourceArchives,
+      'isolated baseline setup mutated source dependency archives',
+    )
+    for (const archive of isolated.excludedArchives) {
+      assert.equal(
+        existsSync(resolve(isolated.chart, 'charts', basename(archive))),
+        false,
+        `isolated baseline retained duplicate dependency archive ${archive}`,
+      )
+    }
+
+    const defaults = Array.from({ length: 3 }, () => render(isolated.chart))
+    const disabled = Array.from({ length: 3 }, () => (
+      render(isolated.chart, ['--set-string', 'global.knativeRuntime.mode=disabled'])
+    ))
+    const defaultCanonical = defaults.map((output) => JSON.stringify(canonical(output.objects)))
+    const disabledCanonical = disabled.map((output) => JSON.stringify(canonical(output.objects)))
+
+    for (const rendered of defaultCanonical) {
+      assert.equal(sha256(rendered), baseline, 'default umbrella render drifted from the approved public baseline')
+    }
+    for (const rendered of disabledCanonical) {
+      assert.equal(rendered, defaultCanonical[0], 'explicit disabled mode must remain identical to the default render')
+    }
+    for (const output of [...defaults, ...disabled]) {
+      assert.equal(runtimeContainers(output.objects).length, 0)
+      assert.doesNotMatch(output.text, /falcone\.knative-(?:runtime|lifecycle)\/v1/)
+    }
+  } finally {
+    isolated.cleanup()
+  }
 })
 
 // bbx-8-004 | fn-managed-knative-umbrella-boundary | OpenSpec #### Scenario: Managed mode adds no umbrella dependency

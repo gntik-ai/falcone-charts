@@ -8,7 +8,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.9"
+EXPECTED_REPAIR_VERSION="0.4.10"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -78,10 +78,12 @@ actual_chart="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].ch
 actual_status="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].status else empty end')"
 [[ "$actual_release" == "$EXPECTED_RELEASE" && -n "$actual_revision" && -n "$actual_chart" && -n "$actual_status" ]] || die "TARGET_RELEASE_MISSING"
 
-# Revision 22 is a failed Phase-A apply, so a successful Phase-A attestation
-# cannot exist yet. Reuse the single Phase-A implementation and its two health
-# gates instead of fabricating evidence or duplicating the repair logic here.
-if [[ "$actual_revision" == 22 ]]; then
+# Revisions 22 and 23 are failed Phase-A applies, so a successful Phase-A
+# attestation cannot exist yet. Reuse the single Phase-A implementation and
+# its two health gates instead of fabricating evidence or duplicating repair
+# logic here. In particular, forward recovery never invents a Phase-A
+# attestation for the admitted revision-23 named-image-user failure.
+if [[ "$actual_revision" == 22 || "$actual_revision" == 23 ]]; then
   delegated_args=(--phase-a)
   [[ "$apply" == true ]] && delegated_args+=(--apply)
   [[ -z "$confirm_target" ]] || delegated_args+=(--confirm-target "$confirm_target")
@@ -228,7 +230,7 @@ render_file="$(mktemp "${TMPDIR:-/tmp}/falcone-forward-render.XXXXXX")"
 diff_file="$(mktemp "${TMPDIR:-/tmp}/falcone-forward-diff.XXXXXX")"
 helm template "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --is-upgrade "${args[@]}" >"$render_file"
 grep -qF 'storageClassName: local-path' "$render_file" || die "FORWARD_RENDER_STORAGE_DRIFT"
-grep -qF 'MCP_RUNTIME_IMAGE_DIGEST: "sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb"' "$render_file" || \
+grep -qF 'MCP_RUNTIME_IMAGE_DIGEST: "sha256:f0bb4c639f08c40c650e3f2b45a0d3c546fa84b0ae5d2eb9a4153860ec06a162"' "$render_file" || \
   die "FORWARD_RENDER_IMAGE_DRIFT"
 grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$render_file" && die "EXTERNAL_ESO_OWNER_RENDERED"
 

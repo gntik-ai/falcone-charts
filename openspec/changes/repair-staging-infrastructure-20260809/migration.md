@@ -1,33 +1,37 @@
-# Migration: Revision 20 to chart 0.4.9
+# Migration: Revision 20 to chart 0.4.10
 
 Before mutation, repair validates the non-secret legacy C-25 webhook custody
 contract stored in Helm revision 20 and passes explicit legacy overrides to
 every render and upgrade. A failed pre-hook is resumable only for the known
 `CREDENTIAL_MANAGED_SECRET_MISSING` revision whose deployed source is revision
-20, or the exact revision-22/chart-0.4.8 immutable-storage failure. Arbitrary
-failed Helm revisions are rejected.
+20, the exact revision-22/chart-0.4.8 immutable-storage failure, or the exact
+revision-23/chart-0.4.9 canceled upgrade whose live rollouts prove both
+non-numeric image-user failures. Arbitrary failed Helm revisions are rejected.
 
 ## Preconditions and evidence
 
 - Exact context `default`, namespace `in-falcone-staging`, release `falcone`,
   revision `20`, and starting chart `in-falcone-0.4.1`.
-- A published chart 0.4.9 package digest, not a source-only estimate. Chart
+- A published chart 0.4.10 package digest, not a source-only estimate. Chart
   0.4.5 remains the historical artifact blocked by nested dependency-version
   parsing. Chart 0.4.6 remains the historical artifact whose live apply reached
   Helm's existing-object ownership gate. Neither artifact is overwritten or
   used as the active repair target. Chart 0.4.8 remains the immutable historical
   artifact that proved the non-secret r20 storage values also need explicit
-  preservation.
+  preservation. Chart 0.4.9 remains the immutable historical artifact whose
+  revision-23 rollout proved that named image users require numeric Kubernetes
+  identities.
 - Separate, fresh `Revision20BackupEvidence` and `Revision20ParityEvidence`
   documents. Both bind the exact source target and repair package; parity names
   the exact backup reference it verified. Their observation windows must still
   be valid when apply begins.
-- Apply pulls the published 0.4.9 OCI artifact, verifies the registry-reported
+- Apply pulls the published 0.4.10 OCI artifact, verifies the registry-reported
   digest against the attestations, and uses the staging profile extracted from
   that same artifact; a local checkout is not the production apply source.
 - Secret-suppressed semantic diff shows no create/update/removal among the
   sanitized 21 external ESO owner objects and rendered workloads contain all six
-  approved digests. Neither tool reads a release manifest or Secret data.
+  digests from Falcone main `d9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc`.
+  Neither tool reads a release manifest or Secret data.
 - Procedure already passed in a disposable revision-20 installation; shared
   staging is not the first upgrade/failure/recovery test.
 
@@ -35,7 +39,7 @@ failed Helm revisions are rejected.
 
 Run `revision-20-repair.sh --phase-a` first; it is read-only by default. Apply
 requires both structured evidence files and an exact confirmation containing
-20, source chart 0.4.1, target chart 0.4.9 and package digest. It retains the
+20, source chart 0.4.1, target chart 0.4.10 and package digest. It retains the
 immutable hcloud-volumes claim contract, applies repairs, verifies exact owner
 metadata/images/store/fourteen unique Ready ExternalSecrets/auth/FerretDB/
 endpoints, disables recovery-root, and repeats the complete gate. The final auth
@@ -53,6 +57,24 @@ Record those final metadata-only results as a short-lived
 `StagingPhaseAAttestation`: exact source, actual result revision/chart/package,
 recovery-root false, auth unchanged/canary passed, store and fourteen-secret
 health, FerretDB 2/2 and endpoints, plus owner and image-set digests.
+
+For revision 23, Phase A first proves the complete immutable public anchor:
+revision 20 is deployed chart 0.4.1 with `Upgrade complete`; revision 22 is the
+exact failed chart-0.4.8 six-resource immutable-storage event; and revision 23
+is failed chart 0.4.9 with exactly `Upgrade "falcone" failed: context canceled`.
+It then verifies intact storage plus the APISIX and observability Deployment and
+Pod evidence: each new ReplicaSet has exactly one Pending
+`CreateContainerConfigError` with the complete non-numeric `apisix`/`nobody`
+message, while three APISIX and one observability Pods from prior ReplicaSets
+remain Ready. Exact images, labels, owner kinds, generations, replica counts and
+availability are part of the gate. Drift fails before rendering or mutation.
+
+Revision-23 forward recovery delegates directly to this Phase-A procedure. The
+apply confirmation binds `23`, source chart 0.4.9, target chart 0.4.10 and the
+published package digest. Fresh backup and parity attestations must also target
+0.4.10. Because revision 23 is itself a failed Phase-A attempt, no successful
+Phase-A attestation is invented or required. The procedure still performs the
+same two non-atomic Helm upgrades, never rolls back and never deletes a PVC.
 
 ## Phase B
 
@@ -72,6 +94,6 @@ All mutation paths are fail-forward. There is no atomic apply or rollback path.
 A failed mutation prints `FORWARD_RECOVERY_REQUIRED`. The recovery tool defaults
 to read-only, revalidates the three structured attestations, actual current
 revision/chart/package confirmation, semantic external-owner diff and exact owner
-metadata, and reapplies chart 0.4.9. It never deletes storage. Once data exists,
+metadata, and reapplies chart 0.4.10. It never deletes storage. Once data exists,
 claim deletion is forbidden until a separately approved backup/restore and P13
 parity proof.

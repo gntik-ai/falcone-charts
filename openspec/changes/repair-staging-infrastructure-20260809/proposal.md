@@ -16,11 +16,16 @@ only destructive empty-PVC transition.
   idempotent, auth-metadata-only, local-reviewer based, and no-KV.
 - Run FerretDB's engine gate as UID 999 and use zero-unavailable rolling update
   with retained old Ready ReplicaSets.
-- Select local-path plus fsn1 only in staging and pin the six approved immutable
-  application/runtime digests there.
+- Select local-path plus fsn1 only in staging and pin the six immutable
+  application/runtime digests built from Falcone main `d9cd0f6b` there.
+- Assign verified numeric UID/GID values to the APISIX and Prometheus named-user
+  images on vanilla Kubernetes while preserving OpenShift arbitrary-UID behavior.
 - Add dry-run-first revision-20 preflight, two-phase migration, forward recovery,
   structured short-lived evidence, semantic external-owner protection, detailed
   operations/security/storage documentation, and black-box contracts.
+- Extend fail-forward recovery to the exact revision-23 chart-0.4.9 named-user
+  rollout failure, targeting immutable chart 0.4.10 and rejecting evidence drift
+  before mutation.
 
 ## Impact
 

@@ -95,7 +95,7 @@ if (args[0] === 'template') {
   logHelm()
   runChecked(process.env.FALCONE_STAGING_HELM_DELEGATE, args)
   if (process.env.FALCONE_STAGING_ASSUME_APPROVED_RENDER === 'true') {
-    process.stdout.write('# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb\n')
+    process.stdout.write('# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:f0bb4c639f08c40c650e3f2b45a0d3c546fa84b0ae5d2eb9a4153860ec06a162\n')
   }
   process.exit(0)
 }

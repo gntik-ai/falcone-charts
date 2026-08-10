@@ -79,8 +79,128 @@ r22_statefulset_json() {
     }'
 }
 
+r23_nonnumeric_pods_json() {
+  apisix_reason="CreateContainerConfigError"
+  apisix_user="apisix"
+  observability_reason="CreateContainerConfigError"
+  observability_user="nobody"
+  include_observability="true"
+  include_extra="false"
+  case "$scenario" in
+    r23-nonnumeric-live-one) include_observability="false" ;;
+    r23-nonnumeric-live-extra) include_extra="true" ;;
+    r23-nonnumeric-live-reason-drift) observability_reason="ImagePullBackOff" ;;
+    r23-nonnumeric-live-user-drift) observability_user="prometheus" ;;
+  esac
+
+  jq -nc \
+    --arg apisix_reason "$apisix_reason" --arg apisix_user "$apisix_user" \
+    --arg observability_reason "$observability_reason" --arg observability_user "$observability_user" \
+    --argjson include_observability "$include_observability" --argjson include_extra "$include_extra" \
+    '{apiVersion:"v1",kind:"PodList",items:(
+      [
+        {
+          metadata:{name:"falcone-apisix-new-bbx",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"new"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-new",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Pending",containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:false,state:{waiting:{reason:$apisix_reason,message:("container has runAsNonRoot and image has non-numeric user (" + $apisix_user + "), cannot verify user is non-root")}}}]}
+        },
+        {
+          metadata:{name:"falcone-apisix-old-a",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-old",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        },
+        {
+          metadata:{name:"falcone-apisix-old-b",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-old",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        },
+        {
+          metadata:{name:"falcone-apisix-old-c",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-old",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        }
+      ]
+      + (if $include_observability then [
+        {
+          metadata:{name:"falcone-observability-new-bbx",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability","pod-template-hash":"new"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-observability-new",controller:true}]},
+          spec:{containers:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62"}]},
+          status:{phase:"Pending",containerStatuses:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",ready:false,state:{waiting:{reason:$observability_reason,message:("container has runAsNonRoot and image has non-numeric user (" + $observability_user + "), cannot verify user is non-root")}}}]}
+        }
+      ] else [] end)
+      + [
+        {
+          metadata:{name:"falcone-observability-old",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-observability-old",controller:true}]},
+          spec:{containers:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        }
+      ]
+      + (if $include_extra then [
+        {
+          metadata:{name:"falcone-control-plane-new-bbx",namespace:"in-falcone-staging",ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-control-plane-new",controller:true}]},
+          spec:{containers:[{name:"control-plane",image:"ghcr.io/gntik-ai/in-falcone-control-plane:0.3.1"}]},
+          status:{phase:"Pending",containerStatuses:[{name:"control-plane",image:"ghcr.io/gntik-ai/in-falcone-control-plane:0.3.1",ready:false,state:{waiting:{reason:"CreateContainerConfigError",message:"container has runAsNonRoot and image has non-numeric user (nobody), cannot verify user is non-root"}}}]}
+        }
+      ] else [] end)
+    )}'
+}
+
+r23_deployments_json() {
+  apisix_available=3
+  observability_available=1
+  if [ "$scenario" = "r23-nonnumeric-availability-drift" ]; then
+    observability_available=0
+  fi
+  jq -nc --argjson apisix_available "$apisix_available" --argjson observability_available "$observability_available" \
+    '{apiVersion:"apps/v1",kind:"DeploymentList",items:[
+      {
+        metadata:{name:"falcone-apisix",namespace:"in-falcone-staging",generation:23,labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix"}},
+        spec:{replicas:3,selector:{matchLabels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix"}},template:{metadata:{labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix"}},spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",securityContext:{runAsNonRoot:true}}]}}},
+        status:{observedGeneration:23,replicas:4,updatedReplicas:1,availableReplicas:$apisix_available,unavailableReplicas:1}
+      },
+      {
+        metadata:{name:"falcone-observability",namespace:"in-falcone-staging",generation:23,labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability"}},
+        spec:{replicas:1,selector:{matchLabels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability"}},template:{metadata:{labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability"}},spec:{containers:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",securityContext:{runAsNonRoot:true}}]}}},
+        status:{observedGeneration:23,replicas:2,updatedReplicas:1,availableReplicas:$observability_available,unavailableReplicas:1}
+      }
+    ]}'
+}
+
 case "$scenario" in
-  r22-immutable-*)
+  r23-nonnumeric-*)
+    case "$args" in
+      "-n in-falcone-staging get pods"*"-o json")
+        case "$args" in
+          *"app.kubernetes.io/name=apisix"*)
+            r23_nonnumeric_pods_json | jq '{apiVersion,kind,items:[.items[] | select(.metadata.labels["app.kubernetes.io/name"] == "apisix")]}'
+            ;;
+          *"app.kubernetes.io/name=observability"*)
+            r23_nonnumeric_pods_json | jq '{apiVersion,kind,items:[.items[] | select(.metadata.labels["app.kubernetes.io/name"] == "observability")]}'
+            ;;
+          *)
+            r23_nonnumeric_pods_json
+            ;;
+        esac
+        exit 0
+        ;;
+      "-n in-falcone-staging get deployments"*"-o json"|\
+      "-n in-falcone-staging get deployments.apps"*"-o json")
+        r23_deployments_json
+        exit 0
+        ;;
+      "-n in-falcone-staging get deployment falcone-apisix -o json")
+        r23_deployments_json | jq '.items[] | select(.metadata.name == "falcone-apisix")'
+        exit 0
+        ;;
+      "-n in-falcone-staging get deployment falcone-observability -o json")
+        r23_deployments_json | jq '.items[] | select(.metadata.name == "falcone-observability")'
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+
+case "$scenario" in
+  r22-immutable-*|r23-nonnumeric-*)
     case "$args" in
       "-n in-falcone-staging get pvc falcone-documentdb-data -o json"|\
       "-n in-falcone-staging get pvc falcone-kafka-data -o json"|\

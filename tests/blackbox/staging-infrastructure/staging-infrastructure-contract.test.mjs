@@ -30,18 +30,24 @@ const upgradeEvidenceArgs = [
   '--set-string', 'global.webhookDatabase.migration.backupReference=bbx-non-secret-evidence',
 ]
 const approvedImageSource = {
-  commit: '61540248889ace6774203d77688adcca5495b1c3',
-  tag: '0.6.6-main-61540248',
+  commit: 'd9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc',
+  tag: '0.6.6-main-d9cd0f6b',
 }
 const approvedDigests = new Map([
-  ['controlPlane', 'sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253'],
-  ['controlPlaneExecutor', 'sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c'],
-  ['webConsole', 'sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191'],
-  ['workflowWorker', 'sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d'],
-  ['controlPlane.functionExecutor.runtimeImage', 'sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613'],
-  ['mcp.runtimeImage', 'sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb'],
+  ['controlPlane', 'sha256:26bb5ff1caa0ffbd9f902b5da645fa69caa9153ff6d19b28eda640f35f9c4254'],
+  ['controlPlaneExecutor', 'sha256:94809c39149cb6d2aa12a606f5b7db19d8365e1a857b83bcd45405554116feae'],
+  ['webConsole', 'sha256:4ccb885b4e15637e68f409fcedf93f180397fad3d6ccf331961d41e43af8c868'],
+  ['workflowWorker', 'sha256:0520d57d36ee1383c2077388eb4880023f3b5c11536107151a1e01657001e8aa'],
+  ['controlPlane.functionExecutor.runtimeImage', 'sha256:b50e93fb529a2129daa4e682ea4ae3741967a649c5fc1cc5f2f2b6588eb1a0fd'],
+  ['mcp.runtimeImage', 'sha256:f0bb4c639f08c40c650e3f2b45a0d3c546fa84b0ae5d2eb9a4153860ec06a162'],
 ])
 const supersededDigests = [
+  'sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253',
+  'sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c',
+  'sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191',
+  'sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d',
+  'sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613',
+  'sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb',
   'sha256:0c6aeff8f3c115c63b49164cdb6daf73c2b4636b4d1907e48c8b18484218861a',
   'sha256:d19acae027d39e68ae4656e779ae8ce738a22a145092681d34d01201252ac28d',
   'sha256:2cf611ee6e77e63b80c7aa988790191a668e52f08e2f907a335d1bb8eb83ff34',
@@ -342,16 +348,22 @@ test('staging alone selects local-path/fsn1 and renders all six exact approved d
   assert.equal(vectorStatefulSet?.spec?.template?.spec?.nodeSelector?.['topology.kubernetes.io/region'], 'fsn1')
 
   const rendered = JSON.stringify(objects)
+  const violations = []
   for (const [path, digest] of approvedDigests) {
     const value = valueAt(staging, path)
     const image = value?.image ?? value
-    assert.equal(image?.digest, digest,
-      `${path} must pin the digest built from origin/main ${approvedImageSource.commit} (${approvedImageSource.tag})`)
-    assert.match(rendered, new RegExp(digest), `${path} digest must reach the rendered public manifest`)
+    if (image?.digest !== digest) {
+      violations.push(`${path}: expected ${digest}, got ${image?.digest ?? 'missing'}`)
+    }
+    if (!rendered.includes(digest)) {
+      violations.push(`${path}: ${digest} did not reach the rendered public manifest`)
+    }
   }
   for (const digest of supersededDigests) {
-    assert.doesNotMatch(rendered, new RegExp(digest), `staging render retained superseded image ${digest}`)
+    if (rendered.includes(digest)) violations.push(`staging render retained superseded image ${digest}`)
   }
+  assert.deepEqual(violations, [],
+    `staging must use the images built from origin/main ${approvedImageSource.commit} (${approvedImageSource.tag})`)
 })
 
 // bbx-repair-staging-008 | fn-nonstaging-storage-nonregression | OpenSpec #### Scenario: Staging render

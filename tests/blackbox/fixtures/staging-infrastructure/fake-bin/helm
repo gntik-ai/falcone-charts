@@ -8,7 +8,7 @@ helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${FALCONE_STAGING_STATE_FILE:?}.h
 upgrade_count=0
 [ ! -f "$helm_state" ] || upgrade_count="$(cat "$helm_state")"
 real_helm="${FALCONE_STAGING_HELM_DELEGATE:-${FALCONE_STAGING_REAL_HELM:-}}"
-repair_version="${FALCONE_STAGING_REPAIR_VERSION:-0.4.9}"
+repair_version="${FALCONE_STAGING_REPAIR_VERSION:-0.4.10}"
 repair_chart="in-falcone-${repair_version}"
 
 legacy_values='{"global":{"webhookSigningKey":{"create":false,"secretName":"falcone-webhook-signing-key-c25-legacy","secretKey":"key","adoption":{"mode":"legacy","requestId":"c25-staging-adopt-20260723-01"},"rotation":{"action":"none","requestId":"","sourceSecretName":"","sourceSecretKey":"","rotationId":"","recoveryWindowSeconds":604800}}},"documentdb":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"kafka":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"observability":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"postgresql":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"seaweedfs":{"filer":{"data":{"storageClass":"hcloud-volumes","size":"10Gi"}},"master":{"data":{"storageClass":"hcloud-volumes","size":"10Gi"}}}}'
@@ -29,8 +29,13 @@ release_revision=20
 release_chart="in-falcone-0.4.1"
 release_status="deployed"
 case "$scenario" in
-  phase-a-complete|phase-a-attestation-*|forward-*)
+  r23-nonnumeric-*)
     release_revision=23
+    release_chart="in-falcone-0.4.9"
+    release_status="failed"
+    ;;
+  phase-a-complete|phase-a-attestation-*|forward-*)
+    release_revision=25
     release_chart="$repair_chart"
     ;;
   r22-immutable-*)
@@ -49,7 +54,7 @@ case "$scenario" in
 esac
 case "${FALCONE_STAGING_EXTERNAL_OWNER_BASE_SCENARIO:-}" in
   forward-*)
-    release_revision=23
+    release_revision=25
     release_chart="$repair_chart"
     ;;
 esac
@@ -105,7 +110,7 @@ case "${1:-}" in
     if [ "${FALCONE_STAGING_ASSUME_APPROVED_RENDER:-false}" = "true" ]; then
       # Downstream gate tests model a render that has already passed the image
       # authority preflight. The unmodified render is used by the dry-run test.
-      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb\n'
+      printf '# bbx dependency image=ghcr.io/gntik-ai/in-falcone-mcp-runtime@sha256:f0bb4c639f08c40c650e3f2b45a0d3c546fa84b0ae5d2eb9a4153860ec06a162\n'
     fi
     ;;
   plugin)
@@ -179,6 +184,40 @@ case "${1:-}" in
     ;;
   history)
     case "$scenario" in
+      r23-nonnumeric-*)
+        r20_status="deployed"
+        r20_chart="in-falcone-0.4.1"
+        r20_description="Upgrade complete"
+        r22_status="failed"
+        r22_chart="in-falcone-0.4.8"
+        r22_description="$r22_immutable_description"
+        r23_status="failed"
+        r23_chart="in-falcone-0.4.9"
+        r23_description='Upgrade "falcone" failed: context canceled'
+        case "$scenario" in
+          r23-nonnumeric-r20-status-drift) r20_status="superseded" ;;
+          r23-nonnumeric-r20-chart-drift) r20_chart="in-falcone-0.4.2" ;;
+          r23-nonnumeric-r20-description-drift) r20_description="Install complete" ;;
+          r23-nonnumeric-r22-status-drift) r22_status="pending-upgrade" ;;
+          r23-nonnumeric-r22-chart-drift) r22_chart="in-falcone-0.4.7" ;;
+          r23-nonnumeric-r22-description-drift) r22_description='Upgrade "falcone" failed: immutable field' ;;
+          r23-nonnumeric-r23-status-drift) r23_status="pending-upgrade" ;;
+          r23-nonnumeric-r23-chart-drift) r23_chart="in-falcone-0.4.8" ;;
+          r23-nonnumeric-r23-description-drift) r23_description='Upgrade "falcone" failed: context canceled by an arbitrary operation' ;;
+        esac
+        jq -nc \
+          --arg r20_status "$r20_status" --arg r20_chart "$r20_chart" --arg r20_description "$r20_description" \
+          --arg r21_description "$failed_hook_description" \
+          --arg r22_status "$r22_status" --arg r22_chart "$r22_chart" --arg r22_description "$r22_description" \
+          --arg r23_status "$r23_status" --arg r23_chart "$r23_chart" --arg r23_description "$r23_description" \
+          '[
+            {revision:20,status:$r20_status,chart:$r20_chart,description:$r20_description},
+            {revision:21,status:"failed",chart:"in-falcone-0.4.7",description:$r21_description},
+            {revision:22,status:$r22_status,chart:$r22_chart,description:$r22_description},
+            {revision:23,status:$r23_status,chart:$r23_chart,description:$r23_description}
+          ]'
+        exit 0
+        ;;
       r22-immutable-*)
         r22_status="failed"
         r22_chart="in-falcone-0.4.8"

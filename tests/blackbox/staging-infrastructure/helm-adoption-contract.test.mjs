@@ -36,13 +36,13 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
 const phaseATemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
-const repairDigest = 'sha256:0490490490490490490490490490490490490490490490490490490490490490'
+const repairDigest = 'sha256:0410041004100410041004100410041004100410041004100410041004100410'
 const repairVersion = readFileSync(resolve(umbrellaChart, 'Chart.yaml'), 'utf8')
   .match(/^version:\s*([^\s]+)\s*$/m)?.[1]
 assert.ok(repairVersion, 'public umbrella chart has no unique top-level version')
 const repairChart = `in-falcone-${repairVersion}`
 const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->${repairChart}/${repairDigest}`
-const forwardConfirmation = `default/in-falcone-staging/falcone@23/${repairChart}/${repairDigest}`
+const forwardConfirmation = `default/in-falcone-staging/falcone@25/${repairChart}/${repairDigest}`
 const exactNames = JSON.parse(readFileSync(revision20Manifest, 'utf8'))
   .falconeIntegrationResources
   .filter((resource) => resource.kind === 'ExternalSecret' && resource.namespace === 'in-falcone-staging')
@@ -226,6 +226,7 @@ function createHarness(scenario) {
     ],
     invoke,
     state: () => JSON.parse(readFileSync(statePath, 'utf8')),
+    primeHelmRevisionOffset: (count) => writeFileSync(helmState, String(count)),
     resetHelmState: () => rmSync(helmState, { force: true }),
     apiLogSize: () => readJsonLines(apiLog).length,
     apiCallsSince: (offset) => readJsonLines(apiLog).slice(offset),
@@ -366,6 +367,9 @@ test('a mid-adoption patch failure reports mutation_started and retry adopts onl
 test('forward recovery accepts an exact already-owned set without repeating adoption', () => {
   const harness = createHarness('already-owned')
   try {
+    // The shared adoption shim models forward recovery from r23. Two prior
+    // successful repair passes place the completed Phase-A fixture at r25.
+    harness.primeHelmRevisionOffset(2)
     const invocation = harness.invoke(recoveryTool, harness.forwardArgs, 'forward-complete')
     assertSuccess(invocation.result, 'forward recovery with exact Helm-owned ExternalSecrets')
     assert.deepEqual(invocation.state.adoptionWrites, [])
