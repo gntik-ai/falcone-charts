@@ -8,7 +8,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.10"
+EXPECTED_REPAIR_VERSION="0.4.11"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -66,7 +66,7 @@ cleanup() {
 trap cleanup EXIT
 die() { printf '%s\n' "$1" >&2; exit 1; }
 
-for command_name in kubectl helm jq; do
+for command_name in kubectl helm jq sha256sum; do
   command -v "$command_name" >/dev/null || { printf 'missing command: %s\n' "$command_name" >&2; exit 2; }
 done
 [[ "$(kubectl config current-context)" == "$EXPECTED_CONTEXT" ]] || die "TARGET_CONTEXT_MISMATCH"

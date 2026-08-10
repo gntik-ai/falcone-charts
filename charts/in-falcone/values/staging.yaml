@@ -58,6 +58,28 @@ openbao:
       allowRecoveryRoot: false
 apisix:
   replicas: 3
+  # The staging gateway predates this Helm release and consumes the separately
+  # administered standalone route ConfigMap. Declare the live mount and numeric
+  # pod identity so a recovery upgrade converges instead of preserving an
+  # out-of-band kubectl patch. The repair preflight verifies the ConfigMap
+  # identity and content but never adopts or creates it.
+  podSecurityContext:
+    fsGroup: 1001
+    fsGroupChangePolicy: OnRootMismatch
+    runAsNonRoot: true
+    runAsUser: 636
+    runAsGroup: 636
+    seccompProfile:
+      type: RuntimeDefault
+  extraVolumes:
+    - name: standalone-config
+      configMap:
+        name: falcone-apisix-standalone
+        defaultMode: 420
+  extraVolumeMounts:
+    - name: standalone-config
+      mountPath: /usr/local/apisix/conf/apisix.yaml
+      subPath: apisix.yaml
 controlPlane:
   replicas: 2
   # Immutable first-party image digests from the approved staging rollout. Helm becomes

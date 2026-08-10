@@ -1,0 +1,1073 @@
+{
+  "targetVersion": "0.4.11",
+  "targetChart": "in-falcone-0.4.11",
+  "packageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "renderedApisixPodSecurityContext": {
+    "fsGroup": 1001,
+    "fsGroupChangePolicy": "OnRootMismatch",
+    "runAsNonRoot": true,
+    "runAsUser": 636,
+    "runAsGroup": 636,
+    "seccompProfile": {
+      "type": "RuntimeDefault"
+    }
+  },
+  "renderedApisixContainerSecurityContext": {
+    "allowPrivilegeEscalation": false,
+    "capabilities": {
+      "drop": [
+        "ALL"
+      ]
+    },
+    "readOnlyRootFilesystem": false,
+    "runAsNonRoot": true,
+    "runAsUser": 636,
+    "runAsGroup": 636
+  },
+  "renderedChartVariants": {
+    "duplicateApisixDeployment": false,
+    "misplacedApisixContract": false
+  },
+  "convergedApisixPodSecurityContext": {
+    "fsGroup": 1001,
+    "fsGroupChangePolicy": "OnRootMismatch",
+    "runAsNonRoot": true,
+    "runAsUser": 636,
+    "runAsGroup": 636,
+    "seccompProfile": {
+      "type": "RuntimeDefault"
+    }
+  },
+  "convergedApisixContainerSecurityContext": {
+    "allowPrivilegeEscalation": false,
+    "capabilities": {
+      "drop": [
+        "ALL"
+      ]
+    },
+    "readOnlyRootFilesystem": false,
+    "runAsNonRoot": true,
+    "runAsUser": 636,
+    "runAsGroup": 636
+  },
+  "convergedObservabilityPodSecurityContext": {
+    "fsGroup": 1001,
+    "fsGroupChangePolicy": "OnRootMismatch",
+    "runAsNonRoot": true,
+    "seccompProfile": {
+      "type": "RuntimeDefault"
+    }
+  },
+  "convergedObservabilityContainerSecurityContext": {
+    "runAsNonRoot": true,
+    "runAsUser": 65534,
+    "runAsGroup": 65534
+  },
+  "release": {
+    "name": "falcone",
+    "namespace": "in-falcone-staging",
+    "revision": "23",
+    "chart": "in-falcone-0.4.9",
+    "status": "failed"
+  },
+  "history": [
+    {
+      "revision": 20,
+      "status": "deployed",
+      "chart": "in-falcone-0.4.1",
+      "description": "Upgrade complete"
+    },
+    {
+      "revision": 22,
+      "status": "failed",
+      "chart": "in-falcone-0.4.8",
+      "description": "Upgrade \"falcone\" failed: PersistentVolumeClaim falcone-documentdb-data, PersistentVolumeClaim falcone-kafka-data, PersistentVolumeClaim falcone-observability-data, PersistentVolumeClaim falcone-postgresql-data, StatefulSet falcone-seaweedfs-filer, StatefulSet falcone-seaweedfs-master: Forbidden"
+    },
+    {
+      "revision": 23,
+      "status": "failed",
+      "chart": "in-falcone-0.4.9",
+      "description": "Upgrade \"falcone\" failed: context canceled"
+    }
+  ],
+  "legacyValues": {
+    "global": {
+      "webhookSigningKey": {
+        "create": false,
+        "secretName": "falcone-webhook-signing-key-c25-legacy",
+        "secretKey": "key",
+        "adoption": {
+          "mode": "legacy",
+          "requestId": "c25-staging-adopt-20260723-01"
+        },
+        "rotation": {
+          "action": "none",
+          "requestId": "",
+          "sourceSecretName": "",
+          "sourceSecretKey": "",
+          "rotationId": "",
+          "recoveryWindowSeconds": 604800
+        }
+      }
+    },
+    "documentdb": {
+      "persistence": {
+        "storageClass": "local-path",
+        "size": "10Gi"
+      }
+    },
+    "kafka": {
+      "persistence": {
+        "storageClass": "local-path",
+        "size": "10Gi"
+      }
+    },
+    "observability": {
+      "persistence": {
+        "storageClass": "local-path",
+        "size": "10Gi"
+      }
+    },
+    "postgresql": {
+      "persistence": {
+        "storageClass": "local-path",
+        "size": "10Gi"
+      }
+    },
+    "seaweedfs": {
+      "filer": {
+        "data": {
+          "storageClass": "hcloud-volumes",
+          "size": "10Gi"
+        }
+      },
+      "master": {
+        "data": {
+          "storageClass": "hcloud-volumes",
+          "size": "10Gi"
+        }
+      }
+    }
+  },
+  "deployments": {
+    "falcone-control-plane": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "falcone-control-plane",
+        "namespace": "in-falcone-staging",
+        "annotations": {},
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "control-plane"
+        },
+        "uid": "deployment-control-plane"
+      },
+      "spec": {
+        "template": {
+          "metadata": {
+            "annotations": {
+              "in-falcone.io/webhook-key-id": "wk1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "control-plane",
+                "env": [
+                  {
+                    "name": "WEBHOOK_SIGNING_KEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "falcone-webhook-signing-key-c25-legacy",
+                        "key": "key"
+                      }
+                    }
+                  },
+                  {
+                    "name": "WEBHOOK_SIGNING_KEY_MODE",
+                    "value": "legacy"
+                  },
+                  {
+                    "name": "WEBHOOK_SIGNING_KEY_MANAGED",
+                    "value": "false"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "falcone-apisix": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "falcone-apisix",
+        "namespace": "in-falcone-staging",
+        "uid": "deployment-falcone-apisix-uid",
+        "generation": 7,
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "apisix"
+        }
+      },
+      "spec": {
+        "replicas": 3,
+        "selector": {
+          "matchLabels": {
+            "app.kubernetes.io/instance": "falcone",
+            "app.kubernetes.io/name": "apisix"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/instance": "falcone",
+              "app.kubernetes.io/name": "apisix"
+            }
+          },
+          "spec": {
+            "securityContext": {
+              "fsGroup": 1001,
+              "fsGroupChangePolicy": "OnRootMismatch",
+              "runAsNonRoot": true,
+              "runAsUser": 636,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "containers": [
+              {
+                "name": "apisix",
+                "image": "docker.io/apache/apisix:3.10.0-debian",
+                "securityContext": {
+                  "runAsNonRoot": true
+                },
+                "volumeMounts": [
+                  {
+                    "name": "standalone-config",
+                    "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+                    "subPath": "apisix.yaml"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "standalone-config",
+                "configMap": {
+                  "name": "falcone-apisix-standalone",
+                  "defaultMode": 420
+                }
+              }
+            ]
+          }
+        }
+      },
+      "status": {
+        "observedGeneration": 7,
+        "replicas": 3,
+        "updatedReplicas": 3,
+        "readyReplicas": 3,
+        "availableReplicas": 3
+      }
+    },
+    "falcone-observability": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "falcone-observability",
+        "namespace": "in-falcone-staging",
+        "generation": 5,
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "observability"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app.kubernetes.io/instance": "falcone",
+            "app.kubernetes.io/name": "observability"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/instance": "falcone",
+              "app.kubernetes.io/name": "observability"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "observability",
+                "image": "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",
+                "securityContext": {
+                  "runAsNonRoot": true
+                }
+              }
+            ]
+          }
+        }
+      },
+      "status": {
+        "observedGeneration": 5,
+        "replicas": 2,
+        "updatedReplicas": 1,
+        "readyReplicas": 1,
+        "availableReplicas": 1,
+        "unavailableReplicas": 1
+      }
+    },
+    "falcone-ferretdb": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "falcone-ferretdb",
+        "namespace": "in-falcone-staging"
+      },
+      "spec": {
+        "replicas": 2
+      },
+      "status": {
+        "availableReplicas": 2,
+        "updatedReplicas": 2
+      }
+    },
+    "external-secrets/external-secrets": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "external-secrets",
+        "namespace": "external-secrets",
+        "uid": "external-secrets-owner",
+        "labels": {
+          "app.kubernetes.io/managed-by": "Helm"
+        },
+        "annotations": {
+          "meta.helm.sh/release-name": "external-secrets",
+          "meta.helm.sh/release-namespace": "external-secrets"
+        },
+        "ownerReferences": []
+      },
+      "status": {
+        "availableReplicas": 1
+      }
+    },
+    "external-secrets/external-secrets-cert-controller": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "external-secrets-cert-controller",
+        "namespace": "external-secrets",
+        "uid": "external-secrets-cert-controller-owner",
+        "labels": {
+          "app.kubernetes.io/managed-by": "Helm"
+        },
+        "annotations": {
+          "meta.helm.sh/release-name": "external-secrets",
+          "meta.helm.sh/release-namespace": "external-secrets"
+        },
+        "ownerReferences": []
+      },
+      "status": {
+        "availableReplicas": 1
+      }
+    },
+    "external-secrets/external-secrets-webhook": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "external-secrets-webhook",
+        "namespace": "external-secrets",
+        "uid": "external-secrets-webhook-owner",
+        "labels": {
+          "app.kubernetes.io/managed-by": "Helm"
+        },
+        "annotations": {
+          "meta.helm.sh/release-name": "external-secrets",
+          "meta.helm.sh/release-namespace": "external-secrets"
+        },
+        "ownerReferences": []
+      },
+      "status": {
+        "availableReplicas": 1
+      }
+    }
+  },
+  "replicaSets": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "metadata": {
+        "name": "falcone-apisix-7d636",
+        "namespace": "in-falcone-staging",
+        "uid": "replicaset-falcone-apisix-7d636-uid",
+        "annotations": {
+          "deployment.kubernetes.io/revision": "7"
+        },
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "apisix"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "name": "falcone-apisix",
+            "uid": "deployment-falcone-apisix-uid",
+            "controller": true
+          }
+        ]
+      },
+      "spec": {
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 3,
+        "readyReplicas": 3,
+        "availableReplicas": 3
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "metadata": {
+        "name": "falcone-observability-previous",
+        "namespace": "in-falcone-staging",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "observability"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "name": "falcone-observability",
+            "controller": true
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "metadata": {
+        "name": "falcone-observability-current",
+        "namespace": "in-falcone-staging",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "observability"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "name": "falcone-observability",
+            "controller": true
+          }
+        ]
+      }
+    }
+  ],
+  "pods": [
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "falcone-apisix-7d636-a",
+        "namespace": "in-falcone-staging",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "apisix"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": "falcone-apisix-7d636",
+            "uid": "replicaset-falcone-apisix-7d636-uid",
+            "controller": true
+          }
+        ]
+      },
+      "spec": {
+        "securityContext": {
+          "fsGroup": 1001,
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "runAsNonRoot": true,
+          "runAsUser": 636,
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "containers": [
+          {
+            "name": "apisix",
+            "image": "docker.io/apache/apisix:3.10.0-debian",
+            "securityContext": {
+              "runAsNonRoot": true
+            },
+            "volumeMounts": [
+              {
+                "name": "standalone-config",
+                "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+                "subPath": "apisix.yaml"
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "standalone-config",
+            "configMap": {
+              "name": "falcone-apisix-standalone",
+              "defaultMode": 420
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Running",
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "containerStatuses": [
+          {
+            "name": "apisix",
+            "image": "docker.io/apache/apisix:3.10.0-debian",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-08-10T00:00:00Z"
+              }
+            },
+            "user": {
+              "linux": {
+                "uid": 636,
+                "gid": 636
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "falcone-apisix-7d636-b",
+        "namespace": "in-falcone-staging",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "apisix"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": "falcone-apisix-7d636",
+            "uid": "replicaset-falcone-apisix-7d636-uid",
+            "controller": true
+          }
+        ]
+      },
+      "spec": {
+        "securityContext": {
+          "fsGroup": 1001,
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "runAsNonRoot": true,
+          "runAsUser": 636,
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "containers": [
+          {
+            "name": "apisix",
+            "image": "docker.io/apache/apisix:3.10.0-debian",
+            "securityContext": {
+              "runAsNonRoot": true
+            },
+            "volumeMounts": [
+              {
+                "name": "standalone-config",
+                "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+                "subPath": "apisix.yaml"
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "standalone-config",
+            "configMap": {
+              "name": "falcone-apisix-standalone",
+              "defaultMode": 420
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Running",
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "containerStatuses": [
+          {
+            "name": "apisix",
+            "image": "docker.io/apache/apisix:3.10.0-debian",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-08-10T00:00:00Z"
+              }
+            },
+            "user": {
+              "linux": {
+                "uid": 636,
+                "gid": 636
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "falcone-apisix-7d636-c",
+        "namespace": "in-falcone-staging",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "apisix"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": "falcone-apisix-7d636",
+            "uid": "replicaset-falcone-apisix-7d636-uid",
+            "controller": true
+          }
+        ]
+      },
+      "spec": {
+        "securityContext": {
+          "fsGroup": 1001,
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "runAsNonRoot": true,
+          "runAsUser": 636,
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "containers": [
+          {
+            "name": "apisix",
+            "image": "docker.io/apache/apisix:3.10.0-debian",
+            "securityContext": {
+              "runAsNonRoot": true
+            },
+            "volumeMounts": [
+              {
+                "name": "standalone-config",
+                "mountPath": "/usr/local/apisix/conf/apisix.yaml",
+                "subPath": "apisix.yaml"
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "standalone-config",
+            "configMap": {
+              "name": "falcone-apisix-standalone",
+              "defaultMode": 420
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Running",
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "containerStatuses": [
+          {
+            "name": "apisix",
+            "image": "docker.io/apache/apisix:3.10.0-debian",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-08-10T00:00:00Z"
+              }
+            },
+            "user": {
+              "linux": {
+                "uid": 636,
+                "gid": 636
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "falcone-observability-previous-a",
+        "namespace": "in-falcone-staging",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "observability"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": "falcone-observability-previous",
+            "controller": true
+          }
+        ]
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "observability",
+            "image": "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",
+            "securityContext": {
+              "runAsNonRoot": true
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Running",
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "containerStatuses": [
+          {
+            "name": "observability",
+            "image": "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-08-09T00:00:00Z"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "falcone-observability-current-a",
+        "namespace": "in-falcone-staging",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "observability"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "name": "falcone-observability-current",
+            "controller": true
+          }
+        ]
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "observability",
+            "image": "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",
+            "securityContext": {
+              "runAsNonRoot": true
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Pending",
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False"
+          }
+        ],
+        "containerStatuses": [
+          {
+            "name": "observability",
+            "image": "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",
+            "ready": false,
+            "restartCount": 0,
+            "state": {
+              "waiting": {
+                "reason": "CreateContainerConfigError",
+                "message": "container has runAsNonRoot and image has non-numeric user (nobody), cannot verify user is non-root (pod: falcone-observability-current-a_in-falcone-staging, container: observability)"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "configMaps": {
+    "falcone-apisix-standalone": {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "falcone-apisix-standalone",
+        "namespace": "in-falcone-staging"
+      },
+      "data": {
+        "apisix.yaml": "routes: []\n#END"
+      }
+    }
+  },
+  "storage": {
+    "pvcs": {
+      "falcone-documentdb-data": {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "name": "falcone-documentdb-data",
+          "namespace": "in-falcone-staging",
+          "uid": "pvc-documentdb"
+        },
+        "spec": {
+          "storageClassName": "local-path",
+          "resources": {
+            "requests": {
+              "storage": "10Gi"
+            }
+          },
+          "volumeName": "pv-documentdb"
+        },
+        "status": {
+          "phase": "Bound"
+        }
+      },
+      "falcone-kafka-data": {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "name": "falcone-kafka-data",
+          "namespace": "in-falcone-staging",
+          "uid": "pvc-kafka"
+        },
+        "spec": {
+          "storageClassName": "local-path",
+          "resources": {
+            "requests": {
+              "storage": "10Gi"
+            }
+          },
+          "volumeName": "pv-kafka"
+        },
+        "status": {
+          "phase": "Bound"
+        }
+      },
+      "falcone-observability-data": {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "name": "falcone-observability-data",
+          "namespace": "in-falcone-staging",
+          "uid": "pvc-observability"
+        },
+        "spec": {
+          "storageClassName": "local-path",
+          "resources": {
+            "requests": {
+              "storage": "10Gi"
+            }
+          },
+          "volumeName": "pv-observability"
+        },
+        "status": {
+          "phase": "Bound"
+        }
+      },
+      "falcone-postgresql-data": {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "name": "falcone-postgresql-data",
+          "namespace": "in-falcone-staging",
+          "uid": "pvc-postgresql"
+        },
+        "spec": {
+          "storageClassName": "local-path",
+          "resources": {
+            "requests": {
+              "storage": "10Gi"
+            }
+          },
+          "volumeName": "pv-postgresql"
+        },
+        "status": {
+          "phase": "Bound"
+        }
+      },
+      "data-filer-falcone-seaweedfs-filer-0": {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "name": "data-filer-falcone-seaweedfs-filer-0",
+          "namespace": "in-falcone-staging",
+          "uid": "pvc-seaweedfs-filer"
+        },
+        "spec": {
+          "storageClassName": "local-path",
+          "resources": {
+            "requests": {
+              "storage": "10Gi"
+            }
+          },
+          "volumeName": "pv-seaweedfs-filer"
+        },
+        "status": {
+          "phase": "Bound"
+        }
+      },
+      "data-in-falcone-staging-falcone-seaweedfs-master-0": {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "name": "data-in-falcone-staging-falcone-seaweedfs-master-0",
+          "namespace": "in-falcone-staging",
+          "uid": "pvc-seaweedfs-master"
+        },
+        "spec": {
+          "storageClassName": "local-path",
+          "resources": {
+            "requests": {
+              "storage": "10Gi"
+            }
+          },
+          "volumeName": "pv-seaweedfs-master"
+        },
+        "status": {
+          "phase": "Bound"
+        }
+      }
+    },
+    "statefulSets": {
+      "falcone-seaweedfs-filer": {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "name": "falcone-seaweedfs-filer",
+          "namespace": "in-falcone-staging"
+        },
+        "spec": {
+          "serviceName": "falcone-seaweedfs-filer",
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/name": "seaweedfs",
+              "app.kubernetes.io/instance": "falcone",
+              "app.kubernetes.io/component": "filer"
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "metadata": {
+                "name": "data-filer"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "storageClassName": "hcloud-volumes",
+                "resources": {
+                  "requests": {
+                    "storage": "10Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "falcone-seaweedfs-master": {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "name": "falcone-seaweedfs-master",
+          "namespace": "in-falcone-staging"
+        },
+        "spec": {
+          "serviceName": "falcone-seaweedfs-master",
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/name": "seaweedfs",
+              "app.kubernetes.io/instance": "falcone",
+              "app.kubernetes.io/component": "master"
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "metadata": {
+                "name": "data-in-falcone-staging"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "storageClassName": "hcloud-volumes",
+                "resources": {
+                  "requests": {
+                    "storage": "10Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "externalSecretNames": [
+    "gateway-apisix-credentials",
+    "gateway-shared-secret",
+    "iam-identity-client",
+    "iam-keycloak-credentials",
+    "iam-superadmin",
+    "platform-documentdb-credentials",
+    "platform-documentdb-replication",
+    "platform-encryption-key",
+    "platform-ferretdb-credentials",
+    "platform-kafka-credentials",
+    "platform-postgresql-credentials",
+    "platform-postgresql-vector-credentials",
+    "platform-s3-credentials",
+    "platform-temporal-credentials"
+  ]
+}
