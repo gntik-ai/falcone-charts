@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.6"
+EXPECTED_REPAIR_VERSION="0.4.10"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -70,6 +70,7 @@ cleanup() {
     rm -rf "$chart_package_dir"
   fi
   if ((rc != 0)) && [[ "$mutation_started" == true ]]; then
+    printf 'mutation_started=true\n' >&2
     printf 'FORWARD_RECOVERY_REQUIRED\n' >&2
   fi
   exit "$rc"
@@ -91,14 +92,242 @@ read_release() {
   release_json="$(helm list -n "$EXPECTED_NAMESPACE" --filter "^${EXPECTED_RELEASE}$" -o json)"
   actual_revision="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].revision else empty end')"
   actual_chart="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].chart else empty end')"
-  [[ -n "$actual_revision" && -n "$actual_chart" ]] || die "TARGET_RELEASE_MISSING"
+  actual_status="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].status else empty end')"
+  [[ -n "$actual_revision" && -n "$actual_chart" && -n "$actual_status" ]] || die "TARGET_RELEASE_MISSING"
 }
 read_release
 
+validate_failed_resume_state() {
+  local history latest prior revision22
+  history="$(helm history "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" -o json)" || die "HELM_HISTORY_UNAVAILABLE"
+  latest="$(printf '%s' "$history" | jq -c 'sort_by(.revision) | last')"
+  prior="$(printf '%s' "$history" | jq -c 'sort_by(.revision) | map(select(.revision == 20)) | last')"
+  revision22="$(printf '%s' "$history" | jq -c 'sort_by(.revision) | map(select(.revision == 22)) | last')"
+  printf '%s' "$latest" | jq -e \
+    --arg revision "$actual_revision" --arg chart "$actual_chart" --arg status "$actual_status" \
+    '(.revision | tostring) == $revision and .chart == $chart and .status == $status' >/dev/null || \
+    die "FAILED_RESUME_LIST_HISTORY_MISMATCH"
+  printf '%s' "$latest" | jq -e '
+    if .revision == 23 then
+      .status == "failed" and .chart == "in-falcone-0.4.9"
+      and (.description // "") == "Upgrade \"falcone\" failed: context canceled"
+    elif .revision == 22 then
+      .status == "failed" and .chart == "in-falcone-0.4.8"
+      and ((.description // "") as $description
+        | all([
+            "falcone-documentdb-data",
+            "falcone-kafka-data",
+            "falcone-observability-data",
+            "falcone-postgresql-data",
+            "falcone-seaweedfs-filer",
+            "falcone-seaweedfs-master"
+          ][]; $description | contains(.))
+        and ($description | contains("Forbidden")))
+    elif .revision == 21 then
+      .status == "failed" and .chart == "in-falcone-0.4.7"
+      and ((.description // "") | test("falcone-in-falcone-webhook-key-credential"))
+    else false end' >/dev/null || die "FAILED_RESUME_STATE_UNSAFE"
+  printf '%s' "$prior" | jq -e '
+    .revision == 20 and .status == "deployed" and .chart == "in-falcone-0.4.1"
+    and (.description // "") == "Upgrade complete"' >/dev/null || die "FAILED_RESUME_SOURCE_UNSAFE"
+  if [[ "$actual_revision" == 23 ]]; then
+    printf '%s' "$revision22" | jq -e '
+      .revision == 22 and .status == "failed" and .chart == "in-falcone-0.4.8"
+      and ((.description // "") as $description
+        | all([
+            "falcone-documentdb-data",
+            "falcone-kafka-data",
+            "falcone-observability-data",
+            "falcone-postgresql-data",
+            "falcone-seaweedfs-filer",
+            "falcone-seaweedfs-master"
+          ][]; $description | contains(.))
+        and ($description | contains("Forbidden")))' >/dev/null || die "FAILED_RESUME_PREDECESSOR_UNSAFE"
+  fi
+  printf 'failed-resume=validated failedRevision=%s sourceRevision=20 sourceChart=in-falcone-0.4.1\n' "$(printf '%s' "$latest" | jq -r .revision)"
+}
+
+validate_legacy_webhook_contract() {
+  local values
+  values="$(helm get values "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" --revision 20 -o json)" || die "LEGACY_WEBHOOK_VALUES_UNAVAILABLE"
+  printf '%s' "$values" | jq -e '
+    .global.webhookSigningKey.create == false
+    and .global.webhookSigningKey.secretName == "falcone-webhook-signing-key-c25-legacy"
+    and .global.webhookSigningKey.secretKey == "key"
+    and .global.webhookSigningKey.adoption.mode == "legacy"
+    and .global.webhookSigningKey.adoption.requestId == "c25-staging-adopt-20260723-01"
+    and .global.webhookSigningKey.rotation.action == "none"
+    and .global.webhookSigningKey.rotation.requestId == ""
+    and .global.webhookSigningKey.rotation.sourceSecretName == ""
+    and .global.webhookSigningKey.rotation.sourceSecretKey == ""
+    and .global.webhookSigningKey.rotation.rotationId == ""
+    and .global.webhookSigningKey.rotation.recoveryWindowSeconds == 604800' >/dev/null || die "LEGACY_WEBHOOK_CONTRACT_DRIFT"
+  local deployment
+  deployment="$(kubectl -n "$EXPECTED_NAMESPACE" get deployment falcone-control-plane -o json)" || die "LEGACY_WEBHOOK_DEPLOYMENT_UNAVAILABLE"
+  printf '%s' "$deployment" | jq -e '
+    ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY")]
+      | any(.valueFrom.secretKeyRef.name == "falcone-webhook-signing-key-c25-legacy" and .valueFrom.secretKeyRef.key == "key"))
+    and ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY_MODE")]
+      | any(.value == "legacy"))
+    and ([.spec.template.spec.containers[]?.env[]? | select(.name == "WEBHOOK_SIGNING_KEY_MANAGED")]
+      | any(.value == "false"))
+    and ((.spec.template.metadata.annotations["in-falcone.io/webhook-key-id"] // "") | test("^wk1:[0-9a-f]{64}$"))' >/dev/null || die "LEGACY_WEBHOOK_DEPLOYMENT_DRIFT"
+  printf 'legacy-webhook-contract=validated sourceRevision=20 secretName=falcone-webhook-signing-key-c25-legacy adoption=legacy rotation=none\n'
+}
+
+validate_failed_storage_contract() {
+  [[ "$actual_revision" == 22 || "$actual_revision" == 23 ]] || return 0
+  local values object name component claim child
+  values="$(helm get values "$EXPECTED_RELEASE" -n "$EXPECTED_NAMESPACE" --revision 20 -o json)" || \
+    die "LEGACY_STORAGE_VALUES_UNAVAILABLE"
+  printf '%s' "$values" | jq -e '
+    all([.documentdb, .kafka, .observability, .postgresql][];
+      .persistence.storageClass == "local-path" and .persistence.size == "10Gi")
+    and .seaweedfs.filer.data.storageClass == "hcloud-volumes"
+    and .seaweedfs.filer.data.size == "10Gi"
+    and .seaweedfs.master.data.storageClass == "hcloud-volumes"
+    and .seaweedfs.master.data.size == "10Gi"' >/dev/null || die "LEGACY_STORAGE_CONTRACT_DRIFT"
+
+  for name in falcone-documentdb-data falcone-kafka-data falcone-observability-data falcone-postgresql-data; do
+    object="$(kubectl -n "$EXPECTED_NAMESPACE" get pvc "$name" -o json)" || die "IMMUTABLE_STORAGE_RESOURCE_MISSING name=${name}"
+    printf '%s' "$object" | jq -e --arg name "$name" --arg namespace "$EXPECTED_NAMESPACE" '
+      .metadata.name == $name and .metadata.namespace == $namespace
+      and .status.phase == "Bound" and .spec.storageClassName == "local-path"
+      and .spec.resources.requests.storage == "10Gi"
+      and (.spec.volumeName | type == "string" and length > 0)' >/dev/null || \
+      die "IMMUTABLE_STORAGE_CONTRACT_DRIFT resource=PersistentVolumeClaim/${name}"
+  done
+
+  for component in filer master; do
+    name="falcone-seaweedfs-${component}"
+    if [[ "$component" == filer ]]; then claim=data-filer; else claim=data-in-falcone-staging; fi
+    object="$(kubectl -n "$EXPECTED_NAMESPACE" get statefulset "$name" -o json)" || \
+      die "IMMUTABLE_STORAGE_RESOURCE_MISSING name=${name}"
+    printf '%s' "$object" | jq -e \
+      --arg name "$name" --arg component "$component" --arg claim "$claim" '
+      .metadata.name == $name and .metadata.namespace == "in-falcone-staging"
+      and .spec.serviceName == $name
+      and .spec.selector.matchLabels["app.kubernetes.io/name"] == "seaweedfs"
+      and .spec.selector.matchLabels["app.kubernetes.io/instance"] == "falcone"
+      and .spec.selector.matchLabels["app.kubernetes.io/component"] == $component
+      and (.spec.volumeClaimTemplates | length) == 1
+      and .spec.volumeClaimTemplates[0].metadata.name == $claim
+      and .spec.volumeClaimTemplates[0].spec.accessModes == ["ReadWriteOnce"]
+      and .spec.volumeClaimTemplates[0].spec.storageClassName == "hcloud-volumes"
+      and .spec.volumeClaimTemplates[0].spec.resources.requests.storage == "10Gi"' >/dev/null || \
+      die "IMMUTABLE_STORAGE_CONTRACT_DRIFT resource=StatefulSet/${name}"
+
+    child="${claim}-${name}-0"
+    object="$(kubectl -n "$EXPECTED_NAMESPACE" get pvc "$child" -o json)" || \
+      die "IMMUTABLE_STORAGE_RESOURCE_MISSING name=${child}"
+    printf '%s' "$object" | jq -e --arg name "$child" --arg namespace "$EXPECTED_NAMESPACE" '
+      .metadata.name == $name and .metadata.namespace == $namespace
+      and .status.phase == "Bound" and .spec.storageClassName == "local-path"
+      and .spec.resources.requests.storage == "10Gi"
+      and (.spec.volumeName | type == "string" and length > 0)' >/dev/null || \
+      die "IMMUTABLE_STORAGE_CONTRACT_DRIFT resource=PersistentVolumeClaim/${child}"
+  done
+  printf 'immutable-storage-contract=validated sourceRevision=20 failedRevision=%s standalonePvcs=4 seaweedfsStatefulSets=2 childPvcs=2\n' "$actual_revision"
+}
+
+validate_revision23_named_user_failure() {
+  [[ "$actual_revision" == 23 ]] || return 0
+  local deployments pods
+  deployments="$(kubectl -n "$EXPECTED_NAMESPACE" get deployments \
+    -l app.kubernetes.io/instance="$EXPECTED_RELEASE" -o json)" || die "REVISION23_DEPLOYMENTS_UNAVAILABLE"
+  pods="$(kubectl -n "$EXPECTED_NAMESPACE" get pods \
+    -l app.kubernetes.io/instance="$EXPECTED_RELEASE" -o json)" || die "REVISION23_PODS_UNAVAILABLE"
+
+  printf '%s' "$deployments" | jq -e \
+    --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" \
+    --arg apisix_image "docker.io/apache/apisix:3.10.0-debian" \
+    --arg observability_image "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62" '
+    def exact_deployment($name; $component; $image; $desired; $available):
+      [.items[] | select(.metadata.name == $name)] as $matches
+      | ($matches | length) == 1
+      and ($matches[0] as $deployment
+        | $deployment.metadata.namespace == $namespace
+        and $deployment.metadata.labels["app.kubernetes.io/name"] == $component
+        and $deployment.metadata.labels["app.kubernetes.io/instance"] == $release
+        and $deployment.spec.selector.matchLabels["app.kubernetes.io/name"] == $component
+        and $deployment.spec.selector.matchLabels["app.kubernetes.io/instance"] == $release
+        and $deployment.spec.template.metadata.labels["app.kubernetes.io/name"] == $component
+        and $deployment.spec.template.metadata.labels["app.kubernetes.io/instance"] == $release
+        and ($deployment.metadata.generation | type == "number")
+        and $deployment.status.observedGeneration == $deployment.metadata.generation
+        and $deployment.spec.replicas == $desired
+        and $deployment.status.replicas == ($desired + 1)
+        and $deployment.status.availableReplicas == $available
+        and $deployment.status.updatedReplicas == 1
+        and $deployment.status.unavailableReplicas == 1
+        and ([ $deployment.spec.template.spec.containers[]
+          | select(.name == $component and .image == $image
+            and .securityContext.runAsNonRoot == true
+            and (.securityContext | has("runAsUser") | not)
+            and (.securityContext | has("runAsGroup") | not)) ] | length) == 1);
+    exact_deployment("falcone-apisix"; "apisix"; $apisix_image; 3; 3)
+    and exact_deployment("falcone-observability"; "observability"; $observability_image; 1; 1)' \
+    >/dev/null || die "REVISION23_DEPLOYMENT_EVIDENCE_DRIFT"
+
+  printf '%s' "$pods" | jq -e \
+    --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" \
+    --arg apisix_image "docker.io/apache/apisix:3.10.0-debian" \
+    --arg observability_image "docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62" '
+    def owned_by_replicaset:
+      ([.metadata.ownerReferences[]?
+        | select(.apiVersion == "apps/v1" and .kind == "ReplicaSet" and .controller == true
+          and (.name | type == "string" and length > 0))] | length) == 1;
+    def target($component; $image):
+      select(.metadata.namespace == $namespace
+        and .metadata.labels["app.kubernetes.io/name"] == $component
+        and .metadata.labels["app.kubernetes.io/instance"] == $release
+        and owned_by_replicaset
+        and ([.spec.containers[] | select(.name == $component and .image == $image)] | length) == 1);
+    def waiting_signature($component; $user):
+      .status.phase == "Pending"
+      and ([.status.containerStatuses[]?
+        | select(.name == $component and .ready == false
+          and .state.waiting.reason == "CreateContainerConfigError"
+          and (.state.waiting.message
+            | contains("container has runAsNonRoot and image has non-numeric user (" + $user + ")"))
+          and (.state.waiting.message | contains("cannot verify user is non-root")))] | length) == 1;
+    def ready_signature($component):
+      .status.phase == "Running"
+      and any(.status.conditions[]?; .type == "Ready" and .status == "True")
+      and any(.status.containerStatuses[]?; .name == $component and .ready == true);
+    ([.items[] | target("apisix"; $apisix_image)] as $apisix
+      | [.items[] | target("observability"; $observability_image)] as $observability
+      | ($apisix | length) == 4
+      and ([$apisix[] | select(waiting_signature("apisix"; "apisix"))] | length) == 1
+      and ([$apisix[] | select(ready_signature("apisix"))] | length) == 3
+      and ($observability | length) == 2
+      and ([$observability[] | select(waiting_signature("observability"; "nobody"))] | length) == 1
+      and ([$observability[] | select(ready_signature("observability"))] | length) == 1
+      and ([.items[]
+        | select(.status.phase == "Pending")
+        | [.status.containerStatuses[]?
+          | select(.state.waiting.reason == "CreateContainerConfigError"
+            and (.state.waiting.message
+              | contains("container has runAsNonRoot and image has non-numeric user ("))
+            and (.state.waiting.message | contains("cannot verify user is non-root")))]
+        | select(length > 0)] | length) == 2)' \
+    >/dev/null || die "REVISION23_POD_EVIDENCE_DRIFT"
+  printf 'revision23-failure=validated chart=in-falcone-0.4.9 cause=named-image-users deployments=2 pendingPods=2 readyPods=4\n'
+}
+
+if [[ "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 ]]; then
+  [[ "$actual_status" == "failed" ]] || die "FAILED_RESUME_LIST_STATUS_UNSAFE"
+  validate_failed_resume_state
+fi
+validate_legacy_webhook_contract
+validate_failed_storage_contract
+validate_revision23_named_user_failure
+
 if [[ "$mode" == phase-a || "$mode" == preflight ]]; then
-  [[ "$actual_revision" == "$EXPECTED_SOURCE_REVISION" ]] || \
+  [[ "$actual_revision" == "$EXPECTED_SOURCE_REVISION" || "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 ]] || \
     die "REVISION_GATE_FAILED expected=${EXPECTED_SOURCE_REVISION} actual=${actual_revision}; use forward recovery after Phase A"
-  [[ "$actual_chart" == "$EXPECTED_SOURCE_CHART" ]] || \
+  [[ "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 || "$actual_status" == "deployed" ]] || die "SOURCE_RELEASE_STATUS_UNSAFE actual=${actual_status}"
+  [[ "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 || "$actual_chart" == "$EXPECTED_SOURCE_CHART" ]] || \
     die "STARTING_CHART_MISMATCH expected=${EXPECTED_SOURCE_CHART} actual=${actual_chart}"
 fi
 
@@ -219,7 +448,13 @@ fi
 
 # Give an inexact Phase-A target a useful JIT error before loading evidence.
 if [[ "$apply" == true && "$mode" == phase-a \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"* ]]; then
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"* \
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/"* \
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@22/"* \
+   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@23/"* ]]; then
+  if [[ ( "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 ) && "$actual_status" == failed ]]; then
+    die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${actual_revision}/${actual_chart}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
+  fi
   die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}/${EXPECTED_SOURCE_CHART}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
 fi
 
@@ -265,6 +500,23 @@ diff_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision20-diff.XXXXXX")"
 
 phase_a_args=(
   -f "$staging_values"
+  --set-string documentdb.persistence.storageClass=local-path --set documentdb.persistence.size=10Gi
+  --set-string kafka.persistence.storageClass=local-path --set kafka.persistence.size=10Gi
+  --set-string observability.persistence.storageClass=local-path --set observability.persistence.size=10Gi
+  --set-string postgresql.persistence.storageClass=local-path --set postgresql.persistence.size=10Gi
+  --set-string seaweedfs.filer.data.storageClass=hcloud-volumes --set seaweedfs.filer.data.size=10Gi
+  --set-string seaweedfs.master.data.storageClass=hcloud-volumes --set seaweedfs.master.data.size=10Gi
+  --set global.webhookSigningKey.create=false
+  --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
+  --set-string global.webhookSigningKey.secretKey=key
+  --set-string global.webhookSigningKey.adoption.mode=legacy
+  --set-string global.webhookSigningKey.adoption.requestId=c25-staging-adopt-20260723-01
+  --set-string global.webhookSigningKey.rotation.action=none
+  --set-string global.webhookSigningKey.rotation.requestId=
+  --set-string global.webhookSigningKey.rotation.sourceSecretName=
+  --set-string global.webhookSigningKey.rotation.sourceSecretKey=
+  --set-string global.webhookSigningKey.rotation.rotationId=
+  --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set-string postgresqlVector.persistence.storageClass=hcloud-volumes
   --set openbao.openbao.authReconcile.allowRecoveryRoot=true
@@ -274,6 +526,23 @@ phase_a_args=(
 )
 phase_a_no_root_args=(
   -f "$staging_values"
+  --set-string documentdb.persistence.storageClass=local-path --set documentdb.persistence.size=10Gi
+  --set-string kafka.persistence.storageClass=local-path --set kafka.persistence.size=10Gi
+  --set-string observability.persistence.storageClass=local-path --set observability.persistence.size=10Gi
+  --set-string postgresql.persistence.storageClass=local-path --set postgresql.persistence.size=10Gi
+  --set-string seaweedfs.filer.data.storageClass=hcloud-volumes --set seaweedfs.filer.data.size=10Gi
+  --set-string seaweedfs.master.data.storageClass=hcloud-volumes --set seaweedfs.master.data.size=10Gi
+  --set global.webhookSigningKey.create=false
+  --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
+  --set-string global.webhookSigningKey.secretKey=key
+  --set-string global.webhookSigningKey.adoption.mode=legacy
+  --set-string global.webhookSigningKey.adoption.requestId=c25-staging-adopt-20260723-01
+  --set-string global.webhookSigningKey.rotation.action=none
+  --set-string global.webhookSigningKey.rotation.requestId=
+  --set-string global.webhookSigningKey.rotation.sourceSecretName=
+  --set-string global.webhookSigningKey.rotation.sourceSecretKey=
+  --set-string global.webhookSigningKey.rotation.rotationId=
+  --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set-string postgresqlVector.persistence.storageClass=hcloud-volumes
   --set openbao.openbao.authReconcile.allowRecoveryRoot=false
@@ -283,6 +552,23 @@ phase_a_no_root_args=(
 )
 phase_b_args=(
   -f "$staging_values"
+  --set-string documentdb.persistence.storageClass=local-path --set documentdb.persistence.size=10Gi
+  --set-string kafka.persistence.storageClass=local-path --set kafka.persistence.size=10Gi
+  --set-string observability.persistence.storageClass=local-path --set observability.persistence.size=10Gi
+  --set-string postgresql.persistence.storageClass=local-path --set postgresql.persistence.size=10Gi
+  --set-string seaweedfs.filer.data.storageClass=hcloud-volumes --set seaweedfs.filer.data.size=10Gi
+  --set-string seaweedfs.master.data.storageClass=hcloud-volumes --set seaweedfs.master.data.size=10Gi
+  --set global.webhookSigningKey.create=false
+  --set-string global.webhookSigningKey.secretName=falcone-webhook-signing-key-c25-legacy
+  --set-string global.webhookSigningKey.secretKey=key
+  --set-string global.webhookSigningKey.adoption.mode=legacy
+  --set-string global.webhookSigningKey.adoption.requestId=c25-staging-adopt-20260723-01
+  --set-string global.webhookSigningKey.rotation.action=none
+  --set-string global.webhookSigningKey.rotation.requestId=
+  --set-string global.webhookSigningKey.rotation.sourceSecretName=
+  --set-string global.webhookSigningKey.rotation.sourceSecretKey=
+  --set-string global.webhookSigningKey.rotation.rotationId=
+  --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set global.webhookDatabase.migration.backupVerified=true
   --set global.webhookDatabase.migration.parityVerified=true
@@ -298,13 +584,13 @@ render_and_validate_images() {
   while IFS='|' read -r contract expected; do
     grep -qF "$expected" "$output" || { printf 'STAGING_IMAGE_DIGEST_DRIFT contract=%s\n' "$contract" >&2; return 1; }
   done <<'DIGESTS'
-control-plane|image: "ghcr.io/gntik-ai/in-falcone-control-plane@sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253"
-control-plane-executor|image: "ghcr.io/gntik-ai/in-falcone-control-plane-executor@sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c"
-web-console|image: "ghcr.io/gntik-ai/in-falcone-web-console@sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191"
-workflow-worker|image: "ghcr.io/gntik-ai/in-falcone-workflow-worker@sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d"
-function-executor-runtime|value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613'
+control-plane|image: "ghcr.io/gntik-ai/in-falcone-control-plane@sha256:26bb5ff1caa0ffbd9f902b5da645fa69caa9153ff6d19b28eda640f35f9c4254"
+control-plane-executor|image: "ghcr.io/gntik-ai/in-falcone-control-plane-executor@sha256:94809c39149cb6d2aa12a606f5b7db19d8365e1a857b83bcd45405554116feae"
+web-console|image: "ghcr.io/gntik-ai/in-falcone-web-console@sha256:4ccb885b4e15637e68f409fcedf93f180397fad3d6ccf331961d41e43af8c868"
+workflow-worker|image: "ghcr.io/gntik-ai/in-falcone-workflow-worker@sha256:0520d57d36ee1383c2077388eb4880023f3b5c11536107151a1e01657001e8aa"
+function-executor-runtime|value: 'ghcr.io/gntik-ai/in-falcone-fn-runtime@sha256:b50e93fb529a2129daa4e682ea4ae3741967a649c5fc1cc5f2f2b6588eb1a0fd'
 mcp-runtime-image|MCP_RUNTIME_IMAGE: "ghcr.io/gntik-ai/in-falcone-mcp-runtime:0.3.0"
-mcp-runtime-image-digest|MCP_RUNTIME_IMAGE_DIGEST: "sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb"
+mcp-runtime-image-digest|MCP_RUNTIME_IMAGE_DIGEST: "sha256:f0bb4c639f08c40c650e3f2b45a0d3c546fa84b0ae5d2eb9a4153860ec06a162"
 DIGESTS
   if grep -Eq '^  namespace: external-secrets[[:space:]]*$' "$output"; then
     printf 'EXTERNAL_ESO_OWNER_RENDERED\n' >&2
@@ -342,6 +628,66 @@ semantic_diff() {
   fi
 }
 semantic_diff
+
+# Adopt only the exact Falcone ExternalSecrets already present in the target.
+# Compare specs and reject Helm ownership conflicts/extras before patching labels.
+adopt_falcone_external_secrets() {
+  local perform_patch="${1:-false}"
+  local names name live_list live rendered spec_live spec_rendered markers uid rv labels annotations
+  local adoptable=0 already_owned=0
+  local -a live_names expected_names
+  local -A live_json patch_json
+  names='gateway-apisix-credentials gateway-shared-secret iam-identity-client iam-keycloak-credentials iam-superadmin platform-documentdb-credentials platform-documentdb-replication platform-encryption-key platform-ferretdb-credentials platform-kafka-credentials platform-postgresql-credentials platform-postgresql-vector-credentials platform-s3-credentials platform-temporal-credentials'
+  live_list="$(kubectl -n "$EXPECTED_NAMESPACE" get externalsecrets.external-secrets.io -o json)" || \
+    die "EXTERNAL_SECRET_IDENTITY_SET_MISMATCH"
+  mapfile -t live_names < <(printf '%s' "$live_list" | jq -r '.items[].metadata.name' | sort)
+  mapfile -t expected_names < <(printf '%s\n' $names | sort)
+  [[ "${live_names[*]}" == "${expected_names[*]}" ]] || die "EXTERNAL_SECRET_IDENTITY_SET_MISMATCH"
+  for name in $names; do
+    live="$(printf '%s' "$live_list" | jq -ce --arg name "$name" '.items[] | select(.metadata.name == $name)')" || \
+      die "EXTERNAL_SECRET_MISSING_$name"
+    live_json[$name]="$live"
+    markers="$(printf '%s' "$live" | jq -c '[.metadata.labels["app.kubernetes.io/managed-by"] // null,.metadata.annotations["meta.helm.sh/release-name"] // null,.metadata.annotations["meta.helm.sh/release-namespace"] // null]')"
+    case "$markers" in
+      '[null,null,null]') adoptable=$((adoptable + 1)) ;;
+      '["Helm","falcone","in-falcone-staging"]') already_owned=$((already_owned + 1)) ;;
+      *) die "EXTERNAL_SECRET_FOREIGN_HELM_OWNER_$name" ;;
+    esac
+    rendered="$(awk -v n="$name" 'BEGIN{RS="---"} $0 ~ "kind:[[:space:]]*ExternalSecret" && $0 ~ "name:[[:space:]]*" n "([[:space:]]|$)" {print; exit}' "$render_file")"
+    [[ -n "$rendered" ]] || die "EXTERNAL_SECRET_NOT_RENDERED_$name"
+    spec_live="$(printf '%s' "$live" | jq -cS '.spec | .target.deletionPolicy=(.target.deletionPolicy // "Retain") | .data=(.data // [] | map(.remoteRef=(.remoteRef // {}) | .remoteRef.conversionStrategy=(.remoteRef.conversionStrategy // "Default") | .remoteRef.decodingStrategy=(.remoteRef.decodingStrategy // "None") | .remoteRef.metadataPolicy=(.remoteRef.metadataPolicy // "None"))) | .dataFrom = (.dataFrom // [])')"
+    spec_rendered="$(printf '%s' "$rendered" | kubectl create --dry-run=client -f - -o json | jq -cS '.spec | .target.deletionPolicy=(.target.deletionPolicy // "Retain") | .data=(.data // [] | map(.remoteRef=(.remoteRef // {}) | .remoteRef.conversionStrategy=(.remoteRef.conversionStrategy // "Default") | .remoteRef.decodingStrategy=(.remoteRef.decodingStrategy // "None") | .remoteRef.metadataPolicy=(.remoteRef.metadataPolicy // "None"))) | .dataFrom = (.dataFrom // [])')"
+    [[ "$spec_live" == "$spec_rendered" ]] || die "EXTERNAL_SECRET_SPEC_DRIFT_$name"
+    uid="$(printf '%s' "$live" | jq -r '.metadata.uid')"; rv="$(printf '%s' "$live" | jq -r '.metadata.resourceVersion')"
+    labels="$(printf '%s' "$live" | jq -c '.metadata.labels // {} | .["app.kubernetes.io/managed-by"]="Helm"')"
+    annotations="$(printf '%s' "$live" | jq -c --arg r "$EXPECTED_RELEASE" --arg n "$EXPECTED_NAMESPACE" '.metadata.annotations // {} | .["meta.helm.sh/release-name"]=$r | .["meta.helm.sh/release-namespace"]=$n')"
+    patch_json[$name]="$(jq -n --arg u "$uid" --arg rv "$rv" --argjson l "$labels" --argjson a "$annotations" '[{op:"test",path:"/metadata/uid",value:$u},{op:"test",path:"/metadata/resourceVersion",value:$rv},{op:"add",path:"/metadata/labels",value:$l},{op:"add",path:"/metadata/annotations",value:$a}]')"
+  done
+  if [[ "$perform_patch" != true ]]; then
+    printf 'external-secret-adoption=preflight exact=14 adoptable=%s already-owned=%s mutation=false\n' "$adoptable" "$already_owned"
+    return 0
+  fi
+  for name in $names; do
+    [[ "$(printf '%s' "${live_json[$name]:-}" | jq -r '[.metadata.labels["app.kubernetes.io/managed-by"] // null,.metadata.annotations["meta.helm.sh/release-name"] // null,.metadata.annotations["meta.helm.sh/release-namespace"] // null] | @tsv')" == $'Helm\tfalcone\tin-falcone-staging' ]] && continue
+    kubectl -n "$EXPECTED_NAMESPACE" patch externalsecret.external-secrets.io "$name" --type=json -p "${patch_json[$name]}" >/dev/null
+  done
+}
+
+validate_external_eso_release_owner() {
+  local owner
+  owner="$(kubectl -n external-secrets get deployment external-secrets -o json)" || \
+    die "EXTERNAL_ESO_OWNER_METADATA_INVALID"
+  printf '%s' "$owner" | jq -e '
+    .metadata.namespace == "external-secrets"
+    and .metadata.name == "external-secrets"
+    and .metadata.labels["app.kubernetes.io/managed-by"] == "Helm"
+    and .metadata.annotations["meta.helm.sh/release-name"] == "external-secrets"
+    and .metadata.annotations["meta.helm.sh/release-namespace"] == "external-secrets"
+    and (.status.availableReplicas // 0) >= 1' >/dev/null || \
+    die "EXTERNAL_ESO_OWNER_METADATA_INVALID"
+}
+
+validate_external_eso_release_owner
 
 owner_metadata() {
   local inventory="" resource namespace name object canonical
@@ -426,6 +772,9 @@ printf 'preflight=passed context=%s namespace=%s release=%s revision=%s chart=%s
   "$([[ "$apply" == true ]] && printf false || printf true)"
 
 if [[ "$apply" == false ]]; then
+  if [[ "$mode" == phase-a ]]; then
+    adopt_falcone_external_secrets false
+  fi
   printf 'no mutation performed; apply requires fresh target-bound backup/parity attestations and exact package confirmation\n'
   exit 0
 fi
@@ -433,12 +782,15 @@ fi
 if [[ "$mode" == phase-a ]]; then
   if [[ "$fixture_failure_seam" == true ]]; then
     expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"
+  elif [[ "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 ]]; then
+    expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${actual_revision}/${actual_chart}->${EXPECTED_REPAIR_CHART}/${package_digest}"
   else
     expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}/${EXPECTED_SOURCE_CHART}->${EXPECTED_REPAIR_CHART}/${package_digest}"
   fi
   [[ "$confirm_target" == "$expected_confirmation" ]] || die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${expected_confirmation}"
   owner_before="$(owner_metadata)"
   mutation_started=true
+  adopt_falcone_external_secrets true
   helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --wait --timeout 20m "${phase_a_args[@]}"
   if ! health_gate "$owner_before" false; then die "PHASE_A_HEALTH_GATE_FAILED"; fi
   owner_before_second="$(owner_metadata)"

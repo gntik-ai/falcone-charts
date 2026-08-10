@@ -24,8 +24,10 @@
    uses maxUnavailable 0, maxSurge 1, 600-second deadline and retained history.
 5. Only staging chooses local-path/fsn1. It is one replica, node-local, Delete
    reclaim, non-HA. All other profiles remain unchanged.
-6. Six digests live in staging values: control-plane, executor, web, workflow,
-   function runtime, and MCP runtime. Helm, never imperative patches, is authority.
+6. Six digests built from Falcone main
+   `d9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc` live in staging values:
+   control-plane, executor, web, workflow, function runtime, and MCP runtime.
+   Helm, never imperative patches, is authority.
 7. Migration is split: Phase A retains the immutable hcloud-volumes value while
    applying non-destructive repairs; Phase B admits only the exact initial
    Pending StatefulSet Pod, scales that StatefulSet to zero, waits boundedly,
@@ -37,12 +39,36 @@
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.6 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.10 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
-9. A secret-suppressed semantic diff protects the sanitized 21-resource external
+9. Revision-20 Phase A prevalidates the exact fourteen Falcone-owned
+   `ExternalSecret` declarations before apply. It accepts only the all-absent
+   Helm owner tuple or the exact release tuple from an idempotent retry, compares
+   canonical specs after ESO CRD defaults, and adopts absent tuples with atomic
+   metadata-only UID/resourceVersion-guarded patches. It never reads generated
+   Secrets, uses broad `--take-ownership`, or adopts an external ESO object.
+10. A secret-suppressed semantic diff protects the sanitized 21-resource external
    ESO inventory, including cluster-scoped objects. Exact owner metadata is
    captured before and compared after each repaired-chart pass. No release
    manifest or Secret payload is read.
+11. Revision 22 is admitted only as the exact failed chart-0.4.8 immutable-field
+    incident. The repair validates four bound standalone PVCs, two SeaweedFS
+    claim-template contracts and their historical bound child PVCs from public
+    Kubernetes metadata, then passes their exact non-secret storage values to
+    every Helm operation. It does not use `--reuse-values`, patch storage objects,
+    read volume contents, or fabricate a successful Phase-A attestation.
+12. Vanilla Kubernetes assigns the verified numeric image identities to the two
+    containers whose images declare named users: APISIX UID/GID 636 and
+    Prometheus UID/GID 65534. Both retain `runAsNonRoot`. The OpenShift
+    restricted wrapper strips both fields, preserving SCC-assigned arbitrary
+    identities without weakening its non-root policy.
+13. Revision 23 is admitted only as the exact failed chart-0.4.9 canceled upgrade
+    whose public Deployment/Pod state proves two stalled named-user rollouts and
+    preserved prior availability. The gate binds labels, ReplicaSet ownership,
+    images, generations, replica counts and full kubelet error signatures without
+    reading logs, Secrets or Helm manifests. Forward recovery delegates to the
+    existing two-pass Phase-A path and requires fresh 0.4.10/package-bound backup
+    and parity evidence, but no fabricated Phase-A attestation.
 
 ## Failure and rollback
 

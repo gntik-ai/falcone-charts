@@ -16,9 +16,23 @@ SHALL NOT read a Helm release manifest or Secret payload.
 
 - **WHEN** staging selects externally managed ESO with exact namespace and ServiceAccount
 - **THEN** Falcone renders its store, fourteen declarations and auth identity
-- **AND** it renders no object into `external-secrets` and no adoption path
+- **AND** it renders no object into `external-secrets` and no adoption path for
+  any administrator-owned ESO object
 - **AND** create, update, removal, or owner-metadata drift of any protected ESO
   resource fails before the next mutation
+
+#### Scenario: Existing Falcone declarations lack Helm ownership
+
+- **WHEN** the exact fourteen Falcone-owned `ExternalSecret` declarations match
+  the target render but all three Helm owner markers are absent
+- **THEN** dry-run reports the exact adoptable set without mutation
+- **AND** apply validates all fourteen before atomically patching only their
+  owner metadata with UID and resourceVersion tests
+- **AND** exact already-owned retries are idempotent
+- **AND** partial or foreign ownership, identity/spec drift, or concurrency drift
+  fails before Helm upgrade
+- **AND** no generated Secret or administrator-owned ESO object is read or
+  adopted and broad `--take-ownership` is forbidden
 
 ### Requirement: OpenBao upgrades SHALL reconcile auth metadata only
 
@@ -69,13 +83,34 @@ replacement passes readiness.
 
 ### Requirement: Storage and image repair SHALL be staging-only and immutable
 
-Staging SHALL select local-path plus fsn1 and the six approved digests. Base,
-production, HA and OpenShift SHALL NOT inherit this storage choice.
+Staging SHALL select local-path plus fsn1 and the six immutable digests built by
+the successful image release for Falcone main
+`d9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc`. Base,
+production, HA and OpenShift SHALL NOT inherit this storage choice. Vanilla
+Kubernetes SHALL run APISIX as numeric UID/GID 636 and Prometheus as numeric
+UID/GID 65534 while retaining `runAsNonRoot`. The OpenShift restricted profile
+SHALL omit both fixed identities so its SCC can assign an allowed UID and GID.
 
 #### Scenario: Staging render
 
 - **WHEN** `values/staging.yaml` is rendered
 - **THEN** pgvector selects local-path/fsn1 and all six images are digest-pinned
+  to tag `0.6.6-main-d9cd0f6b` provenance
+
+#### Scenario: Vanilla Kubernetes starts images that declare named users
+
+- **WHEN** the base chart renders the APISIX named-user image and the existing
+  Prometheus v3.2.1 digest
+- **THEN** their container security contexts contain `runAsNonRoot: true` and
+  numeric UID/GID 636 and 65534 respectively
+- **AND** no image tag, digest, public API or staging storage contract changes
+
+#### Scenario: OpenShift retains arbitrary UID assignment
+
+- **WHEN** the OpenShift restricted overlay renders those same containers
+- **THEN** their pod and container security contexts omit fixed `runAsUser` and
+  `runAsGroup` values
+- **AND** the non-root contract remains compatible with SCC-assigned identities
 
 ### Requirement: The revision-20 empty PVC transition SHALL be JIT-gated
 
@@ -115,8 +150,37 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.6,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.10,
   and neither path uses atomic upgrade or rollback to revision 20
+
+#### Scenario: Phase A encounters the admitted revision-22 immutable-field failure
+
+- **WHEN** Helm history proves revision 22 failed on chart 0.4.8 after rejecting
+  the exact four standalone PVCs and the filer/master StatefulSets
+- **THEN** Phase A validates the bound PVC, SeaweedFS claim-template and child-PVC
+  metadata without reading Secret or volume data
+- **AND** every render, diff and upgrade explicitly preserves the validated
+  non-secret storageClass and size values without `--reuse-values`
+- **AND** any identity, status, chart, failure-description, UID, binding,
+  storageClass, size, selector, serviceName or claim-template drift fails before
+  mutation
+
+#### Scenario: Phase A resumes the admitted revision-23 non-numeric image-user failure
+
+- **WHEN** the latest Helm history entry is revision 23, failed on chart 0.4.9
+  with the exact canceled-upgrade description, revision 20 is the exact deployed
+  0.4.1 source, and revision 22 is the exact failed 0.4.8 immutable-storage event
+- **AND** public Deployment and Pod evidence proves exactly one new APISIX and
+  one new observability Pod are Pending with their full named-user
+  `CreateContainerConfigError`, while three APISIX and one observability replicas
+  from the prior ReplicaSets remain Ready
+- **THEN** Phase A targets immutable chart 0.4.10 and requires fresh backup and
+  parity evidence plus the exact source/target/package confirmation
+- **AND** it delegates to the existing two-pass Phase-A implementation without a
+  fabricated Phase-A attestation, rollback, atomic upgrade or PVC deletion
+- **AND** any history, description, image, label, owner, rollout count,
+  generation, availability, waiting reason/message, storage or cancellation
+  drift fails before mutation
 
 ### Requirement: Phase-A completion SHALL prove final no-root health
 

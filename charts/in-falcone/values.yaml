@@ -1867,6 +1867,8 @@ apisix:
       drop:
         - ALL
     runAsNonRoot: true
+    runAsUser: 636
+    runAsGroup: 636
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -3256,6 +3258,8 @@ observability:
       drop:
         - ALL
     runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
   nodeSelector: {}
   tolerations: []
   affinity: {}

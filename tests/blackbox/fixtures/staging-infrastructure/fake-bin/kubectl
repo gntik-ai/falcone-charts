@@ -10,6 +10,13 @@ scale_state="${FALCONE_STAGING_SCALE_STATE_FILE:-${state_file}.scaled}"
 external_secrets_fixture="${FALCONE_STAGING_EXTERNAL_SECRETS_FIXTURE:-}"
 args="$*"
 
+case " $args " in
+  *" get secret "*|*" get secrets "*)
+    printf 'SECRET_DATA_READ_FORBIDDEN\n' >&2
+    exit 77
+    ;;
+esac
+
 if [ "$args" = "config current-context" ]; then
   if [ "$scenario" = "wrong-context" ]; then
     printf 'production\n'
@@ -18,6 +25,228 @@ if [ "$args" = "config current-context" ]; then
   fi
   exit 0
 fi
+
+r22_pvc_json() {
+  resource_name="$1"
+  storage_class="local-path"
+  storage_size="10Gi"
+  case "$scenario:$resource_name" in
+    r22-immutable-pvc-storage-drift:falcone-documentdb-data)
+      storage_class="hcloud-volumes"
+      ;;
+    r22-immutable-pvc-size-drift:falcone-kafka-data)
+      storage_size="20Gi"
+      ;;
+    r22-immutable-child-pvc-drift:data-in-falcone-staging-falcone-seaweedfs-master-0)
+      storage_class="hcloud-volumes"
+      ;;
+  esac
+  printf '{"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"%s","namespace":"in-falcone-staging","uid":"bbx-%s-uid"},"spec":{"accessModes":["ReadWriteOnce"],"storageClassName":"%s","resources":{"requests":{"storage":"%s"}},"volumeName":"bbx-%s-pv"},"status":{"phase":"Bound"}}\n' \
+    "$resource_name" "$resource_name" "$storage_class" "$storage_size" "$resource_name"
+}
+
+r22_statefulset_json() {
+  resource_name="$1"
+  case "$resource_name" in
+    falcone-seaweedfs-filer)
+      component="filer"
+      claim_name="data-filer"
+      ;;
+    falcone-seaweedfs-master)
+      component="master"
+      claim_name="data-in-falcone-staging"
+      ;;
+    *)
+      printf 'unexpected r22 StatefulSet fixture resource: %s\n' "$resource_name" >&2
+      exit 2
+      ;;
+  esac
+  storage_size="10Gi"
+  if [ "$scenario" = "r22-immutable-vct-drift" ] && [ "$resource_name" = "falcone-seaweedfs-filer" ]; then
+    storage_size="11Gi"
+  fi
+  jq -nc \
+    --arg name "$resource_name" --arg component "$component" --arg claim "$claim_name" --arg storage "$storage_size" \
+    '{
+      apiVersion:"apps/v1", kind:"StatefulSet",
+      metadata:{name:$name,namespace:"in-falcone-staging",uid:("bbx-" + $component + "-statefulset-uid")},
+      spec:{
+        serviceName:$name, podManagementPolicy:"Parallel", replicas:1,
+        selector:{matchLabels:{"app.kubernetes.io/name":"seaweedfs","app.kubernetes.io/instance":"falcone","app.kubernetes.io/component":$component}},
+        template:{metadata:{labels:{"app.kubernetes.io/name":"seaweedfs","app.kubernetes.io/instance":"falcone","app.kubernetes.io/component":$component}},spec:{containers:[{name:"seaweedfs",image:"example.invalid/seaweedfs@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}},
+        volumeClaimTemplates:[{apiVersion:"v1",kind:"PersistentVolumeClaim",metadata:{name:$claim},spec:{accessModes:["ReadWriteOnce"],storageClassName:"hcloud-volumes",resources:{requests:{storage:$storage}}}}]
+      }
+    }'
+}
+
+r23_nonnumeric_pods_json() {
+  apisix_reason="CreateContainerConfigError"
+  apisix_user="apisix"
+  observability_reason="CreateContainerConfigError"
+  observability_user="nobody"
+  include_observability="true"
+  include_extra="false"
+  case "$scenario" in
+    r23-nonnumeric-live-one) include_observability="false" ;;
+    r23-nonnumeric-live-extra) include_extra="true" ;;
+    r23-nonnumeric-live-reason-drift) observability_reason="ImagePullBackOff" ;;
+    r23-nonnumeric-live-user-drift) observability_user="prometheus" ;;
+  esac
+
+  jq -nc \
+    --arg apisix_reason "$apisix_reason" --arg apisix_user "$apisix_user" \
+    --arg observability_reason "$observability_reason" --arg observability_user "$observability_user" \
+    --argjson include_observability "$include_observability" --argjson include_extra "$include_extra" \
+    '{apiVersion:"v1",kind:"PodList",items:(
+      [
+        {
+          metadata:{name:"falcone-apisix-new-bbx",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"new"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-new",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Pending",containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:false,state:{waiting:{reason:$apisix_reason,message:("container has runAsNonRoot and image has non-numeric user (" + $apisix_user + "), cannot verify user is non-root")}}}]}
+        },
+        {
+          metadata:{name:"falcone-apisix-old-a",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-old",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        },
+        {
+          metadata:{name:"falcone-apisix-old-b",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-old",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        },
+        {
+          metadata:{name:"falcone-apisix-old-c",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-apisix-old",controller:true}]},
+          spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        }
+      ]
+      + (if $include_observability then [
+        {
+          metadata:{name:"falcone-observability-new-bbx",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability","pod-template-hash":"new"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-observability-new",controller:true}]},
+          spec:{containers:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62"}]},
+          status:{phase:"Pending",containerStatuses:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",ready:false,state:{waiting:{reason:$observability_reason,message:("container has runAsNonRoot and image has non-numeric user (" + $observability_user + "), cannot verify user is non-root")}}}]}
+        }
+      ] else [] end)
+      + [
+        {
+          metadata:{name:"falcone-observability-old",namespace:"in-falcone-staging",labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability","pod-template-hash":"old"},ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-observability-old",controller:true}]},
+          spec:{containers:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62"}]},
+          status:{phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",ready:true,state:{running:{startedAt:"2026-08-09T00:00:00Z"}}}]}
+        }
+      ]
+      + (if $include_extra then [
+        {
+          metadata:{name:"falcone-control-plane-new-bbx",namespace:"in-falcone-staging",ownerReferences:[{apiVersion:"apps/v1",kind:"ReplicaSet",name:"falcone-control-plane-new",controller:true}]},
+          spec:{containers:[{name:"control-plane",image:"ghcr.io/gntik-ai/in-falcone-control-plane:0.3.1"}]},
+          status:{phase:"Pending",containerStatuses:[{name:"control-plane",image:"ghcr.io/gntik-ai/in-falcone-control-plane:0.3.1",ready:false,state:{waiting:{reason:"CreateContainerConfigError",message:"container has runAsNonRoot and image has non-numeric user (nobody), cannot verify user is non-root"}}}]}
+        }
+      ] else [] end)
+    )}'
+}
+
+r23_deployments_json() {
+  apisix_available=3
+  observability_available=1
+  if [ "$scenario" = "r23-nonnumeric-availability-drift" ]; then
+    observability_available=0
+  fi
+  jq -nc --argjson apisix_available "$apisix_available" --argjson observability_available "$observability_available" \
+    '{apiVersion:"apps/v1",kind:"DeploymentList",items:[
+      {
+        metadata:{name:"falcone-apisix",namespace:"in-falcone-staging",generation:23,labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix"}},
+        spec:{replicas:3,selector:{matchLabels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix"}},template:{metadata:{labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"apisix"}},spec:{containers:[{name:"apisix",image:"docker.io/apache/apisix:3.10.0-debian",securityContext:{runAsNonRoot:true}}]}}},
+        status:{observedGeneration:23,replicas:4,updatedReplicas:1,availableReplicas:$apisix_available,unavailableReplicas:1}
+      },
+      {
+        metadata:{name:"falcone-observability",namespace:"in-falcone-staging",generation:23,labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability"}},
+        spec:{replicas:1,selector:{matchLabels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability"}},template:{metadata:{labels:{"app.kubernetes.io/instance":"falcone","app.kubernetes.io/name":"observability"}},spec:{containers:[{name:"observability",image:"docker.io/prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",securityContext:{runAsNonRoot:true}}]}}},
+        status:{observedGeneration:23,replicas:2,updatedReplicas:1,availableReplicas:$observability_available,unavailableReplicas:1}
+      }
+    ]}'
+}
+
+case "$scenario" in
+  r23-nonnumeric-*)
+    case "$args" in
+      "-n in-falcone-staging get pods"*"-o json")
+        case "$args" in
+          *"app.kubernetes.io/name=apisix"*)
+            r23_nonnumeric_pods_json | jq '{apiVersion,kind,items:[.items[] | select(.metadata.labels["app.kubernetes.io/name"] == "apisix")]}'
+            ;;
+          *"app.kubernetes.io/name=observability"*)
+            r23_nonnumeric_pods_json | jq '{apiVersion,kind,items:[.items[] | select(.metadata.labels["app.kubernetes.io/name"] == "observability")]}'
+            ;;
+          *)
+            r23_nonnumeric_pods_json
+            ;;
+        esac
+        exit 0
+        ;;
+      "-n in-falcone-staging get deployments"*"-o json"|\
+      "-n in-falcone-staging get deployments.apps"*"-o json")
+        r23_deployments_json
+        exit 0
+        ;;
+      "-n in-falcone-staging get deployment falcone-apisix -o json")
+        r23_deployments_json | jq '.items[] | select(.metadata.name == "falcone-apisix")'
+        exit 0
+        ;;
+      "-n in-falcone-staging get deployment falcone-observability -o json")
+        r23_deployments_json | jq '.items[] | select(.metadata.name == "falcone-observability")'
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+
+case "$scenario" in
+  r22-immutable-*|r23-nonnumeric-*)
+    case "$args" in
+      "-n in-falcone-staging get pvc falcone-documentdb-data -o json"|\
+      "-n in-falcone-staging get pvc falcone-kafka-data -o json"|\
+      "-n in-falcone-staging get pvc falcone-observability-data -o json"|\
+      "-n in-falcone-staging get pvc falcone-postgresql-data -o json"|\
+      "-n in-falcone-staging get pvc data-filer-falcone-seaweedfs-filer-0 -o json"|\
+      "-n in-falcone-staging get pvc data-in-falcone-staging-falcone-seaweedfs-master-0 -o json")
+        set -- $args
+        r22_pvc_json "$5"
+        exit 0
+        ;;
+      "-n in-falcone-staging get pvc -o json")
+        printf '{"apiVersion":"v1","kind":"PersistentVolumeClaimList","items":['
+        separator=""
+        for resource_name in \
+          falcone-documentdb-data falcone-kafka-data falcone-observability-data falcone-postgresql-data \
+          data-filer-falcone-seaweedfs-filer-0 data-in-falcone-staging-falcone-seaweedfs-master-0; do
+          printf '%s' "$separator"
+          r22_pvc_json "$resource_name" | tr -d '\n'
+          separator=,
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+      "-n in-falcone-staging get statefulset falcone-seaweedfs-filer -o json"|\
+      "-n in-falcone-staging get statefulsets.apps falcone-seaweedfs-filer -o json")
+        r22_statefulset_json falcone-seaweedfs-filer
+        exit 0
+        ;;
+      "-n in-falcone-staging get statefulset falcone-seaweedfs-master -o json"|\
+      "-n in-falcone-staging get statefulsets.apps falcone-seaweedfs-master -o json")
+        r22_statefulset_json falcone-seaweedfs-master
+        exit 0
+        ;;
+      "-n in-falcone-staging get statefulset -o json"|\
+      "-n in-falcone-staging get statefulsets.apps -o json")
+        printf '{"apiVersion":"apps/v1","kind":"StatefulSetList","items":['
+        r22_statefulset_json falcone-seaweedfs-filer | tr -d '\n'
+        printf ','
+        r22_statefulset_json falcone-seaweedfs-master | tr -d '\n'
+        printf ']}\n'
+        exit 0
+        ;;
+    esac
+    ;;
+esac
 
 case "$args" in
   "get namespace in-falcone-staging")
@@ -92,6 +321,26 @@ case "$args" in
     esac
     exit 0
     ;;
+  "-n in-falcone-staging get deployment falcone-control-plane -o json")
+    signing_mode="legacy"
+    signing_managed="false"
+    signing_name="falcone-webhook-signing-key-c25-legacy"
+    signing_key="key"
+    signing_id="wk1:5fc9546bfa1d386a4d27fd80823bb1fe679ddf9856ba96cc5fddab79189b50cd"
+    case "$scenario" in
+      custody-deployment-missing)
+        printf '{"metadata":{"name":"falcone-control-plane","namespace":"in-falcone-staging"},"spec":{"template":{"metadata":{"annotations":{}},"spec":{"containers":[{"name":"control-plane","env":[]}]}}}}\n'
+        exit 0
+        ;;
+      custody-deployment-mode-drift) signing_mode="canonical-v1" ;;
+      custody-deployment-managed-drift) signing_managed="true" ;;
+      custody-deployment-reference-drift) signing_name="another-reference" ;;
+      custody-deployment-id-drift) signing_id="canonical-v1:unexpected" ;;
+    esac
+    printf '{"metadata":{"name":"falcone-control-plane","namespace":"in-falcone-staging"},"spec":{"template":{"metadata":{"annotations":{"in-falcone.io/webhook-key-mode":"%s","in-falcone.io/webhook-key-request-id":"c25-staging-adopt-20260723-01","in-falcone.io/webhook-key-action":"none","in-falcone.io/webhook-key-id":"%s"}},"spec":{"containers":[{"name":"control-plane","env":[{"name":"WEBHOOK_SIGNING_KEY","valueFrom":{"secretKeyRef":{"name":"%s","key":"%s","optional":false}}},{"name":"WEBHOOK_SIGNING_KEY_MODE","value":"%s"},{"name":"WEBHOOK_SIGNING_KEY_MANAGED","value":"%s"}]}]}}}}\n' \
+      "$signing_mode" "$signing_id" "$signing_name" "$signing_key" "$signing_mode" "$signing_managed"
+    exit 0
+    ;;
   "-n secret-store logs job/openbao-auth-reconcile")
     upgrades=0; [ ! -f "$helm_state" ] || upgrades="$(cat "$helm_state")"
     if [ "$scenario" = "post-no-root-health-regression" ] && [ "$upgrades" -ge 2 ]; then
@@ -142,6 +391,12 @@ case "$args" in
     exit 0
     ;;
 esac
+
+if [ "$args" = "create --dry-run=client -f - -o json" ]; then
+  python3 -c 'import json,sys,yaml; json.dump(yaml.safe_load(sys.stdin.read()),sys.stdout)'
+  printf '\n'
+  exit 0
+fi
 
 printf 'unexpected kubectl fixture invocation: %s\n' "$args" >&2
 exit 2

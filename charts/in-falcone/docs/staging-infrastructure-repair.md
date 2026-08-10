@@ -1,4 +1,4 @@
-# Staging infrastructure repair (chart 0.4.6)
+# Staging infrastructure repair (chart 0.4.10)
 
 Verified source baseline: `gntik-ai/falcone-charts` commit
 `e05f9e8cea4c4cc80573bc7ef0693fb42d47cd07`, 2026-08-09. Upgrade anchor:
@@ -10,13 +10,33 @@ acceptance gates.
 
 ## Status, outcome, and exclusions
 
-Chart 0.4.6 carries the 0.4.3 repair and the same six first-party images that
-chart 0.4.4 repinned to Falcone main `61540248`, without changing public APIs or
-Falcone product source. Chart 0.4.6 corrects only the exact dependency-version
-boundary that blocked the 0.4.5 live pre-mutation apply — nested parsing yielded
-`0.2.2` instead of the target chart — and is an immutable republish with no
-overwrite of the published 0.4.5 artifact and no API, schema,
-storage, migration, authorization, or runtime contract change.
+Chart 0.4.10 carries the 0.4.9 repair and repins all six first-party images to
+Falcone main `d9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc`, published by successful
+`release-images` run `31337244501` as tag `0.6.6-main-d9cd0f6b`. Chart 0.4.6
+corrected the dependency-version boundary
+that blocked 0.4.5, but its live Phase-A apply then proved a second migration
+gap: all fourteen canonical Falcone `ExternalSecret` declarations already
+existed without Helm owner metadata, so Helm refused to import the first one
+before the release revision advanced. Chart 0.4.7 adds only the exact,
+fail-closed ownership migration for those fourteen declarations. It does not
+overwrite the published 0.4.5 or 0.4.6 artifacts and changes no API, schema,
+storage, authorization, image, or runtime contract.
+The first real 0.4.8 Phase-A attempt then proved a third migration gap: using
+the staging profile without `--reuse-values` omitted non-secret revision-20
+storage values and asked Kubernetes to change four bound PVCs plus two immutable
+SeaweedFS claim templates. Revision 22 failed before any PVC deletion. Chart
+0.4.9 validates the exact failed-history fingerprint and public storage metadata,
+then passes the validated storageClass and size values explicitly to every
+render, diff and upgrade. Published chart 0.4.8 remains unchanged.
+The real 0.4.9 Phase-A rollout then exposed a fourth migration gap: vanilla
+Kubernetes rejected the new APISIX and Prometheus Pods because both images
+declare named users while the base chart asserted `runAsNonRoot` without a
+numeric identity. Revision 23 was canceled after the exact failure was captured;
+the old three APISIX replicas and the old Prometheus replica remained Ready, and
+the pgvector PVC was not touched. Chart 0.4.10 assigns the verified image
+UID/GID 636:636 to APISIX and 65534:65534 to Prometheus. The OpenShift restricted
+render still removes fixed identities so its SCC assigns an allowed arbitrary
+UID/GID. Published charts 0.4.8 and 0.4.9 remain immutable.
 It consumes (but never adopts) an administrator-owned
 External Secrets Operator, converts OpenBao Kubernetes auth to its rotating
 pod-local reviewer identity, fixes FerretDB's non-root init identity and rollout,
@@ -57,6 +77,16 @@ Never put a ServiceAccount JWT, OpenBao token, unseal material, Secret value,
 tenant payload, kubeconfig, or backup content in values, arguments, logs, diffs,
 evidence, or tickets. The runbook inspects metadata and conditions only.
 
+For the revision-20 anchor only, Phase A prevalidates the exact fourteen live
+Falcone declarations against the package render after normalizing ESO CRD
+defaults. All fourteen are checked before any patch. Each object must have all
+three Helm owner markers absent or the exact `Helm`/`falcone`/
+`in-falcone-staging` tuple from an idempotent retry. Partial/foreign ownership,
+identity drift, spec drift, UID drift, or resourceVersion drift fails closed.
+Apply adopts only an absent tuple using a single metadata-only JSON patch guarded
+by the observed UID and resourceVersion; it never reads a generated Secret or
+uses `--take-ownership`.
+
 ## Canonical staging configuration
 
 Use `values/staging.yaml`; do not reproduce these settings with imperative
@@ -67,12 +97,12 @@ these immutable digests:
 
 | Workload/runtime | Approved digest |
 |---|---|
-| control-plane | `sha256:adead18f61c601b016b46af29bcb8d3959bb7956cde4f37775fff6abf6278253` |
-| control-plane-executor | `sha256:91c5e8dbc66cf2a10a4c7545d2822624f165f9d39fa3847e5645ed394ef4aa6c` |
-| web-console | `sha256:9c540d1c12f3adf9efbb80a08a314b1dd2b3a3e1443784125a020b9345026191` |
-| workflow-worker | `sha256:fd98a3683aa3457bfda00ea05f1563cd398b951fad22af4f2b7e6b27b038087d` |
-| function runtime | `sha256:3329ffdd4a4f97f5dd6818f256507789495fc21d4f0d2a7fdfdf3148a4d15613` |
-| MCP runtime | `sha256:03f1eeaf932a3c87d581e596645f27f3a5d3da04df4b59341bd23fe32e9abfcb` |
+| control-plane | `sha256:26bb5ff1caa0ffbd9f902b5da645fa69caa9153ff6d19b28eda640f35f9c4254` |
+| control-plane-executor | `sha256:94809c39149cb6d2aa12a606f5b7db19d8365e1a857b83bcd45405554116feae` |
+| web-console | `sha256:4ccb885b4e15637e68f409fcedf93f180397fad3d6ccf331961d41e43af8c868` |
+| workflow-worker | `sha256:0520d57d36ee1383c2077388eb4880023f3b5c11536107151a1e01657001e8aa` |
+| function runtime | `sha256:b50e93fb529a2129daa4e682ea4ae3741967a649c5fc1cc5f2f2b6588eb1a0fd` |
+| MCP runtime | `sha256:f0bb4c639f08c40c650e3f2b45a0d3c546fa84b0ae5d2eb9a4153860ec06a162` |
 
 Render and schema-check before any environment action:
 
@@ -86,7 +116,9 @@ helm template falcone charts/in-falcone \
 Expected: lint succeeds; the render contains no object whose metadata namespace
 is `external-secrets`; the six images contain the digests above; pgvector uses
 `local-path` and `fsn1`; FerretDB has UID 999, `maxUnavailable: 0`, and
-`maxSurge: 1`.
+`maxSurge: 1`; APISIX has `runAsUser`/`runAsGroup` 636; and Prometheus has
+`runAsUser`/`runAsGroup` 65534. Both retain `runAsNonRoot`. An OpenShift
+restricted render must omit those fixed APISIX and Prometheus identities.
 
 ## Fresh installation
 
@@ -146,7 +178,7 @@ ReplicaSet must continue serving the previous endpoint count until a replacement
 passes `/debug/readyz`. A stalled replacement should reach ProgressDeadlineExceeded
 without scaling every old endpoint away. Do not delete the old ReplicaSet.
 
-## Revision-20 upgrade: dry run and Phase A
+## Revision-20 or admitted revision-23 upgrade: dry run and Phase A
 
 Do not make shared staging the first target. Rehearse revision 20, injected
 reviewer/RBAC/network/Ferret/readiness failures, retry, Phase B, and forward
@@ -170,7 +202,7 @@ cluster-scoped objects. It never reads a Helm release manifest or Secret data.
 Before apply, create two separate, current, metadata-only JSON attestations:
 
 - `Revision20BackupEvidence` identifies exact context/namespace/release,
-  revision 20, chart 0.4.1, target repair chart 0.4.6, published package digest,
+  revision 20, chart 0.4.1, target repair chart 0.4.10, published package digest,
   a non-secret backup reference, `verified: true`, `observedAt`, and
   `validUntil`;
 - `Revision20ParityEvidence` binds the same target and package digest to a
@@ -178,7 +210,7 @@ Before apply, create two separate, current, metadata-only JSON attestations:
 
 Opaque strings are not apply evidence. Expired, malformed, reused, differently
 targeted, or package-mismatched attestations fail before mutation.
-For a real apply the tool pulls chart 0.4.6 from
+For a real apply the tool pulls chart 0.4.10 from
 `oci://ghcr.io/gntik-ai/charts/in-falcone`, verifies the registry-reported digest
 against both attestations, and renders/applies that extracted artifact and its
 own staging profile. It does not apply an unbound checkout after merely comparing
@@ -192,8 +224,49 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --phase-a --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.6/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.10/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
+
+For the admitted failed 0.4.8 attempt, the same two evidence documents must be
+retargeted to the published 0.4.10 digest and the one-use confirmation is instead:
+
+```text
+default/in-falcone-staging/falcone@22/in-falcone-0.4.8->in-falcone-0.4.10/sha256:PUBLISHED_PACKAGE_DIGEST
+```
+
+For revision 23, preflight additionally requires the exact public history chain:
+revision 20 is deployed chart 0.4.1 with `Upgrade complete`; revision 22 is the
+failed chart-0.4.8 six-resource immutable-storage rejection; and revision 23 is
+failed chart 0.4.9 with exactly `Upgrade "falcone" failed: context canceled`.
+It then verifies the two Deployments and their Pods by labels, images,
+ReplicaSet ownership, observed generation, replica counts, availability and
+waiting status. Exactly one APISIX and one Prometheus replacement must be
+Pending with their named-user `CreateContainerConfigError`, while three APISIX
+and one Prometheus Pods remain Ready. Any extra, missing or changed failure,
+image, owner, count, message or availability fails before mutation. It reads no
+Pod logs, Secret payloads or Helm release manifest.
+
+Revision-23 apply uses fresh backup/parity attestations bound to chart 0.4.10 and
+the published package digest, plus this exact one-use confirmation:
+
+```bash
+charts/in-falcone/migrations/revision-20-forward-recovery.sh \
+  --apply \
+  --backup-attestation /secure/path/revision20-backup.json \
+  --parity-attestation /secure/path/revision20-parity.json \
+  --confirm-target 'default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.10/sha256:PUBLISHED_PACKAGE_DIGEST'
+```
+
+Because revision 23 is itself a failed Phase-A attempt, forward recovery
+delegates to the two-pass Phase-A implementation and does not accept or
+fabricate a Phase-A attestation. It does not use `--atomic`, `--reuse-values`,
+rollback or PVC deletion.
+
+Before either apply, preflight reads only public metadata/spec and proves the
+four standalone PVCs are Bound `local-path` 10 Gi, the filer/master immutable
+claim templates remain `hcloud-volumes` 10 Gi, and their historical child PVCs
+are Bound `local-path` 10 Gi. Any drift or a list/history mismatch invalidates
+the confirmation. The tool never uses `--reuse-values`.
 
 Phase A uses the retained recovery credential for one bounded auth repair when
 revision 20's expired reviewer mode prevents dedicated reconciler login, then
@@ -205,7 +278,7 @@ fourteen unique named ExternalSecrets Ready, FerretDB 2/2, and at least two
 Ready endpoints. Phase A does not delete or change the PVC.
 
 Create a fresh `StagingPhaseAAttestation` from that final metadata-only result.
-It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.6,
+It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.10,
 the same package digest, recovery-root disabled, auth unchanged/canary passed,
 store/ExternalSecret/FerretDB health, owner-inventory digest, image-set digest,
 and a short `observedAt`/`validUntil` window. Phase B rejects a missing, stale,
@@ -238,7 +311,7 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
   --phase-a-attestation /secure/path/phase-a.json \
-  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.6/sha256:PUBLISHED_PACKAGE_DIGEST' \
+  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.10/sha256:PUBLISHED_PACKAGE_DIGEST' \
   --pvc-uid PVC-UID-FROM-PREFLIGHT \
   --confirm-pvc falcone-postgresql-vector-data/PVC-UID-FROM-PREFLIGHT
 ```
@@ -290,7 +363,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
 ```
 
 After review, its apply requires the actual
-`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.6/sha256:PUBLISHED_PACKAGE_DIGEST`
+`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.10/sha256:PUBLISHED_PACKAGE_DIGEST`
 confirmation. It revalidates the same three attestations, secret-suppressed
 semantic owner diff, and external owner metadata. It never deletes a PVC or
 returns to an old release; it reapplies canonical values and waits for exact
@@ -314,7 +387,8 @@ static rendering is not live proof.
 
 ## Compatibility and provenance
 
-The supported repair anchor is chart 0.4.1 revision 20 to chart 0.4.6,
+The supported repair anchor is chart 0.4.1 revision 20, including the admitted
+failed 0.4.8/r22 and 0.4.9/r23 chain, to chart 0.4.10,
 `appVersion` 0.3.1. Chart 0.4.2 already supplied externally managed ESO packaging
 but not the reviewer, FerretDB, storage, or image repair. Exact package/OCI digest
 must be recorded after the merged source commit is built; source rendering alone
