@@ -31,18 +31,47 @@ the fix is ordering and a rendered-manifest invariant rather than either root ca
   than the literal: across all four lifecycle actions, no `pre-upgrade` hook may sort at
   or after the quiesce. A hook added later at any weight fails the suite by name.
 - Wire that suite into `tests/webhook-database-chart-ci.test.sh`.
-- Ship chart `0.4.11` and its release notes.
+- Deliberately **no chart version bump** — see "Release sequencing" below.
 
 ## Impact
 
 Affected source is limited to `charts/in-falcone/templates/webhook-key-lifecycle.yaml`,
-`charts/in-falcone/Chart.yaml`, the release notes, two chart test files and this OpenSpec
-package. No Falcone product API or source change occurs, and no CLI behaviour changes.
+two chart test files and this OpenSpec package. No Falcone product API or source change
+occurs, and no CLI behaviour changes.
 
 The quiesce renders only when a release requests key lifecycle work — legacy adoption, or
 a `rotate`/`recover`/`finalize` rotation action. On every ordinary upgrade the five Jobs
 now ahead of it already run with the control plane up, so this puts the lifecycle path on
 the same footing as the path that has always been taken rather than creating a new one.
+
+## Release sequencing — the version bump is deferred on purpose
+
+The repo convention is that each chart fix bumps the version and ships release notes.
+This change does neither, because `0.4.10` is currently bound as the **immutable target of
+the pending staging recovery**, and staging has not been recovered yet — the release is at
+revision 23 `failed`.
+
+Bumping the working tree to `0.4.11` makes
+`tests/blackbox/staging-infrastructure/revision23-numeric-user-forward-recovery-contract.test.mjs:138`
+fail (`the repaired chart must be published as immutable version 0.4.10`); it reads
+`helm show chart charts/in-falcone` from the tree. Verified: 21/21 pass at `0.4.10`, one
+assertion fails at `0.4.11`. The same constant appears across the recovery fixtures,
+attestation templates, `migrations/revision-20-forward-recovery.sh` and `migration.md`, and
+the recovery pulls the **published** `0.4.10` OCI artifact and verifies its registry digest.
+
+Re-pointing all of that to a version that is not published, before the recovery it gates has
+run, would be a larger and riskier change than the fix itself, and it would delay the
+recovery. So the ordering fix is proposed release-neutral, and how it is released is left as
+an explicit sequencing decision:
+
+1. Recover staging on published `0.4.10`, then bump to `0.4.11` carrying this fix, and
+   re-point the recovery contract's pinned constant at the historical `0.4.10` rather than
+   at the tree's live version. **Preferred** — smallest change, nothing jumps the queue.
+2. Bump now and re-point and re-publish the whole recovery package to `0.4.11` first.
+3. Merge release-neutral and let the next version bump, whatever it is, carry the fix.
+
+Note that this fix and that recovery interact: the recovery is itself a `helm upgrade` of a
+release already in `failed` state, which is exactly the operation #11 makes hazardous.
 
 ## Exclusions and gates
 
