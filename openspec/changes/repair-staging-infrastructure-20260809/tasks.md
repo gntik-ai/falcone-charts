@@ -30,5 +30,12 @@
 - [x] Update schemas, chart versions, release notes, detailed runbooks and OpenSpec.
 - [x] Run and record complete source/package validation on the final 0.4.11 diff.
 - [x] Independent system-reviewer decision for 0.4.11.
+- [x] Reproduce the revision-24 global-wait deadlock with the intentionally
+  Pending vector workload and add bbx-repair-staging-058.
+- [x] Add exact legacy ClusterSecretStore handoff and revision-24 fail-forward
+  contracts without reading Secret payloads or mutating the external ESO owner.
+- [x] Prepare chart 0.4.12 with explicit non-vector Phase-A rollout waits,
+  package-bound r24 recovery, detailed runbooks and release notes.
+- [x] Run complete source/package validation and independent review for 0.4.12.
 - [ ] Disposable clean-install and revision-20 upgrade/rollback/forward-recovery proof.
 - [ ] Separate shared-staging authorization and Phase-B JIT destructive confirmation.

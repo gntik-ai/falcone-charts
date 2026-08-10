@@ -1,6 +1,6 @@
 {
-  "targetVersion": "0.4.11",
-  "targetChart": "in-falcone-0.4.11",
+  "targetVersion": "0.4.12",
+  "targetChart": "in-falcone-0.4.12",
   "packageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "renderedApisixPodSecurityContext": {
     "fsGroup": 1001,
@@ -27,6 +27,215 @@
   "renderedChartVariants": {
     "duplicateApisixDeployment": false,
     "misplacedApisixContract": false
+  },
+  "phaseAPendingVector": {
+    "enabled": false,
+    "resource": "statefulset/falcone-postgresql-vector",
+    "requiredHealthyRollouts": [
+      "deployment/falcone-apisix",
+      "deployment/falcone-observability",
+      "deployment/falcone-control-plane",
+      "deployment/falcone-ferretdb"
+    ]
+  },
+  "legacyStoreHandoff": {
+    "enabled": false,
+    "initiallyHandedOff": false,
+    "externalSecretError": "could not get secret data from provider",
+    "live": {
+      "apiVersion": "external-secrets.io/v1beta1",
+      "kind": "ClusterSecretStore",
+      "metadata": {
+        "name": "openbao-backend",
+        "uid": "f70a5ffd-56f3-4b37-8119-d54ba1108b69",
+        "resourceVersion": "2400",
+        "labels": {
+          "app.kubernetes.io/name": "external-secrets",
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/part-of": "in-falcone",
+          "in-falcone.io/component": "eso"
+        },
+        "annotations": {
+          "helm.sh/hook": "post-install,post-upgrade",
+          "helm.sh/hook-weight": "0",
+          "meta.helm.sh/release-name": "falcone",
+          "meta.helm.sh/release-namespace": "in-falcone-staging"
+        }
+      },
+      "spec": {
+        "provider": {
+          "vault": {
+            "server": "https://openbao.secret-store.svc.cluster.local:8200",
+            "path": "secret",
+            "version": "v2",
+            "caProvider": {
+              "type": "Secret",
+              "name": "openbao-server-tls",
+              "key": "ca.crt",
+              "namespace": "secret-store"
+            },
+            "auth": {
+              "kubernetes": {
+                "mountPath": "kubernetes",
+                "role": "eso-role",
+                "serviceAccountRef": {
+                  "name": "eso-openbao-auth",
+                  "namespace": "external-secrets"
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "InvalidProviderConfig",
+            "message": "unable to create client"
+          }
+        ]
+      }
+    },
+    "desiredSpec": {
+      "provider": {
+        "vault": {
+          "server": "https://openbao.secret-store.svc.cluster.local:8200",
+          "path": "secret",
+          "version": "v2",
+          "caProvider": {
+            "type": "Secret",
+            "name": "openbao-server-tls",
+            "key": "ca.crt",
+            "namespace": "secret-store"
+          },
+          "auth": {
+            "kubernetes": {
+              "mountPath": "kubernetes",
+              "role": "eso-role",
+              "serviceAccountRef": {
+                "name": "eso-openbao-auth",
+                "namespace": "eso-system"
+              }
+            }
+          }
+        }
+      }
+    },
+    "serviceAccount": {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "eso-openbao-auth",
+        "namespace": "eso-system",
+        "uid": "5454b1cc-c2b4-4125-b2a8-a4762d3180c9",
+        "resourceVersion": "2300"
+      }
+    }
+  },
+  "revision24GlobalWait": {
+    "enabled": false,
+    "targetVersion": "0.4.12",
+    "targetChart": "in-falcone-0.4.12",
+    "packageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "release": {
+      "name": "falcone",
+      "namespace": "in-falcone-staging",
+      "revision": "24",
+      "chart": "in-falcone-0.4.11",
+      "status": "failed"
+    },
+    "description": "Upgrade \"falcone\" failed: resource PersistentVolumeClaim/in-falcone-staging/falcone-postgresql-vector-data not ready. status: InProgress, message: PVC is not Bound. phase: Pending\nresource StatefulSet/in-falcone-staging/falcone-postgresql-vector not ready. status: InProgress, message: Ready: 0/1\nresource ClusterSecretStore//openbao-backend not ready. status: InProgress, message: unable to create client\nresource ExternalSecret/in-falcone-staging/gateway-apisix-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/gateway-shared-secret not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/iam-identity-client not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/iam-keycloak-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/iam-superadmin not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-documentdb-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-documentdb-replication not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-encryption-key not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-ferretdb-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-kafka-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-postgresql-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-postgresql-vector-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-s3-credentials not ready. status: InProgress, message: could not get secret data from provider\nresource ExternalSecret/in-falcone-staging/platform-temporal-credentials not ready. status: InProgress, message: could not get secret data from provider\ncontext deadline exceeded",
+    "vectorPvc": {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "falcone-postgresql-vector-data",
+        "namespace": "in-falcone-staging",
+        "uid": "6c2f26b3-f1c3-47f6-805f-cd9fb709107b",
+        "resourceVersion": "2401"
+      },
+      "spec": {
+        "storageClassName": "hcloud-volumes",
+        "resources": {
+          "requests": {
+            "storage": "10Gi"
+          }
+        }
+      },
+      "status": {
+        "phase": "Pending"
+      }
+    },
+    "vectorStatefulSet": {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "falcone-postgresql-vector",
+        "namespace": "in-falcone-staging",
+        "uid": "3b44816b-1dfe-4c84-b9df-320695224149",
+        "generation": 2
+      },
+      "spec": {
+        "replicas": 1
+      },
+      "status": {
+        "observedGeneration": 2,
+        "replicas": 1,
+        "readyReplicas": 0
+      }
+    },
+    "vectorPod": {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "falcone-postgresql-vector-0",
+        "namespace": "in-falcone-staging",
+        "uid": "494d9397-fbc4-49a5-ae3a-e0983fbca84f",
+        "labels": {
+          "app.kubernetes.io/instance": "falcone",
+          "app.kubernetes.io/name": "postgresql-vector"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "name": "falcone-postgresql-vector",
+            "uid": "3b44816b-1dfe-4c84-b9df-320695224149",
+            "controller": true
+          }
+        ]
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "postgresql-vector",
+            "image": "docker.io/pgvector/pgvector:pg17"
+          }
+        ],
+        "volumes": [
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "falcone-postgresql-vector-data"
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Pending",
+        "conditions": [
+          {
+            "type": "PodScheduled",
+            "status": "False",
+            "reason": "Unschedulable",
+            "message": "0/1 nodes are available: pod has unbound immediate PersistentVolumeClaims."
+          }
+        ]
+      }
+    }
   },
   "convergedApisixPodSecurityContext": {
     "fsGroup": 1001,

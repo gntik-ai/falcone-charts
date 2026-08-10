@@ -18,13 +18,13 @@ const recoveryScript = path.join(
 );
 const exactFixturePath = path.join(helperDirectory, "revision23-partial-manual-recovery.json");
 const exactConfirmation =
-  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.11/" +
+  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.12/" +
   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const baseFixture = JSON.parse(fs.readFileSync(exactFixturePath, "utf8"));
 
 const shellQuote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
 
-const evidenceDocument = (kind, now, validUntil) => ({
+const evidenceDocument = (kind, now, validUntil, fixture) => ({
   apiVersion: "falcone.gntik.ai/v1",
   kind,
   target: {
@@ -35,8 +35,8 @@ const evidenceDocument = (kind, now, validUntil) => ({
     chart: "in-falcone-0.4.1"
   },
   repair: {
-    chart: "in-falcone-0.4.11",
-    packageDigest: baseFixture.packageDigest
+    chart: fixture.targetChart,
+    packageDigest: fixture.packageDigest
   },
   evidence: {
     observedAt: now,
@@ -51,7 +51,7 @@ const evidenceDocument = (kind, now, validUntil) => ({
   }
 });
 
-function runRecovery({mutate = () => {}, confirmation = exactConfirmation} = {}) {
+function runRecovery({mutate = () => {}, confirmation = exactConfirmation, apply = true} = {}) {
   const scenarioDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "falcone-bbx-r23-partial-"));
   const binDirectory = path.join(scenarioDirectory, "bin");
   const scenarioFixturePath = path.join(scenarioDirectory, "fixture.json");
@@ -65,7 +65,13 @@ function runRecovery({mutate = () => {}, confirmation = exactConfirmation} = {})
   const fixture = structuredClone(baseFixture);
   mutate(fixture);
   fs.writeFileSync(scenarioFixturePath, `${JSON.stringify(fixture)}\n`);
-  fs.writeFileSync(statePath, '{"upgrades":0}\n');
+  fs.writeFileSync(
+    statePath,
+    `${JSON.stringify({
+      upgrades: 0,
+      storeHandedOff: fixture.legacyStoreHandoff.initiallyHandedOff
+    })}\n`
+  );
   fs.writeFileSync(tracePath, "");
   fs.writeFileSync(mutationPath, "");
 
@@ -73,11 +79,11 @@ function runRecovery({mutate = () => {}, confirmation = exactConfirmation} = {})
   const validUntil = new Date(Date.now() + 60 * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
   fs.writeFileSync(
     backupPath,
-    `${JSON.stringify(evidenceDocument("Revision20BackupEvidence", now, validUntil))}\n`
+    `${JSON.stringify(evidenceDocument("Revision20BackupEvidence", now, validUntil, fixture))}\n`
   );
   fs.writeFileSync(
     parityPath,
-    `${JSON.stringify(evidenceDocument("Revision20ParityEvidence", now, validUntil))}\n`
+    `${JSON.stringify(evidenceDocument("Revision20ParityEvidence", now, validUntil, fixture))}\n`
   );
 
   for (const command of ["helm", "kubectl", "sha256sum"]) {
@@ -90,17 +96,20 @@ function runRecovery({mutate = () => {}, confirmation = exactConfirmation} = {})
   }
 
   try {
+    const recoveryArguments = apply
+      ? [
+          "--apply",
+          "--confirm-target",
+          confirmation,
+          "--backup-attestation",
+          backupPath,
+          "--parity-attestation",
+          parityPath
+        ]
+      : [];
     const result = spawnSync(
       recoveryScript,
-      [
-        "--apply",
-        "--confirm-target",
-        confirmation,
-        "--backup-attestation",
-        backupPath,
-        "--parity-attestation",
-        parityPath
-      ],
+      recoveryArguments,
       {
         cwd: repositoryRoot,
         encoding: "utf8",
@@ -152,14 +161,14 @@ function assertRejectedAfterFirstPhaseAUpgrade(result, drift) {
   const upgrades = result.mutations.split("\n").filter((line) => line.startsWith("helm upgrade "));
   assert.deepEqual(
     upgrades,
-    ["helm upgrade release=falcone version=0.4.11"],
+    ["helm upgrade release=falcone version=0.4.12"],
     `${drift} must stop after exactly the first Phase-A upgrade`
   );
 }
 
 export function registerRevision23PartialManualRecoveryContract() {
   test("bbx-repair-staging-057 admits only the exact revision-23 partial manual recovery", async (t) => {
-    await t.test("admits the exact partial recovery and applies immutable chart 0.4.11", () => {
+    await t.test("admits the exact partial recovery and applies immutable chart 0.4.12", () => {
       const result = runRecovery();
 
       assert.equal(
@@ -174,13 +183,13 @@ export function registerRevision23PartialManualRecoveryContract() {
       );
       assert.match(
         result.stdout,
-        /phase-a=applied revision=25 chart=in-falcone-0\.4\.11 package-digest=sha256:b{64}/
+        /phase-a=applied revision=25 chart=in-falcone-0\.4\.12 package-digest=sha256:b{64}/
       );
       assert.deepEqual(
         result.mutations.trim().split("\n"),
         [
-          "helm upgrade release=falcone version=0.4.11",
-          "helm upgrade release=falcone version=0.4.11"
+          "helm upgrade release=falcone version=0.4.12",
+          "helm upgrade release=falcone version=0.4.12"
         ]
       );
       assert.doesNotMatch(result.trace, /helm (rollback|uninstall)|kubectl .* (delete|scale) /);
@@ -362,6 +371,280 @@ export function registerRevision23PartialManualRecoveryContract() {
   });
 }
 
+export function registerRevision23PhaseAVectorPendingProgressContract() {
+  test("bbx-repair-staging-058 completes Phase A without globally waiting for the pending vector", () => {
+    const result = runRecovery({
+      mutate: (fixture) => {
+        fixture.phaseAPendingVector.enabled = true;
+      }
+    });
+
+    assert.equal(
+      result.status,
+      0,
+      [
+        "Phase A must not block on the deliberately Pending postgresql-vector workload",
+        `stdout:\n${result.stdout}`,
+        `stderr:\n${result.stderr}`,
+        `mutations:\n${result.mutations}`,
+        `public trace:\n${result.trace}`
+      ].join("\n")
+    );
+
+    const traceLines = result.trace.split("\n").filter(Boolean);
+    const upgradeIndexes = traceLines
+      .map((line, index) => line.startsWith("helm upgrade ") ? index : -1)
+      .filter((index) => index !== -1);
+    assert.equal(upgradeIndexes.length, 2, "Phase A and Phase B/JIT must each perform one upgrade");
+
+    const phaseAUpgrade = traceLines[upgradeIndexes[0]];
+    assert.doesNotMatch(
+      phaseAUpgrade,
+      /(?:^|\s)--wait(?:\s|$)/,
+      "Phase A must not use Helm's global wait while postgresql-vector is deliberately Pending"
+    );
+
+    const phaseATrace = traceLines.slice(upgradeIndexes[0] + 1, upgradeIndexes[1]);
+    for (const target of baseFixture.phaseAPendingVector.requiredHealthyRollouts) {
+      const [kind, name] = target.split("/");
+      const explicitWait = phaseATrace.some((line) =>
+        line.startsWith("kubectl ") &&
+        /\s(?:rollout status|wait)\s/.test(line) &&
+        new RegExp(`(?:^|\\s)${kind}(?:/|\\s+)${name}(?:\\s|$)`).test(line)
+      );
+      assert.ok(explicitWait, `Phase A must explicitly wait for healthy ${target}`);
+    }
+    assert.equal(
+      phaseATrace.some((line) =>
+        /\s(?:rollout status|wait)\s/.test(line) &&
+        line.includes(baseFixture.phaseAPendingVector.resource)
+      ),
+      false,
+      "Phase A must leave postgresql-vector Pending for Phase B/JIT"
+    );
+    assert.deepEqual(
+      result.mutations.trim().split("\n"),
+      [
+        "helm upgrade release=falcone version=0.4.12",
+        "helm upgrade release=falcone version=0.4.12"
+      ],
+      "the recovery must preserve exactly one Phase-A and one Phase-B/JIT mutation"
+    );
+  });
+}
+
+const enableRevision24GlobalWaitRecovery = (fixture) => {
+  const revision24 = fixture.revision24GlobalWait;
+  revision24.enabled = true;
+  fixture.legacyStoreHandoff.enabled = true;
+  fixture.phaseAPendingVector.enabled = true;
+  fixture.targetVersion = revision24.targetVersion;
+  fixture.targetChart = revision24.targetChart;
+  fixture.packageDigest = revision24.packageDigest;
+  fixture.release = structuredClone(revision24.release);
+  fixture.history = [
+    ...fixture.history,
+    {
+      revision: 24,
+      status: "failed",
+      chart: "in-falcone-0.4.11",
+      description: revision24.description
+    }
+  ];
+};
+
+const revision24Confirmation =
+  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.12/" +
+  baseFixture.revision24GlobalWait.packageDigest;
+
+function assertNoSecretReadsOrOwnershipEscape(result, contract) {
+  assert.doesNotMatch(
+    result.trace,
+    /kubectl .*\bget (?:secret|secrets)(?:\s|$)/,
+    `${contract} must not read Secret resources`
+  );
+  assert.doesNotMatch(result.trace, /(?:^|\s)--take-ownership(?:\s|$)/m, `${contract} forbids --take-ownership`);
+  assert.doesNotMatch(
+    result.mutations,
+    /kubectl (?:-n|--namespace) external-secrets .*\bpatch\b|kubectl \bpatch\b (?:deployment|serviceaccount|service)\S* (?:external-secrets|external-secrets-cert-controller|external-secrets-webhook)(?:\s|$)/,
+    `${contract} must not patch the administrator-owned ESO installation`
+  );
+}
+
+export function registerLegacyClusterSecretStoreHandoffContract() {
+  test("bbx-repair-staging-059 hands off the exact legacy ClusterSecretStore before Phase A", async (t) => {
+    await t.test("dry-run detects the exact legacy hook store without mutation", () => {
+      const result = runRecovery({mutate: enableRevision24GlobalWaitRecovery, apply: false});
+      assert.equal(result.status, 0, `exact legacy store dry-run failed:\n${result.stdout}\n${result.stderr}`);
+      assert.match(
+        result.stdout,
+        /legacy-clustersecretstore-handoff=required name=openbao-backend uid=f70a5ffd-56f3-4b37-8119-d54ba1108b69 resourceVersion=\S+/
+      );
+      assert.match(result.trace, /kubectl .*\bget clustersecretstore(?:s)?(?:\.external-secrets\.io)?\b.*\bopenbao-backend\b/);
+      assert.equal(result.mutations, "", "dry-run must not mutate the legacy store or Helm release");
+      assertNoSecretReadsOrOwnershipEscape(result, "legacy store dry-run");
+    });
+
+    await t.test("apply performs one guarded JSON handoff and waits for all ESO readiness before Helm", () => {
+      const result = runRecovery({
+        mutate: enableRevision24GlobalWaitRecovery,
+        confirmation: revision24Confirmation
+      });
+      assert.equal(
+        result.status,
+        0,
+        `exact legacy store handoff failed:\n${result.stdout}\n${result.stderr}\n${result.trace}`
+      );
+      const traceLines = result.trace.split("\n").filter(Boolean);
+      const patchLines = traceLines.filter((line) => /kubectl .*\bpatch clustersecretstore/.test(line));
+      assert.equal(patchLines.length, 1, "apply must issue exactly one ClusterSecretStore JSON patch");
+      assert.match(patchLines[0], /(?:^|\s)--type(?:=|\s+)json(?:\s|$)/);
+      assert.match(patchLines[0], /f70a5ffd-56f3-4b37-8119-d54ba1108b69/);
+      assert.match(patchLines[0], /\/metadata\/resourceVersion/);
+      assert.match(patchLines[0], /helm\.sh~1hook/);
+      assert.match(patchLines[0], /helm\.sh~1hook-weight/);
+      assert.match(patchLines[0], /eso-system/);
+
+      const patchIndex = traceLines.indexOf(patchLines[0]);
+      const storeReadyIndex = traceLines.findIndex((line) =>
+        /kubectl .*\bwait\b.*clustersecretstore(?:\.external-secrets\.io)?\/openbao-backend/.test(line)
+      );
+      const externalSecretsReadyIndex = traceLines.findIndex((line) =>
+        /kubectl .*\bwait\b.*externalsecrets?(?:\.external-secrets\.io)?\b/.test(line)
+      );
+      const helmIndex = traceLines.findIndex((line) => line.startsWith("helm upgrade "));
+      assert.ok(patchIndex < storeReadyIndex, "store Ready wait must follow the guarded handoff patch");
+      assert.ok(storeReadyIndex < externalSecretsReadyIndex, "all 14 ExternalSecrets wait after store Ready");
+      assert.ok(externalSecretsReadyIndex < helmIndex, "ESO readiness must complete before Helm Phase A");
+      assert.equal(result.mutations.split("\n").filter((line) => /kubectl .*\bpatch\b/.test(line)).length, 1);
+      assertNoSecretReadsOrOwnershipEscape(result, "legacy store apply");
+    });
+
+    await t.test("retry on the desired store state is idempotent", () => {
+      const result = runRecovery({
+        mutate: (fixture) => {
+          enableRevision24GlobalWaitRecovery(fixture);
+          fixture.legacyStoreHandoff.initiallyHandedOff = true;
+        },
+        confirmation: revision24Confirmation
+      });
+      assert.equal(result.status, 0, `desired-state retry failed:\n${result.stdout}\n${result.stderr}`);
+      assert.equal(
+        result.mutations.split("\n").filter((line) => /kubectl .*\bpatch\b/.test(line)).length,
+        0,
+        "desired store retry must not patch again"
+      );
+      assert.match(result.trace, /kubectl .*\bget clustersecretstore/);
+      assert.match(result.trace, /kubectl .*\bwait\b.*clustersecretstore/);
+      assertNoSecretReadsOrOwnershipEscape(result, "desired store retry");
+    });
+
+    const driftCases = [
+      ["foreign Helm owner", (fixture) => {
+        fixture.legacyStoreHandoff.live.metadata.annotations["meta.helm.sh/release-name"] = "foreign";
+      }],
+      ["hook annotation drift", (fixture) => {
+        fixture.legacyStoreHandoff.live.metadata.annotations["helm.sh/hook-weight"] = "1";
+      }],
+      ["provider spec drift", (fixture) => {
+        fixture.legacyStoreHandoff.live.spec.provider.vault.auth.kubernetes.role = "foreign-role";
+      }],
+      ["store cardinality drift", (fixture) => {
+        fixture.legacyStoreHandoff.extraStores = [structuredClone(fixture.legacyStoreHandoff.live)];
+        fixture.legacyStoreHandoff.extraStores[0].metadata.uid = "duplicate-store-uid";
+      }],
+      ["store UID drift", (fixture) => {
+        fixture.legacyStoreHandoff.live.metadata.uid = "unexpected-store-uid";
+      }],
+      ["concurrent store resourceVersion drift", (fixture) => {
+        fixture.legacyStoreHandoff.concurrentResourceVersionDrift = true;
+      }]
+    ];
+    for (const [name, drift] of driftCases) {
+      await t.test(`rejects ${name} before Helm`, () => {
+        const result = runRecovery({
+          mutate: (fixture) => {
+            enableRevision24GlobalWaitRecovery(fixture);
+            drift(fixture);
+          },
+          confirmation: revision24Confirmation
+        });
+        assertRejectedBeforeMutation(result, name);
+        assert.match(
+          result.trace,
+          /kubectl .*\bget clustersecretstore(?:s)?(?:\.external-secrets\.io)?\b/,
+          `${name} must be rejected from public ClusterSecretStore evidence`
+        );
+        assert.doesNotMatch(result.trace, /^helm upgrade /m, `${name} reached Helm Phase A`);
+        assertNoSecretReadsOrOwnershipEscape(result, name);
+      });
+    }
+  });
+}
+
+export function registerRevision24GlobalWaitRecoveryContract() {
+  test("bbx-repair-staging-060 resumes only the exact revision-24 global-wait timeout", async (t) => {
+    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.12 passes", () => {
+      const result = runRecovery({
+        mutate: enableRevision24GlobalWaitRecovery,
+        confirmation: revision24Confirmation
+      });
+      assert.equal(
+        result.status,
+        0,
+        `exact r24 global-wait recovery failed:\n${result.stdout}\n${result.stderr}\n${result.trace}`
+      );
+      assert.match(result.stdout, /revision24-global-wait-recovery=validated/);
+      const traceLines = result.trace.split("\n").filter(Boolean);
+      const patchIndex = traceLines.findIndex((line) => /kubectl .*\bpatch clustersecretstore/.test(line));
+      const upgrades = traceLines.filter((line) => line.startsWith("helm upgrade "));
+      assert.equal(upgrades.length, 2, "r24 recovery must complete exactly two Phase-A passes");
+      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.12(?:\s|$)/.test(line)));
+      assert.ok(upgrades.every((line) => !/(?:^|\s)--wait(?:\s|$)/.test(line)));
+      assert.ok(patchIndex !== -1 && patchIndex < traceLines.indexOf(upgrades[0]), "store handoff precedes Helm");
+      assertNoSecretReadsOrOwnershipEscape(result, "r24 recovery");
+    });
+
+    const driftCases = [
+      ["history predecessor", (fixture) => {
+        fixture.history[0].status = "failed";
+      }, /helm history falcone/],
+      ["r24 description", (fixture) => {
+        fixture.history[3].description = fixture.history[3].description.replace(
+          "context deadline exceeded",
+          "context canceled"
+        );
+      }, /helm history falcone/],
+      ["legacy store", (fixture) => {
+        fixture.legacyStoreHandoff.live.metadata.annotations["helm.sh/hook"] = "post-upgrade";
+      }, /kubectl .*\bget clustersecretstore/],
+      ["ExternalSecret readiness", (fixture) => {
+        fixture.legacyStoreHandoff.forcedReadyNames = [fixture.externalSecretNames[0]];
+      }, /kubectl .*\bget externalsecrets/],
+      ["vector PVC", (fixture) => {
+        fixture.revision24GlobalWait.vectorPvc.metadata.uid = "unexpected-vector-pvc-uid";
+      }, /kubectl .*\bget (?:pvc|persistentvolumeclaim)\b.*falcone-postgresql-vector-data/],
+      ["ExternalSecret identity", (fixture) => {
+        fixture.externalSecretNames[0] = "unexpected-identity";
+      }, /kubectl .*\bget externalsecrets/]
+    ];
+    for (const [name, drift, evidencePattern] of driftCases) {
+      await t.test(`rejects ${name} drift before mutation`, () => {
+        const result = runRecovery({
+          mutate: (fixture) => {
+            enableRevision24GlobalWaitRecovery(fixture);
+            drift(fixture);
+          },
+          confirmation: revision24Confirmation
+        });
+        assertRejectedBeforeMutation(result, `r24 ${name}`);
+        assert.match(result.trace, evidencePattern, `r24 ${name} must be rejected from its public evidence`);
+        assertNoSecretReadsOrOwnershipEscape(result, `r24 ${name}`);
+      });
+    }
+  });
+}
+
 const [tool, ...args] = process.argv.slice(2);
 if (tool === "helm" || tool === "kubectl" || tool === "sha256sum") {
 const fixturePath = process.env.FALCONE_BBX_FIXTURE;
@@ -419,32 +702,56 @@ const externalSecretSpec = (name) => ({
   data: []
 });
 
-const externalSecrets = () => fixture.externalSecretNames.map((name, index) => ({
-  apiVersion: "external-secrets.io/v1beta1",
-  kind: "ExternalSecret",
-  metadata: {
-    name,
-    namespace: fixture.release.namespace,
-    uid: `external-secret-${index + 1}`,
-    resourceVersion: `${1000 + index}`,
-    labels: {
-      "app.kubernetes.io/managed-by": "Helm"
-    },
-    annotations: {
-      "meta.helm.sh/release-name": fixture.release.name,
-      "meta.helm.sh/release-namespace": fixture.release.namespace
-    }
-  },
-  spec: externalSecretSpec(name),
-  status: {
-    conditions: [
-      {
-        type: "Ready",
-        status: "True"
+const storeIsHandedOff = () =>
+  readState().storeHandedOff || fixture.legacyStoreHandoff.initiallyHandedOff;
+
+const liveClusterSecretStore = () => {
+  const store = structuredClone(fixture.legacyStoreHandoff.live);
+  if (fixture.legacyStoreHandoff.enabled && !storeIsHandedOff()) return store;
+  delete store.metadata.annotations["helm.sh/hook"];
+  delete store.metadata.annotations["helm.sh/hook-weight"];
+  store.metadata.resourceVersion = String(
+    Number(fixture.legacyStoreHandoff.live.metadata.resourceVersion) + 1
+  );
+  store.spec = structuredClone(fixture.legacyStoreHandoff.desiredSpec);
+  store.status = {
+    conditions: [{type: "Ready", status: "True", reason: "Valid", message: "store validated"}]
+  };
+  return store;
+};
+
+const externalSecrets = () => fixture.externalSecretNames.map((name, index) => {
+  const ready = !fixture.legacyStoreHandoff.enabled ||
+    storeIsHandedOff() ||
+    (fixture.legacyStoreHandoff.forcedReadyNames ?? []).includes(name);
+  return {
+    apiVersion: "external-secrets.io/v1beta1",
+    kind: "ExternalSecret",
+    metadata: {
+      name,
+      namespace: fixture.release.namespace,
+      uid: `external-secret-${index + 1}`,
+      resourceVersion: `${1000 + index}`,
+      labels: {
+        "app.kubernetes.io/managed-by": "Helm"
+      },
+      annotations: {
+        "meta.helm.sh/release-name": fixture.release.name,
+        "meta.helm.sh/release-namespace": fixture.release.namespace
       }
-    ]
-  }
-}));
+    },
+    spec: externalSecretSpec(name),
+    status: {
+      conditions: [{
+        type: "Ready",
+        status: ready ? "True" : "False",
+        ...(ready
+          ? {reason: "SecretSynced", message: "secret synced"}
+          : {reason: "SecretSyncedError", message: fixture.legacyStoreHandoff.externalSecretError})
+      }]
+    }
+  };
+});
 
 const renderedApisixDeployment = () => {
   const deployment = {
@@ -532,7 +839,7 @@ const renderedApisixDeployment = () => {
 
 const liveApisixDeployment = () => {
   const deployment = structuredClone(fixture.deployments["falcone-apisix"]);
-  if (readState().upgrades === 0) return deployment;
+  if (readState().upgrades === 0 && !fixture.revision24GlobalWait.enabled) return deployment;
   deployment.metadata.generation = 8;
   deployment.status.observedGeneration = 8;
   deployment.spec.template.spec.securityContext = structuredClone(
@@ -546,7 +853,7 @@ const liveApisixDeployment = () => {
 
 const liveObservabilityDeployment = () => {
   const deployment = structuredClone(fixture.deployments["falcone-observability"]);
-  if (readState().upgrades === 0) return deployment;
+  if (readState().upgrades === 0 && !fixture.revision24GlobalWait.enabled) return deployment;
   deployment.metadata.generation = 6;
   deployment.spec.replicas = 1;
   deployment.spec.template.spec.securityContext = structuredClone(
@@ -564,6 +871,45 @@ const liveObservabilityDeployment = () => {
     unavailableReplicas: 0
   };
   return deployment;
+};
+
+const livePods = () => {
+  if (!fixture.revision24GlobalWait.enabled) {
+    return [...fixture.pods, ...(fixture.extraGlobalPods ?? [])];
+  }
+  const apisixPods = fixture.pods
+    .filter((pod) => pod.metadata.labels?.["app.kubernetes.io/name"] === "apisix")
+    .map((pod) => {
+      const converged = structuredClone(pod);
+      converged.spec.securityContext = structuredClone(fixture.convergedApisixPodSecurityContext);
+      converged.spec.containers[0].securityContext = structuredClone(
+        fixture.convergedApisixContainerSecurityContext
+      );
+      return converged;
+    });
+  const source = fixture.pods.find((pod) => pod.metadata.name === "falcone-observability-current-a");
+  const observability = structuredClone(source);
+  observability.spec.securityContext = structuredClone(fixture.convergedObservabilityPodSecurityContext);
+  observability.spec.containers[0].securityContext = structuredClone(
+    fixture.convergedObservabilityContainerSecurityContext
+  );
+  observability.status = {
+    phase: "Running",
+    conditions: [{type: "Ready", status: "True"}],
+    containerStatuses: [{
+      name: "observability",
+      image: observability.spec.containers[0].image,
+      ready: true,
+      restartCount: 0,
+      state: {running: {startedAt: "2026-08-10T01:00:00Z"}},
+      user: {linux: {uid: 65534, gid: 65534}}
+    }]
+  };
+  return [
+    ...apisixPods,
+    observability,
+    structuredClone(fixture.revision24GlobalWait.vectorPod)
+  ];
 };
 
 const renderedChart = () => {
@@ -761,7 +1107,81 @@ spec:
     creationPolicy: Owner
     deletionPolicy: Retain
   data: []`);
-  return `${imageContract}\n${apisixDocument}\n${externalSecretDocuments.join("\n")}\n`;
+  const clusterSecretStoreDocument = fixture.legacyStoreHandoff.enabled
+    ? `---
+apiVersion: external-secrets.io/v1beta1
+kind: ClusterSecretStore
+metadata:
+  name: openbao-backend
+  labels:
+    app.kubernetes.io/name: external-secrets
+    app.kubernetes.io/instance: falcone
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: in-falcone
+    in-falcone.io/component: eso
+spec:
+  provider:
+    vault:
+      server: https://openbao.secret-store.svc.cluster.local:8200
+      path: secret
+      version: v2
+      caProvider:
+        type: Secret
+        name: openbao-server-tls
+        key: ca.crt
+        namespace: secret-store
+      auth:
+        kubernetes:
+          mountPath: kubernetes
+          role: eso-role
+          serviceAccountRef:
+            name: eso-openbao-auth
+            namespace: eso-system`
+    : "";
+  const renderedStorageDocuments = [
+    ["falcone-documentdb-data", "local-path"],
+    ["falcone-kafka-data", "local-path"],
+    ["falcone-observability-data", "local-path"],
+    ["falcone-postgresql-data", "local-path"],
+    ["falcone-postgresql-vector-data", "hcloud-volumes"]
+  ].map(([name, storageClassName]) => `---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${name}
+  namespace: ${fixture.release.namespace}
+spec:
+  storageClassName: ${storageClassName}
+  resources:
+    requests:
+      storage: 10Gi`).join("\n");
+  const renderedSeaweedfsDocuments = [
+    ["falcone-seaweedfs-filer", "data-filer", "filer"],
+    ["falcone-seaweedfs-master", "data-in-falcone-staging", "master"]
+  ].map(([name, claimName, component]) => `---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${name}
+  namespace: ${fixture.release.namespace}
+spec:
+  serviceName: ${name}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/instance: ${fixture.release.name}
+      app.kubernetes.io/component: ${component}
+  volumeClaimTemplates:
+    - metadata:
+        name: ${claimName}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: hcloud-volumes
+        resources:
+          requests:
+            storage: 10Gi`).join("\n");
+  return `${imageContract}\n${apisixDocument}\n${clusterSecretStoreDocument}\n${renderedStorageDocuments}\n${renderedSeaweedfsDocuments}\n${externalSecretDocuments.join("\n")}\n`;
 };
 
 if (tool === "helm") {
@@ -815,8 +1235,17 @@ if (tool === "helm") {
   }
   if (command === "upgrade") {
     assertTargetVersion();
+    if (fixture.legacyStoreHandoff.enabled && !storeIsHandedOff()) {
+      fail("LEGACY_CLUSTERSECRETSTORE_HANDOFF_REQUIRED_BEFORE_HELM");
+    }
     append(mutationPath, `helm upgrade release=${fixture.release.name} version=${fixture.targetVersion}`);
     const state = readState();
+    if (fixture.phaseAPendingVector.enabled && state.upgrades === 0 && args.includes("--wait")) {
+      fail(
+        "Error: UPGRADE FAILED: timed out waiting for the condition on " +
+        fixture.phaseAPendingVector.resource
+      );
+    }
     state.upgrades += 1;
     writeState(state);
     process.stdout.write(`Release ${fixture.release.name} upgraded to ${fixture.targetChart}\n`);
@@ -850,6 +1279,18 @@ if (kubectlCommand === "create") {
     json(renderedApisixDeployment());
     process.exit(0);
   }
+  if (kind === "ClusterSecretStore" && name === "openbao-backend") {
+    json({
+      apiVersion: "external-secrets.io/v1beta1",
+      kind: "ClusterSecretStore",
+      metadata: {
+        name,
+        labels: structuredClone(fixture.legacyStoreHandoff.live.metadata.labels)
+      },
+      spec: structuredClone(fixture.legacyStoreHandoff.desiredSpec)
+    });
+    process.exit(0);
+  }
   if (!name || !fixture.externalSecretNames.includes(name)) fail("FAKE_EXTERNAL_SECRET_RENDER_INVALID");
   json({
     apiVersion: "external-secrets.io/v1beta1",
@@ -861,11 +1302,74 @@ if (kubectlCommand === "create") {
 }
 
 if (kubectlCommand === "wait") {
+  const waitTarget = kubectlArgs.join(" ");
+  if (
+    fixture.legacyStoreHandoff.enabled &&
+    /(?:clustersecretstore|externalsecret)/.test(waitTarget) &&
+    !storeIsHandedOff()
+  ) {
+    fail("FAKE_ESO_READINESS_REQUIRES_STORE_HANDOFF");
+  }
+  process.exit(0);
+}
+
+if (kubectlCommand === "rollout" && kubectlArgs[1] === "status") {
   process.exit(0);
 }
 
 if (kubectlCommand === "logs" && kubectlArgs[1] === "job/openbao-auth-reconcile") {
   process.stdout.write("result=unchanged code=AUTH_METADATA_MATCHED canary=passed\n");
+  process.exit(0);
+}
+
+if (
+  kubectlCommand === "patch" &&
+  ["clustersecretstore", "clustersecretstores", "clustersecretstore.external-secrets.io"].includes(
+    kubectlArgs[1]
+  ) &&
+  kubectlArgs[2] === "openbao-backend"
+) {
+  const patchOptionIndex = kubectlArgs.findIndex((argument) => argument === "-p" || argument === "--patch");
+  if (patchOptionIndex === -1) fail("FAKE_STORE_JSON_PATCH_REQUIRED");
+  if (!kubectlArgs.some((argument, index) =>
+    argument === "--type=json" || (argument === "--type" && kubectlArgs[index + 1] === "json")
+  )) {
+    fail("FAKE_STORE_JSON_PATCH_TYPE_REQUIRED");
+  }
+  let operations;
+  try {
+    operations = JSON.parse(kubectlArgs[patchOptionIndex + 1]);
+  } catch {
+    fail("FAKE_STORE_JSON_PATCH_INVALID");
+  }
+  assert.deepEqual(operations, [
+    {
+      op: "test",
+      path: "/metadata/uid",
+      value: fixture.legacyStoreHandoff.live.metadata.uid
+    },
+    {
+      op: "test",
+      path: "/metadata/resourceVersion",
+      value: fixture.legacyStoreHandoff.live.metadata.resourceVersion
+    },
+    {op: "remove", path: "/metadata/annotations/helm.sh~1hook"},
+    {op: "remove", path: "/metadata/annotations/helm.sh~1hook-weight"},
+    {op: "replace", path: "/spec", value: fixture.legacyStoreHandoff.desiredSpec}
+  ]);
+  if (fixture.legacyStoreHandoff.concurrentResourceVersionDrift) {
+    fail(
+      "Error from server (Conflict): JSON Patch resourceVersion test failed: expected " +
+      fixture.legacyStoreHandoff.live.metadata.resourceVersion +
+      " actual " +
+      String(Number(fixture.legacyStoreHandoff.live.metadata.resourceVersion) + 1)
+    );
+  }
+  append(mutationPath, `kubectl ${kubectlArgs.join(" ")}`);
+  const state = readState();
+  state.storeHandedOff = true;
+  writeState(state);
+  json(liveClusterSecretStore());
   process.exit(0);
 }
 
@@ -886,8 +1390,34 @@ const selector = (() => {
 })();
 const allNamespaces = kubectlArgs.includes("-A") || kubectlArgs.includes("--all-namespaces");
 
-if (resource === "namespace" && name === fixture.release.namespace) {
+if (resource === "namespace" && [fixture.release.namespace, "eso-system"].includes(name)) {
   json({apiVersion: "v1", kind: "Namespace", metadata: {name}});
+  process.exit(0);
+}
+
+if (
+  resource === "serviceaccount" &&
+  namespace === "eso-system" &&
+  name === "eso-openbao-auth"
+) {
+  json(fixture.legacyStoreHandoff.serviceAccount);
+  process.exit(0);
+}
+
+if (
+  ["clustersecretstore", "clustersecretstore.external-secrets.io"].includes(resource) &&
+  name === "openbao-backend"
+) {
+  json(liveClusterSecretStore());
+  process.exit(0);
+}
+
+if (["clustersecretstores", "clustersecretstores.external-secrets.io"].includes(resource)) {
+  json({
+    apiVersion: "v1",
+    kind: "List",
+    items: [liveClusterSecretStore(), ...(fixture.legacyStoreHandoff.extraStores ?? [])]
+  });
   process.exit(0);
 }
 
@@ -936,8 +1466,16 @@ if (["replicaset", "replicasets", "replicaset.apps", "replicasets.apps", "rs"].i
   process.exit(0);
 }
 
+if (
+  ["pod", "pods"].includes(resource) &&
+  name === fixture.revision24GlobalWait.vectorPod.metadata.name
+) {
+  json(fixture.revision24GlobalWait.vectorPod);
+  process.exit(0);
+}
+
 if (resource === "pods") {
-  let items = [...fixture.pods, ...(fixture.extraGlobalPods ?? [])];
+  let items = livePods();
   if (!allNamespaces) {
     items = items.filter((item) => item.metadata.namespace === (namespace ?? fixture.release.namespace));
   }
@@ -955,6 +1493,10 @@ if (resource === "pods") {
 }
 
 if ((resource === "pvc" || resource === "persistentvolumeclaim") && name) {
+  if (name === fixture.revision24GlobalWait.vectorPvc.metadata.name) {
+    json(fixture.revision24GlobalWait.vectorPvc);
+    process.exit(0);
+  }
   const pvc = fixture.storage.pvcs[name];
   if (!pvc) fail(`fake pvc not found: ${name}`);
   json(pvc);
@@ -962,6 +1504,10 @@ if ((resource === "pvc" || resource === "persistentvolumeclaim") && name) {
 }
 
 if ((resource === "statefulset" || resource === "statefulset.apps") && name) {
+  if (name === fixture.revision24GlobalWait.vectorStatefulSet.metadata.name) {
+    json(fixture.revision24GlobalWait.vectorStatefulSet);
+    process.exit(0);
+  }
   const statefulSet = fixture.storage.statefulSets[name];
   if (!statefulSet) fail(`fake statefulset not found: ${name}`);
   json(statefulSet);
@@ -975,8 +1521,15 @@ if (resource === "configmap" && name) {
   process.exit(0);
 }
 
-if (resource === "externalsecrets.external-secrets.io") {
+if (["externalsecrets.external-secrets.io", "externalsecrets"].includes(resource)) {
   json({apiVersion: "v1", kind: "List", items: externalSecrets()});
+  process.exit(0);
+}
+
+if (["externalsecret.external-secrets.io", "externalsecret"].includes(resource) && name) {
+  const externalSecret = externalSecrets().find((item) => item.metadata.name === name);
+  if (!externalSecret) fail(`fake externalsecret not found: ${name}`);
+  json(externalSecret);
   process.exit(0);
 }
 

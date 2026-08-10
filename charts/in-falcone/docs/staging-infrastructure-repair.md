@@ -1,4 +1,4 @@
-# Staging infrastructure repair (chart 0.4.11)
+# Staging infrastructure repair (chart 0.4.12)
 
 Verified source baseline: `gntik-ai/falcone-charts` commit
 `e05f9e8cea4c4cc80573bc7ef0693fb42d47cd07`, 2026-08-09. Upgrade anchor:
@@ -10,7 +10,7 @@ acceptance gates.
 
 ## Status, outcome, and exclusions
 
-Chart 0.4.11 carries the 0.4.9 repair and repins all six first-party images to
+Chart 0.4.12 carries the 0.4.9 repair and repins all six first-party images to
 Falcone main `d9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc`, published by successful
 `release-images` run `31337244501` as tag `0.6.6-main-d9cd0f6b`. Chart 0.4.6
 corrected the dependency-version boundary
@@ -43,6 +43,16 @@ ConfigMap while Prometheus remained in the exact failed rollout. Because that
 new live precursor is not the state 0.4.10 admitted, chart 0.4.11 replaces the
 active recovery target rather than overwriting 0.4.10. Published charts 0.4.8,
 0.4.9 and 0.4.10 remain immutable.
+The first authorized 0.4.11 apply became failed revision 24 after all application
+rollouts converged: Helm's global `--wait` also waited for the deliberately
+Pending pgvector PVC/StatefulSet that Phase A must preserve. During that wait it
+also exposed the revision-20 `ClusterSecretStore/openbao-backend` hook still
+pointing at `external-secrets/eso-openbao-auth`; the current identity is
+`eso-system/eso-openbao-auth`. Chart 0.4.12 admits only that exact r24
+fingerprint, hands off the legacy store with a UID/resourceVersion-guarded patch,
+and replaces global Phase-A wait with explicit bounded rollout checks that omit
+only pgvector. Phase B retains global wait after the separately confirmed empty
+claim is recreated.
 It consumes (but never adopts) an administrator-owned
 External Secrets Operator, converts OpenBao Kubernetes auth to its rotating
 pod-local reviewer identity, fixes FerretDB's non-root init identity and rollout,
@@ -188,7 +198,7 @@ ReplicaSet must continue serving the previous endpoint count until a replacement
 passes `/debug/readyz`. A stalled replacement should reach ProgressDeadlineExceeded
 without scaling every old endpoint away. Do not delete the old ReplicaSet.
 
-## Revision-20 or admitted revision-23 upgrade: dry run and Phase A
+## Revision-20 or admitted revision-23/revision-24 upgrade: dry run and Phase A
 
 Do not make shared staging the first target. Rehearse revision 20, injected
 reviewer/RBAC/network/Ferret/readiness failures, retry, Phase B, and forward
@@ -223,7 +233,7 @@ cluster-scoped objects. It never reads a Helm release manifest or Secret data.
 Before apply, create two separate, current, metadata-only JSON attestations:
 
 - `Revision20BackupEvidence` identifies exact context/namespace/release,
-  revision 20, chart 0.4.1, target repair chart 0.4.11, published package digest,
+  revision 20, chart 0.4.1, target repair chart 0.4.12, published package digest,
   a non-secret backup reference, `verified: true`, `observedAt`, and
   `validUntil`;
 - `Revision20ParityEvidence` binds the same target and package digest to a
@@ -231,7 +241,7 @@ Before apply, create two separate, current, metadata-only JSON attestations:
 
 Opaque strings are not apply evidence. Expired, malformed, reused, differently
 targeted, or package-mismatched attestations fail before mutation.
-For a real apply the tool pulls chart 0.4.11 from
+For a real apply the tool pulls chart 0.4.12 from
 `oci://ghcr.io/gntik-ai/charts/in-falcone`, verifies the registry-reported digest
 against both attestations, and renders/applies that extracted artifact and its
 own staging profile. It does not apply an unbound checkout after merely comparing
@@ -245,14 +255,14 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --phase-a --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.11/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 For the admitted failed 0.4.8 attempt, the same two evidence documents must be
-retargeted to the published 0.4.11 digest and the one-use confirmation is instead:
+retargeted to the published 0.4.12 digest and the one-use confirmation is instead:
 
 ```text
-default/in-falcone-staging/falcone@22/in-falcone-0.4.8->in-falcone-0.4.11/sha256:PUBLISHED_PACKAGE_DIGEST
+default/in-falcone-staging/falcone@22/in-falcone-0.4.8->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST
 ```
 
 For revision 23, preflight additionally requires the exact public history chain:
@@ -279,7 +289,7 @@ single key and digest above are revalidated, and no other named-user error may
 exist in any namespace. Any different patch, mount, UID/GID, owner, count,
 status, ConfigMap content or global error fails before render or mutation.
 
-Revision-23 apply uses fresh backup/parity attestations bound to chart 0.4.11 and
+Revision-23 apply uses fresh backup/parity attestations bound to chart 0.4.12 and
 the published package digest, plus this exact one-use confirmation:
 
 ```bash
@@ -287,7 +297,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
   --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.11/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 Because revision 23 is itself a failed Phase-A attempt, forward recovery
@@ -295,10 +305,36 @@ delegates to the two-pass Phase-A implementation and does not accept or
 fabricate a Phase-A attestation. It does not use `--atomic`, `--reuse-values`,
 rollback or PVC deletion.
 
+Revision 24 is admitted only when Helm history also preserves the exact
+revision-20 deployed source, revision-22 immutable-storage failure and
+revision-23 canceled named-user failure; r24 itself must be failed chart 0.4.11
+with the exact vector-PVC/vector-StatefulSet, legacy-store, fourteen
+ExternalSecret and deadline-exceeded fingerprint. Public evidence must show the
+same unbound PVC UID, all non-vector workloads converged, APISIX 636:636,
+Prometheus 65534:65534, zero named-user failures, the exact legacy hook store,
+the `eso-system` ServiceAccount and exactly fourteen NotReady ExternalSecrets.
+Any history, resource, owner, spec, UID, resourceVersion, count, condition or
+identity drift fails before mutation.
+
+Dry-run reports whether the exact store requires handoff. Apply first validates
+its unique desired rendered object and exact legacy live form, then uses one
+JSON patch with UID and resourceVersion tests to remove only
+`helm.sh/hook`/`helm.sh/hook-weight` and replace the public spec. It never
+reads a Secret or patches the administrator-owned ESO release. The store and all
+fourteen ExternalSecrets must become Ready before Helm starts. Revision-24 apply
+uses fresh 0.4.12-bound backup/parity evidence and:
+
+```text
+default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST
+```
+
 Before the first mutation the recovery tool parses the rendered APISIX
 Deployment and requires pod and container UID/GID 636:636 plus the exact mount.
-After each Helm upgrade its health gate requires the same live APISIX identity
-and Prometheus container UID/GID 65534:65534. A convergence drift stops the
+Each Phase-A Helm command omits global `--wait`, whose resource set includes
+the intentionally Pending vector workload. After each upgrade the procedure
+waits boundedly for every Falcone Deployment, every non-vector Falcone
+StatefulSet and OpenBao, and its health gate requires the same live APISIX
+identity and Prometheus container UID/GID 65534:65534. A convergence drift stops the
 current Phase A, emits forward-recovery guidance and prevents the next pass.
 
 Before either apply, preflight reads only public metadata/spec and proves the
@@ -317,7 +353,7 @@ fourteen unique named ExternalSecrets Ready, FerretDB 2/2, and at least two
 Ready endpoints. Phase A does not delete or change the PVC.
 
 Create a fresh `StagingPhaseAAttestation` from that final metadata-only result.
-It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.11,
+It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.12,
 the same package digest, recovery-root disabled, auth unchanged/canary passed,
 store/ExternalSecret/FerretDB health, owner-inventory digest, image-set digest,
 and a short `observedAt`/`validUntil` window. Phase B rejects a missing, stale,
@@ -350,7 +386,7 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
   --phase-a-attestation /secure/path/phase-a.json \
-  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.11/sha256:PUBLISHED_PACKAGE_DIGEST' \
+  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST' \
   --pvc-uid PVC-UID-FROM-PREFLIGHT \
   --confirm-pvc falcone-postgresql-vector-data/PVC-UID-FROM-PREFLIGHT
 ```
@@ -402,7 +438,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
 ```
 
 After review, its apply requires the actual
-`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.11/sha256:PUBLISHED_PACKAGE_DIGEST`
+`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST`
 confirmation. It revalidates the same three attestations, secret-suppressed
 semantic owner diff, and external owner metadata. It never deletes a PVC or
 returns to an old release; it reapplies canonical values and waits for exact
@@ -427,7 +463,7 @@ static rendering is not live proof.
 ## Compatibility and provenance
 
 The supported repair anchor is chart 0.4.1 revision 20, including the admitted
-failed 0.4.8/r22 and 0.4.9/r23 chain, to chart 0.4.11,
+failed 0.4.8/r22, 0.4.9/r23 and admitted 0.4.11/r24 chain, to chart 0.4.12,
 `appVersion` 0.3.1. Chart 0.4.2 already supplied externally managed ESO packaging
 but not the reviewer, FerretDB, storage, or image repair. Exact package/OCI digest
 must be recorded after the merged source commit is built; source rendering alone

@@ -8,7 +8,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.11"
+EXPECTED_REPAIR_VERSION="0.4.12"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -78,12 +78,12 @@ actual_chart="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].ch
 actual_status="$(printf '%s' "$release_json" | jq -r 'if length == 1 then .[0].status else empty end')"
 [[ "$actual_release" == "$EXPECTED_RELEASE" && -n "$actual_revision" && -n "$actual_chart" && -n "$actual_status" ]] || die "TARGET_RELEASE_MISSING"
 
-# Revisions 22 and 23 are failed Phase-A applies, so a successful Phase-A
+# Revisions 22, 23, and 24 are failed Phase-A applies, so a successful Phase-A
 # attestation cannot exist yet. Reuse the single Phase-A implementation and
 # its two health gates instead of fabricating evidence or duplicating repair
 # logic here. In particular, forward recovery never invents a Phase-A
 # attestation for the admitted revision-23 named-image-user failure.
-if [[ "$actual_revision" == 22 || "$actual_revision" == 23 ]]; then
+if [[ "$actual_revision" == 22 || "$actual_revision" == 23 || "$actual_revision" == 24 ]]; then
   delegated_args=(--phase-a)
   [[ "$apply" == true ]] && delegated_args+=(--apply)
   [[ -z "$confirm_target" ]] || delegated_args+=(--confirm-target "$confirm_target")

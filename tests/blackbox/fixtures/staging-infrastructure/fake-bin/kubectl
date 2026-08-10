@@ -387,6 +387,7 @@ case "$args" in
   "-n in-falcone-staging delete pvc falcone-postgresql-vector-data --wait=true"|\
   "-n in-falcone-staging wait "*|\
   "wait "*|\
+  "-n secret-store rollout status statefulset/openbao --timeout=10m"|\
   "-n in-falcone-staging rollout status "*)
     exit 0
     ;;

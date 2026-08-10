@@ -150,7 +150,7 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.11,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.12,
   and neither path uses atomic upgrade or rollback to revision 20
 
 #### Scenario: Phase A encounters the admitted revision-22 immutable-field failure
@@ -174,7 +174,7 @@ confirmation.
   one new observability Pod are Pending with their full named-user
   `CreateContainerConfigError`, while three APISIX and one observability replicas
   from the prior ReplicaSets remain Ready
-- **THEN** Phase A targets immutable chart 0.4.11 and requires fresh backup and
+- **THEN** Phase A targets immutable chart 0.4.12 and requires fresh backup and
   parity evidence plus the exact source/target/package confirmation
 - **AND** it delegates to the existing two-pass Phase-A implementation without a
   fabricated Phase-A attestation, rollback, atomic upgrade or PVC deletion
@@ -194,8 +194,8 @@ confirmation.
 - **AND** that existing ConfigMap contains only `apisix.yaml` with the approved
   SHA-256, observability remains one Ready plus one exact Pending `nobody`
   named-user failure, and no other namespace has such a failure
-- **THEN** Phase A targets immutable chart 0.4.11, makes the APISIX identity and
-  mount declarative, and requires fresh 0.4.11-bound backup/parity evidence plus
+- **THEN** Phase A targets immutable chart 0.4.12, makes the APISIX identity and
+  mount declarative, and requires fresh 0.4.12-bound backup/parity evidence plus
   the exact one-use target/package confirmation
 - **AND** the rendered target SHALL contain APISIX pod and container UID/GID
   636:636, and each post-upgrade health gate SHALL observe that APISIX state plus
@@ -208,6 +208,53 @@ confirmation.
   or ConfigMap-content drift SHALL fail before mutation
 - **AND** any post-upgrade UID/GID or readiness drift SHALL fail its health gate,
   require forward recovery and prevent the next upgrade pass
+
+#### Scenario: Phase A does not wait globally for the intentionally Pending vector workload
+
+- **WHEN** the exact unbound vector PVC and its ordinal-zero StatefulSet Pod
+  remain Pending until the separately confirmed Phase B
+- **THEN** neither Phase-A Helm upgrade SHALL use global `--wait`
+- **AND** after each upgrade Phase A SHALL wait boundedly for every managed
+  Deployment, every managed non-vector StatefulSet and the OpenBao StatefulSet
+- **AND** it SHALL NOT scale, delete or wait for the vector StatefulSet in
+  Phase A
+- **AND** Phase B SHALL retain global Helm wait after the empty claim is
+  separately confirmed, deleted and recreated
+
+#### Scenario: Legacy ClusterSecretStore hook is handed off before Phase A
+
+- **WHEN** exactly one `ClusterSecretStore/openbao-backend` has the exact Helm
+  owner tuple, revision-20 post-install/post-upgrade hook annotations and public
+  provider spec whose sole desired drift is
+  `external-secrets/eso-openbao-auth` to `eso-system/eso-openbao-auth`
+- **THEN** dry-run SHALL report the handoff without mutation
+- **AND** apply SHALL compare one unique desired rendered store, then use one
+  JSON patch guarded by the live UID and resourceVersion to remove only the two
+  hook annotations and replace only the public store spec
+- **AND** retry of the exact desired store SHALL be idempotent
+- **AND** the store and exactly fourteen Falcone ExternalSecrets SHALL become
+  Ready before Helm upgrade
+- **AND** foreign owner, identity, spec, hook, cardinality, UID,
+  resourceVersion or readiness drift SHALL fail before Helm mutation
+- **AND** the procedure SHALL NOT read or patch a Secret, use
+  `--take-ownership`, or mutate any administrator-owned ESO object
+
+#### Scenario: Phase A resumes only the exact revision-24 global-wait timeout
+
+- **WHEN** the latest Helm entry is revision 24, failed chart 0.4.11, and its
+  description contains the exact vector PVC Pending, vector StatefulSet 0/1,
+  legacy store, fourteen ExternalSecret provider failures and deadline-exceeded
+  fingerprint
+- **AND** revisions 20, 22 and 23 retain their exact deployed/failed history,
+  the vector PVC retains its exact UID/Pending/no-volume/no-PV state, all
+  non-vector workloads are converged, APISIX is 3/3 at UID/GID 636,
+  Prometheus is 1/1 at UID/GID 65534 and no named-user error remains
+- **THEN** recovery SHALL target immutable chart 0.4.12 with fresh
+  package-bound backup/parity evidence and exact r24→0.4.12 confirmation
+- **AND** it SHALL complete the store handoff before the two non-atomic,
+  non-global-wait Phase-A passes
+- **AND** any history, failure description, store, ExternalSecret, PVC,
+  workload, identity or error-cardinality drift SHALL fail before mutation
 
 ### Requirement: Phase-A completion SHALL prove final no-root health
 
