@@ -4996,13 +4996,24 @@ temporal:
         type: Keyword
 
   # NetworkPolicy label contract (Decision 5 in design.md). Inbound to the frontend
-  # gRPC port is permitted ONLY from pods carrying these component labels. The
-  # sibling changes add-flows-control-plane-api (#365) and
-  # add-flows-dsl-interpreter-worker (#359) MUST set these labels on their pods.
+  # gRPC port is permitted ONLY from pods carrying these `app.kubernetes.io/component`
+  # labels.
+  #
+  # These MUST name components this chart actually renders. The list previously read
+  # [flows-api, flows-worker]: `flows-api` was reserved for add-flows-control-plane-api
+  # (#365), but no pod any chart artifact produces has ever carried it — flow execution
+  # lives in control-plane-executor, which is labelled `control-plane-executor` and was
+  # therefore denied. Every flow execution failed 503 TEMPORAL_UNAVAILABLE and zero
+  # workflows ever ran. See gntik-ai/falcone-charts#20 and gntik-ai/falcone#997.
+  #
+  # tests/networkpolicy-selector-reality.test.mjs now fails the render if any entry here
+  # selects no rendered pod, so this list cannot silently drift from reality again.
+  # A deployment whose flows API is a separate component appends it in its own values
+  # (tests/e2e/values-flows-e2e.yaml does exactly this).
   networkPolicy:
     enabled: true
     allowedComponents:
-      - flows-api
+      - control-plane-executor
       - flows-worker
 
   # Job knobs shared by the schema + bootstrap Jobs.

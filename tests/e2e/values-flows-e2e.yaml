@@ -88,11 +88,13 @@ controlPlane:
       value: falcone
     - name: PGDATABASE
       value: in_falcone
-  # NetworkPolicy label contract: the Temporal frontend NetworkPolicy (temporal/networkpolicy.yaml)
-  # only admits ingress from pods carrying app.kubernetes.io/component=flows-api.
-  # The chart's default podLabels is {} — must be set explicitly in e2e values.
-  podLabels:
-    app.kubernetes.io/component: flows-api
+  # This file used to stamp `app.kubernetes.io/component: flows-api` here, to satisfy the
+  # Temporal frontend NetworkPolicy's allow-list. It was removed with
+  # gntik-ai/falcone-charts#20: the control plane builds no Temporal client at all
+  # (every one lives in apps/control-plane-executor), so admitting it never made a flow
+  # execution work — it only made this suite green while every real deployment failed
+  # 503 TEMPORAL_UNAVAILABLE. This topology renders a real control-plane-executor, which
+  # the chart default now admits, so no override belongs here.
 
 workflowWorker:
   replicas: 1
