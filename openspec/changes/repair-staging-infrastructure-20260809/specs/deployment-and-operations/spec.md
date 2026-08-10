@@ -42,7 +42,10 @@ idempotent and SHALL NOT read/mutate KV payloads or policy documents. The server
 bootstrap and routine reconciler SHALL use distinct Kubernetes ServiceAccounts.
 The server identity SHALL have only TokenReview authority; bootstrap Secret
 authority SHALL be assigned only to the bootstrap identity; and routine metadata
-authority SHALL be assigned only to the reconciler identity.
+authority SHALL be assigned only to the reconciler identity. The ESO login role
+SHALL set `token_no_default_policy=true`; every token it issues to ESO or the
+canary SHALL contain exactly `functions,gateway,iam,platform` and SHALL NOT
+contain `default` or any additional policy.
 
 #### Scenario: Kubernetes identities are least-privilege and separate
 
@@ -69,6 +72,16 @@ authority SHALL be assigned only to the reconciler identity.
 
 - **WHEN** the exact role matches but canary login returns denied
 - **THEN** it fails with `ROLE_MATCHES_AUTH_STILL_DENIED` without touching KV/policies
+
+#### Scenario: Auth reconcile excludes the default policy from ESO tokens
+
+- **WHEN** auth reconciliation normalizes `eso-role` and either the canary or
+  `eso-system/eso-openbao-auth` authenticates through that role
+- **THEN** the role SHALL have `token_no_default_policy=true`
+- **AND** token lookup SHALL expose exactly the normalized policy set
+  `functions,gateway,iam,platform`, with neither `default` nor any other policy
+- **AND** the canary SHALL report `canary=passed` only after that exact metadata
+  check succeeds
 
 ### Requirement: FerretDB SHALL retain availability during the UID repair
 
@@ -150,7 +163,7 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.12,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.13,
   and neither path uses atomic upgrade or rollback to revision 20
 
 #### Scenario: Phase A encounters the admitted revision-22 immutable-field failure
@@ -174,7 +187,7 @@ confirmation.
   one new observability Pod are Pending with their full named-user
   `CreateContainerConfigError`, while three APISIX and one observability replicas
   from the prior ReplicaSets remain Ready
-- **THEN** Phase A targets immutable chart 0.4.12 and requires fresh backup and
+- **THEN** Phase A targets immutable chart 0.4.13 and requires fresh backup and
   parity evidence plus the exact source/target/package confirmation
 - **AND** it delegates to the existing two-pass Phase-A implementation without a
   fabricated Phase-A attestation, rollback, atomic upgrade or PVC deletion
@@ -194,8 +207,8 @@ confirmation.
 - **AND** that existing ConfigMap contains only `apisix.yaml` with the approved
   SHA-256, observability remains one Ready plus one exact Pending `nobody`
   named-user failure, and no other namespace has such a failure
-- **THEN** Phase A targets immutable chart 0.4.12, makes the APISIX identity and
-  mount declarative, and requires fresh 0.4.12-bound backup/parity evidence plus
+- **THEN** Phase A targets immutable chart 0.4.13, makes the APISIX identity and
+  mount declarative, and requires fresh 0.4.13-bound backup/parity evidence plus
   the exact one-use target/package confirmation
 - **AND** the rendered target SHALL contain APISIX pod and container UID/GID
   636:636, and each post-upgrade health gate SHALL observe that APISIX state plus
@@ -214,8 +227,16 @@ confirmation.
 - **WHEN** the exact unbound vector PVC and its ordinal-zero StatefulSet Pod
   remain Pending until the separately confirmed Phase B
 - **THEN** neither Phase-A Helm upgrade SHALL use global `--wait`
-- **AND** after each upgrade Phase A SHALL wait boundedly for every managed
-  Deployment, every managed non-vector StatefulSet and the OpenBao StatefulSet
+- **AND** each Helm upgrade SHALL use `--timeout 20m`, after which Phase A SHALL
+  run `rollout status --timeout=10m` separately for every managed Deployment,
+  every managed non-vector StatefulSet and the OpenBao StatefulSet
+- **AND** after that rollout vector each health gate SHALL wait separately for
+  FerretDB `Available` and `ClusterSecretStore/openbao-backend` `Ready`, each
+  with `--timeout=10m`
+- **AND** a rollout timeout or nonzero result SHALL stop before the next health
+  gate, upgrade pass or completion and emit `FORWARD_RECOVERY_REQUIRED`; a
+  first-pass or final health-gate failure SHALL additionally emit respectively
+  `PHASE_A_HEALTH_GATE_FAILED` or `FINAL_HEALTH_GATE_FAILED`
 - **AND** it SHALL NOT scale, delete or wait for the vector StatefulSet in
   Phase A
 - **AND** Phase B SHALL retain global Helm wait after the empty claim is
@@ -232,35 +253,164 @@ confirmation.
   JSON patch guarded by the live UID and resourceVersion to remove only the two
   hook annotations and replace only the public store spec
 - **AND** retry of the exact desired store SHALL be idempotent
-- **AND** the store and exactly fourteen Falcone ExternalSecrets SHALL become
-  Ready before Helm upgrade
+- **AND** the store and each canonical Falcone ExternalSecret —
+  `gateway-apisix-credentials`, `gateway-shared-secret`,
+  `iam-identity-client`, `iam-keycloak-credentials`, `iam-superadmin`,
+  `platform-documentdb-credentials`, `platform-documentdb-replication`,
+  `platform-encryption-key`, `platform-ferretdb-credentials`,
+  `platform-kafka-credentials`, `platform-postgresql-credentials`,
+  `platform-postgresql-vector-credentials`, `platform-s3-credentials`, and
+  `platform-temporal-credentials` — SHALL become Ready through a separate
+  `--timeout=10m` wait before Helm upgrade
 - **AND** foreign owner, identity, spec, hook, cardinality, UID,
   resourceVersion or readiness drift SHALL fail before Helm mutation
 - **AND** the procedure SHALL NOT read or patch a Secret, use
   `--take-ownership`, or mutate any administrator-owned ESO object
 
+#### Scenario: Revision-24 recovery reconciles OpenBao auth before ESO handoff
+
+- **WHEN** exact r24 recovery apply has validated the revision-20, revision-22,
+  revision-23 and failed revision-24/chart-0.4.11 fingerprints plus fresh
+  0.4.13 package-bound evidence and target confirmation
+- **THEN** before mutating the ClusterSecretStore, any ExternalSecret owner
+  metadata, or the Helm release, the CLI SHALL execute the official
+  auth-reconcile Job rendered from that exact package with
+  `allowRecoveryRoot=true`
+- **AND** after validating that package-bound official Job, each attempt SHALL
+  change only Job metadata: remove `metadata.name`; set `metadata.generateName`
+  to `openbao-auth-reconcile-r24-<digest12>-`, where `<digest12>` is the first
+  twelve lowercase hex characters following `sha256:` in the verified package
+  digest; preserve all other metadata and every non-metadata field; and add
+  annotations `in-falcone.io/recovery-package-digest=<full verified digest>`,
+  `in-falcone.io/recovery-target-chart=in-falcone-0.4.13`, and
+  `in-falcone.io/recovery-source-revision=24`
+- **AND** the CLI SHALL create, never apply, the attempt with
+  `kubectl create -f <attempt> -o name`; it SHALL accept exactly one newly
+  returned ref matching
+  `^job\.batch/openbao-auth-reconcile-r24-<digest12>-[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+  whose generated name is DNS-valid, and SHALL reject empty, multiple, stale or
+  otherwise drifting output
+- **AND** the rendered Job SHALL set `spec.activeDeadlineSeconds=300`, and the
+  CLI SHALL pass exactly that newly returned ref to the `Complete`
+  `--timeout=5m` wait and subsequent log read
+- **AND** expiration or failed completion SHALL leave the failed Job in
+  `secret-store` for evidence and SHALL NOT delete it on the failure path
+- **AND** the CLI SHALL NOT read any Kubernetes Secret resource or payload and
+  neither the Job nor the CLI SHALL emit a credential
+
+#### Scenario: Revision-24 recovery fails closed when auth reconciliation does not complete
+
+- **WHEN** the package-bound auth-reconcile Job cannot be created, create output
+  does not identify exactly one new digest-prefixed DNS-valid ref, that attempt
+  reaches its 300-second active deadline, does not become `Complete` within the
+  CLI's five-minute wait, exits unsuccessfully, or its terminal log is missing,
+  duplicated, unpaired, or otherwise different from the two allowed success lines
+- **THEN** r24 recovery SHALL fail closed and SHALL NOT mutate the
+  ClusterSecretStore, any ExternalSecret owner metadata, or the Helm release
+- **AND** render, create, create-ref, completion, log-read and log-content
+  failures SHALL emit respectively `REVISION24_AUTH_RECONCILE_RENDER_FAILED` or
+  `REVISION24_AUTH_RECONCILE_RENDER_DRIFT`,
+  `REVISION24_AUTH_RECONCILE_CREATE_FAILED`,
+  `REVISION24_AUTH_RECONCILE_CREATE_REF_DRIFT`,
+  `REVISION24_AUTH_RECONCILE_INCOMPLETE`,
+  `REVISION24_AUTH_RECONCILE_LOG_UNAVAILABLE`, or
+  `REVISION24_AUTH_RECONCILE_EVIDENCE_DRIFT`, followed by
+  `FORWARD_RECOVERY_REQUIRED` once auth execution has started
+- **AND** every failed attempt SHALL remain in `secret-store` as evidence; retry
+  SHALL repeat complete live/package preflight and create a new generated Job
+  identity from the newly validated package-bound object, never delete, reuse,
+  patch or reapply a prior attempt, and never accept a stale Job or log as current
+  evidence
+
+#### Scenario: Revision-24 recovery requires exact auth reconciliation evidence
+
+- **WHEN** the package-bound pre-handoff auth-reconcile Job reports completion
+- **THEN** the CLI SHALL accept exactly one paired terminal result:
+  `result=changed code=AUTH_METADATA_CONVERGED canary=passed` or
+  `result=unchanged code=AUTH_METADATA_MATCHED canary=passed`
+- **AND** the CLI SHALL read and validate that terminal result only after the
+  current package-bound execution becomes `Complete`, using exactly the fresh
+  resource ref returned by that attempt's create for both wait and log; every
+  retry SHALL validate only its newly created execution's log
+- **AND** the successful attempt SHALL be retained at least until both Phase-A
+  passes and final no-root health complete; no earlier successful or failed Job
+  SHALL substitute for the current attempt
+- **AND** a missing, duplicated, cross-paired, malformed, or otherwise drifting
+  terminal result SHALL fail closed before the ClusterSecretStore, any
+  ExternalSecret owner metadata, or the Helm release is mutated
+- **AND** accepted logs SHALL contain no credential material
+
+#### Scenario: External ESO network reachability remains an operator prerequisite
+
+- **WHEN** the administrator-owned ESO controller cannot reach OpenBao because
+  its externally managed network or egress prerequisite is absent after the
+  auth-first gate and CAS store handoff
+- **THEN** the readiness sequence SHALL gate the ClusterSecretStore followed by
+  each canonical ExternalSecret with a separate `--timeout=10m` wait:
+  `gateway-apisix-credentials`, `gateway-shared-secret`,
+  `iam-identity-client`, `iam-keycloak-credentials`, `iam-superadmin`,
+  `platform-documentdb-credentials`, `platform-documentdb-replication`,
+  `platform-encryption-key`, `platform-ferretdb-credentials`,
+  `platform-kafka-credentials`, `platform-postgresql-credentials`,
+  `platform-postgresql-vector-credentials`, `platform-s3-credentials`, and
+  `platform-temporal-credentials`
+- **AND** the first readiness timeout SHALL stop the sequence before any
+  ExternalSecret owner patch or Helm upgrade, retain prior mutation evidence, and emit
+  `FORWARD_RECOVERY_REQUIRED` rather than roll back
+- **AND** Falcone SHALL NOT create, adopt, or mutate the `external-secrets`
+  namespace, its controller, or its administrator-owned network policy
+
 #### Scenario: Phase A resumes only the exact revision-24 global-wait timeout
 
 - **WHEN** the latest Helm entry is revision 24, failed chart 0.4.11, and its
   description contains the exact vector PVC Pending, vector StatefulSet 0/1,
-  legacy store, fourteen ExternalSecret provider failures and deadline-exceeded
-  fingerprint
+  legacy store, deadline-exceeded fingerprint, and provider failures for exactly
+  `gateway-apisix-credentials`, `gateway-shared-secret`,
+  `iam-identity-client`, `iam-keycloak-credentials`, `iam-superadmin`,
+  `platform-documentdb-credentials`, `platform-documentdb-replication`,
+  `platform-encryption-key`, `platform-ferretdb-credentials`,
+  `platform-kafka-credentials`, `platform-postgresql-credentials`,
+  `platform-postgresql-vector-credentials`, `platform-s3-credentials`, and
+  `platform-temporal-credentials`
 - **AND** revisions 20, 22 and 23 retain their exact deployed/failed history,
   the vector PVC retains its exact UID/Pending/no-volume/no-PV state, all
   non-vector workloads are converged, APISIX is 3/3 at UID/GID 636,
   Prometheus is 1/1 at UID/GID 65534 and no named-user error remains
-- **THEN** recovery SHALL target immutable chart 0.4.12 with fresh
-  package-bound backup/parity evidence and exact r24→0.4.12 confirmation
-- **AND** it SHALL complete the store handoff before the two non-atomic,
-  non-global-wait Phase-A passes
-- **AND** any history, failure description, store, ExternalSecret, PVC,
-  workload, identity or error-cardinality drift SHALL fail before mutation
+- **THEN** recovery SHALL target immutable chart 0.4.13 with fresh
+  package-bound backup/parity evidence and exact r24→0.4.13 confirmation
+- **AND** it SHALL complete the auth-first gate, the UID/resourceVersion-guarded
+  idempotent store handoff, and the ten-minute-per-resource Ready gates for those
+  exact fourteen identities in that order before either Helm upgrade
+- **AND** it SHALL perform exactly two non-atomic Phase-A Helm upgrades without
+  global wait and with `--timeout 20m`, and after each SHALL run
+  `rollout status --timeout=10m` for deployments `falcone-apisix`,
+  `falcone-control-plane`, `falcone-control-plane-executor`,
+  `falcone-ferretdb`, `falcone-grafana`, `falcone-keycloak`,
+  `falcone-observability`, `falcone-seaweedfs-s3`,
+  `falcone-temporal-frontend`, `falcone-temporal-history`,
+  `falcone-temporal-matching`, `falcone-temporal-web`,
+  `falcone-temporal-worker`, `falcone-web-console`, and
+  `falcone-workflow-worker`; StatefulSets `falcone-documentdb`,
+  `falcone-kafka`, `falcone-postgresql`, `falcone-seaweedfs-filer`,
+  `falcone-seaweedfs-master`, and `falcone-seaweedfs-volume`; and
+  `secret-store/statefulset/openbao`, while never waiting for
+  `falcone-postgresql-vector`
+- **AND** each post-rollout health gate SHALL use `--timeout=10m` for FerretDB
+  `Available` and the ClusterSecretStore `Ready`; a first or final gate failure
+  SHALL emit respectively `PHASE_A_HEALTH_GATE_FAILED` or
+  `FINAL_HEALTH_GATE_FAILED`, then `FORWARD_RECOVERY_REQUIRED`, stop before the
+  next pass or success, and never roll back; the second pass SHALL run with
+  recovery-root disabled
+- **AND** any history, failure description, auth result/log, store,
+  ExternalSecret, PVC, workload, identity or error-cardinality drift SHALL fail
+  before the next mutation
 
 ### Requirement: Phase-A completion SHALL prove final no-root health
 
 Phase A SHALL run the owner, six-image, store, exact fourteen-secret, auth,
 FerretDB replica, and Ready-endpoint gates after the recovery-root allowance is
-removed. Final OpenBao reconciliation SHALL report unchanged and canary passed.
+removed. Final OpenBao reconciliation SHALL report unchanged and canary passed,
+and SHALL prove the exact four-policy token set without `default`.
 
 #### Scenario: Final pass regresses a dependency
 

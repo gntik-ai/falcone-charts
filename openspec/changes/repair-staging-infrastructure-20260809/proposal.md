@@ -1,12 +1,15 @@
-# Change: Repair revision-20 staging infrastructure
+# Change: Repair revision-20/r24 staging infrastructure with chart 0.4.13
 
 ## Why
 
 Staging has independent ESO/OpenBao auth, FerretDB init, pgvector storage, and
 Helm image-authority defects. Revision 20 also overlaps an administrator-owned
-External Secrets Operator. Repair must preserve external ownership and data,
-avoid expiring reviewer credentials, retain document availability, and gate the
-only destructive empty-PVC transition.
+External Secrets Operator. The live revision-24 recovery with chart 0.4.12
+proved that handing the store to `eso-system/eso-openbao-auth` before updating
+`eso-role` exposes a 403 authorization gap, and that allowing OpenBao's default
+policy makes the official reconciliation canary reject otherwise converged
+metadata. Chart 0.4.13 must close both gaps without weakening external ownership,
+credential secrecy, storage gates, or the fail-forward boundary.
 
 ## What Changes
 
@@ -14,6 +17,8 @@ only destructive empty-PVC transition.
   Helm release; grant exact TokenRequest/TokenReview authority only.
 - Make OpenBao full bootstrap fresh-install-only and routine upgrade reconciliation
   idempotent, auth-metadata-only, local-reviewer based, and no-KV.
+- Make `eso-role` issue ESO and canary tokens without the OpenBao `default`
+  policy and with exactly `functions,gateway,iam,platform`.
 - Run FerretDB's engine gate as UID 999 and use zero-unavailable rolling update
   with retained old Ready ReplicaSets.
 - Select local-path plus fsn1 only in staging and pin the six immutable
@@ -24,7 +29,7 @@ only destructive empty-PVC transition.
   structured short-lived evidence, semantic external-owner protection, detailed
   operations/security/storage documentation, and black-box contracts.
 - Extend fail-forward recovery to the exact revision-23 chart-0.4.9 named-user
-  rollout failure, targeting immutable chart 0.4.12 and rejecting evidence drift
+  rollout failure, targeting immutable chart 0.4.13 and rejecting evidence drift
   before mutation.
 - Admit the one exact observed partial manual recovery in which APISIX is 3/3
   Ready through an exact Deployment→ReplicaSet→Pod UID/revision owner chain as
@@ -32,17 +37,60 @@ only destructive empty-PVC transition.
   observability retains the sole named-user failure; make that mount and numeric
   identity declarative in staging without adopting the ConfigMap, and prove
   both APISIX and Prometheus numeric convergence after each upgrade pass.
-- Resume only the exact revision-24/chart-0.4.11 timeout, hand off the exact
-  revision-20 ClusterSecretStore hook to the rendered `eso-system` identity,
-  and replace Phase-A global Helm wait with bounded explicit non-vector rollout
-  checks while retaining Phase-B JIT and global wait.
+- Resume only the exact revision-24/chart-0.4.11 timeout by running the official,
+  package-bound auth-reconcile Job with recovery-root allowed and proving its
+  `activeDeadlineSeconds=300`, waiting at most five minutes for `Complete`, and
+  proving its exact successful terminal log before any ClusterSecretStore,
+  ExternalSecret, or Helm mutation. Each attempt creates a new Job identity from
+  `openbao-auth-reconcile-r24-<digest12>-`, annotated with the full package
+  digest, target chart and source revision; only the exact resource ref returned
+  by that create may be waited or logged. Retain failed attempts as evidence and
+  ignore every stale Job; retry repeats package/live preflight and creates a new
+  identity rather than deleting, reusing or reapplying a prior Job. Then preserve
+  the exact CAS store handoff, the named fourteen-Ready gate, two 20-minute
+  non-global-wait Phase-A upgrades, ten-minute-per-resource rollout/readiness
+  gates, and recovery-root-disabled second pass while retaining Phase-B JIT and
+  global wait.
+- Treat network/egress from the administrator-owned ESO controller to OpenBao as
+  an external prerequisite: fail closed before Helm when the store and fourteen
+  ExternalSecrets cannot converge, without taking ownership of `external-secrets`.
+- Publish the correction as immutable chart 0.4.13, update operator/recovery
+  documentation, and keep recovery forward-only with no Helm rollback.
+
+## Capabilities
+
+### New Capabilities
+
+None.
+
+### Modified Capabilities
+
+- `deployment-and-operations`: Extends the existing deployment and operations
+  capability with the staging repair, external ESO custody, OpenBao auth
+  convergence, bounded fail-closed sequencing, and forward-only migration
+  contract. The delta uses ADDED requirements because these requirement names
+  have no archived baseline to replace.
 
 ## Impact
 
-Affected source is limited to `charts/in-falcone/**`, related chart tests/docs,
-this OpenSpec package, and chart release validation if needed. No Falcone product
-API/source changes occur. P18/P3/P4 are primary acceptance lenses; P8/P9/P10/P12/P17
-must recover their journeys and P13 remains the adjacent-tenant negative lens.
+Affected source is limited to `charts/in-falcone/**`, related chart tests and
+operator material, this OpenSpec package, and chart release validation. No
+Falcone product API/source changes occur. P18/P3/P4 are primary acceptance
+lenses; P8/P9/P10/P12/P17 must recover their journeys and P13 remains the
+adjacent-tenant negative lens.
+
+Code evidence:
+
+- `charts/in-falcone/charts/openbao/templates/openbao-auth-reconcile-job.yaml::auth-reconcile-script:52-64,143-252`
+  currently requests `token_no_default_policy=false` while requiring the four
+  policies exactly in the canary lookup.
+- `charts/in-falcone/migrations/revision-20-repair.sh::apply_legacy_clustersecretstore_handoff:1055-1208,1490-1509`
+  currently performs the r24 store handoff before the first package Helm pass.
+- `charts/in-falcone/migrations/revision-20-repair.sh::phase_a_args-and-waits:874-925,1445-1476`
+  establishes the two recovery-root/no-root passes and explicit non-vector wait
+  vector that 0.4.13 must preserve.
+- `charts/in-falcone/Chart.yaml::version:5` identifies the failed recovery
+  package baseline as 0.4.12.
 
 ## Exclusions and gates
 

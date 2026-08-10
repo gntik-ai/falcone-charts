@@ -1,4 +1,4 @@
-# Staging infrastructure repair (chart 0.4.12)
+# Staging infrastructure repair (chart 0.4.13)
 
 Verified source baseline: `gntik-ai/falcone-charts` commit
 `e05f9e8cea4c4cc80573bc7ef0693fb42d47cd07`, 2026-08-09. Upgrade anchor:
@@ -10,7 +10,7 @@ acceptance gates.
 
 ## Status, outcome, and exclusions
 
-Chart 0.4.12 carries the 0.4.9 repair and repins all six first-party images to
+Chart 0.4.13 carries the prior repair chain and repins all six first-party images to
 Falcone main `d9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc`, published by successful
 `release-images` run `31337244501` as tag `0.6.6-main-d9cd0f6b`. Chart 0.4.6
 corrected the dependency-version boundary
@@ -48,11 +48,22 @@ rollouts converged: Helm's global `--wait` also waited for the deliberately
 Pending pgvector PVC/StatefulSet that Phase A must preserve. During that wait it
 also exposed the revision-20 `ClusterSecretStore/openbao-backend` hook still
 pointing at `external-secrets/eso-openbao-auth`; the current identity is
-`eso-system/eso-openbao-auth`. Chart 0.4.12 admits only that exact r24
+`eso-system/eso-openbao-auth`. Chart 0.4.12 admitted only that exact r24
 fingerprint, hands off the legacy store with a UID/resourceVersion-guarded patch,
 and replaces global Phase-A wait with explicit bounded rollout checks that omit
 only pgvector. Phase B retains global wait after the separately confirmed empty
 claim is recreated.
+The first 0.4.12 recovery attempt proved two more fail-closed prerequisites
+before Helm advanced: the administrator-owned ESO controller needed explicit
+network egress to `secret-store` TCP/8200, and `eso-role` still authorized the
+legacy namespace. The package then exposed a contradictory canary contract by
+setting `token_no_default_policy=false` while requiring exactly four policies,
+so OpenBao correctly added `default` and the hook rejected its own token.
+Chart 0.4.13 runs the package-bound auth reconciler before the store handoff,
+uses recovery-root only for that bounded metadata repair, requires exactly one
+accepted terminal result, and sets `token_no_default_policy=true`. Only after
+that gate may it hand off the store, wait each of the fourteen ExternalSecrets,
+and perform the two no-root Phase-A upgrades.
 It consumes (but never adopts) an administrator-owned
 External Secrets Operator, converts OpenBao Kubernetes auth to its rotating
 pod-local reviewer identity, fixes FerretDB's non-root init identity and rollout,
@@ -88,6 +99,10 @@ objects. Falcone owns `ClusterSecretStore/openbao-backend`, fourteen
   mutation, TokenReview, or cluster-wide permission;
 - OpenBao NetworkPolicy remains limited to DNS plus Kubernetes API ports 443 and
   post-DNAT 6443; no application egress expansion is introduced.
+
+When ESO is administrator-owned, its operator must already be able to reach
+`secret-store` TCP/8200. Falcone validates convergence but never creates,
+adopts, or patches a controller or NetworkPolicy in `external-secrets`.
 
 Never put a ServiceAccount JWT, OpenBao token, unseal material, Secret value,
 tenant payload, kubeconfig, or backup content in values, arguments, logs, diffs,
@@ -168,7 +183,8 @@ Read only auth metadata, in this order:
 2. Verify sanitized config fields: Kubernetes host, `disable_local_ca_jwt=false`,
    and `token_reviewer_jwt_set=false`. Never print JWT or CA bytes.
 3. Verify `eso-role` binds exactly `eso-system/eso-openbao-auth`, policy names
-   `platform,functions,gateway,iam`, and TTL 86400 seconds.
+   `platform,functions,gateway,iam`, TTL 86400 seconds, and
+   `token_no_default_policy=true`.
 4. Verify `secret-store/openbao` can create only TokenReviews, and that the exact
    ESO controller plus `secret-store/openbao-auth-reconciler` can request only
    the named auth ServiceAccount token. Confirm the bootstrap identity is not a
@@ -233,7 +249,7 @@ cluster-scoped objects. It never reads a Helm release manifest or Secret data.
 Before apply, create two separate, current, metadata-only JSON attestations:
 
 - `Revision20BackupEvidence` identifies exact context/namespace/release,
-  revision 20, chart 0.4.1, target repair chart 0.4.12, published package digest,
+  revision 20, chart 0.4.1, target repair chart 0.4.13, published package digest,
   a non-secret backup reference, `verified: true`, `observedAt`, and
   `validUntil`;
 - `Revision20ParityEvidence` binds the same target and package digest to a
@@ -241,7 +257,7 @@ Before apply, create two separate, current, metadata-only JSON attestations:
 
 Opaque strings are not apply evidence. Expired, malformed, reused, differently
 targeted, or package-mismatched attestations fail before mutation.
-For a real apply the tool pulls chart 0.4.12 from
+For a real apply the tool pulls chart 0.4.13 from
 `oci://ghcr.io/gntik-ai/charts/in-falcone`, verifies the registry-reported digest
 against both attestations, and renders/applies that extracted artifact and its
 own staging profile. It does not apply an unbound checkout after merely comparing
@@ -255,14 +271,14 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --phase-a --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.13/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 For the admitted failed 0.4.8 attempt, the same two evidence documents must be
-retargeted to the published 0.4.12 digest and the one-use confirmation is instead:
+retargeted to the published 0.4.13 digest and the one-use confirmation is instead:
 
 ```text
-default/in-falcone-staging/falcone@22/in-falcone-0.4.8->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST
+default/in-falcone-staging/falcone@22/in-falcone-0.4.8->in-falcone-0.4.13/sha256:PUBLISHED_PACKAGE_DIGEST
 ```
 
 For revision 23, preflight additionally requires the exact public history chain:
@@ -289,7 +305,7 @@ single key and digest above are revalidated, and no other named-user error may
 exist in any namespace. Any different patch, mount, UID/GID, owner, count,
 status, ConfigMap content or global error fails before render or mutation.
 
-Revision-23 apply uses fresh backup/parity attestations bound to chart 0.4.12 and
+Revision-23 apply uses fresh backup/parity attestations bound to chart 0.4.13 and
 the published package digest, plus this exact one-use confirmation:
 
 ```bash
@@ -297,7 +313,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
   --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.13/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 Because revision 23 is itself a failed Phase-A attempt, forward recovery
@@ -316,24 +332,37 @@ the `eso-system` ServiceAccount and exactly fourteen NotReady ExternalSecrets.
 Any history, resource, owner, spec, UID, resourceVersion, count, condition or
 identity drift fails before mutation.
 
-Dry-run reports whether the exact store requires handoff. Apply first validates
-its unique desired rendered object and exact legacy live form, then uses one
+Dry-run reports whether the exact store requires handoff. Apply first renders
+only the official auth-reconcile Job from the digest-attested package, enables
+recovery-root for that Job alone, and converts only its execution metadata to
+`generateName: openbao-auth-reconcile-r24-<digest12>-`. The attempt is annotated
+with the complete package digest, target chart and source revision. The CLI uses
+`kubectl create -o name`, validates the single generated `job.batch/...` ref,
+waits on that exact ref for `Complete` for at most five minutes (the Job itself
+has a 300-second active deadline), reads only that ref's log, and accepts exactly one
+`changed/CONVERGED` or `unchanged/MATCHED` terminal line with `canary=passed`.
+It emits no credential and reads no Secret. Failure or log drift stops before
+store, ExternalSecret, or Helm mutation. Failed attempts remain available as
+evidence. A retry repeats package and live preflight, creates a new generated
+identity, and never reapplies, deletes, waits on, or reads a stale Job. The
+procedure then validates the
+store's unique desired rendered object and exact legacy live form, and uses one
 JSON patch with UID and resourceVersion tests to remove only
 `helm.sh/hook`/`helm.sh/hook-weight` and replace the public spec. It never
 reads a Secret or patches the administrator-owned ESO release. The store and all
 fourteen ExternalSecrets must become Ready before Helm starts. Revision-24 apply
-uses fresh 0.4.12-bound backup/parity evidence and:
+uses fresh 0.4.13-bound backup/parity evidence and:
 
 ```text
-default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST
+default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.13/sha256:PUBLISHED_PACKAGE_DIGEST
 ```
 
 Before the first mutation the recovery tool parses the rendered APISIX
 Deployment and requires pod and container UID/GID 636:636 plus the exact mount.
 Each Phase-A Helm command omits global `--wait`, whose resource set includes
 the intentionally Pending vector workload. After each upgrade the procedure
-waits boundedly for every Falcone Deployment, every non-vector Falcone
-StatefulSet and OpenBao, and its health gate requires the same live APISIX
+uses a 20-minute Helm timeout and then waits up to ten minutes per Falcone
+Deployment, non-vector Falcone StatefulSet and OpenBao. Its health gate requires the same live APISIX
 identity and Prometheus container UID/GID 65534:65534. A convergence drift stops the
 current Phase A, emits forward-recovery guidance and prevents the next pass.
 
@@ -343,17 +372,16 @@ claim templates remain `hcloud-volumes` 10 Gi, and their historical child PVCs
 are Bound `local-path` 10 Gi. Any drift or a list/history mismatch invalidates
 the confirmation. The tool never uses `--reuse-values`.
 
-Phase A uses the retained recovery credential for one bounded auth repair when
-revision 20's expired reviewer mode prevents dedicated reconciler login, then
-immediately applies an idempotent revision with the recovery-root allowance
-disabled. Both passes compare exact ESO owner metadata captured immediately
+Phase A uses the retained recovery credential only in the pre-handoff auth Job
+when the dedicated reconciler cannot yet repair the legacy role. Both Helm
+passes keep the recovery-root allowance disabled and compare exact ESO owner metadata captured immediately
 before them. After the no-root pass it repeats the owner/image/store/auth/
 FerretDB/EndpointSlice gates and requires auth `result=unchanged`, the exact
 fourteen unique named ExternalSecrets Ready, FerretDB 2/2, and at least two
 Ready endpoints. Phase A does not delete or change the PVC.
 
 Create a fresh `StagingPhaseAAttestation` from that final metadata-only result.
-It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.12,
+It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.13,
 the same package digest, recovery-root disabled, auth unchanged/canary passed,
 store/ExternalSecret/FerretDB health, owner-inventory digest, image-set digest,
 and a short `observedAt`/`validUntil` window. Phase B rejects a missing, stale,
@@ -386,7 +414,7 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
   --phase-a-attestation /secure/path/phase-a.json \
-  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST' \
+  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.13/sha256:PUBLISHED_PACKAGE_DIGEST' \
   --pvc-uid PVC-UID-FROM-PREFLIGHT \
   --confirm-pvc falcone-postgresql-vector-data/PVC-UID-FROM-PREFLIGHT
 ```
@@ -424,8 +452,11 @@ cookies, Secret data, request bodies, tenant identifiers, and unseal material.
 Before Phase A, revision 20 is untouched. Every mutation path is forward-only:
 the tools do not use atomic upgrade or any rollback operation. A failed apply
 prints `FORWARD_RECOVERY_REQUIRED`; inspect metadata, correct the cause, and
-reapply the same package. Revision 20 reintroduces owner overlap, static reviewer
-expiry, Ferret init failure, and old image defaults.
+reapply the same package. For revision 24, do not delete or reuse a retained
+`openbao-auth-reconcile-r24-*` Job: the retry creates a new digest-prefixed
+identity and binds its wait/log evidence only to the ref returned by that create.
+Revision 20 reintroduces owner overlap, static reviewer expiry, Ferret init
+failure, and old image defaults.
 
 After PVC deletion, revision 20 cannot restore service because `hcloud-volumes`
 does not exist. Use the dry-run-first forward recovery tool:
@@ -438,7 +469,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
 ```
 
 After review, its apply requires the actual
-`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.12/sha256:PUBLISHED_PACKAGE_DIGEST`
+`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.13/sha256:PUBLISHED_PACKAGE_DIGEST`
 confirmation. It revalidates the same three attestations, secret-suppressed
 semantic owner diff, and external owner metadata. It never deletes a PVC or
 returns to an old release; it reapplies canonical values and waits for exact
@@ -463,7 +494,7 @@ static rendering is not live proof.
 ## Compatibility and provenance
 
 The supported repair anchor is chart 0.4.1 revision 20, including the admitted
-failed 0.4.8/r22, 0.4.9/r23 and admitted 0.4.11/r24 chain, to chart 0.4.12,
+failed 0.4.8/r22, 0.4.9/r23 and admitted 0.4.11/r24 chain, to chart 0.4.13,
 `appVersion` 0.3.1. Chart 0.4.2 already supplied externally managed ESO packaging
 but not the reviewer, FerretDB, storage, or image repair. Exact package/OCI digest
 must be recorded after the merged source commit is built; source rendering alone

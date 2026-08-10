@@ -18,7 +18,7 @@ const recoveryScript = path.join(
 );
 const exactFixturePath = path.join(helperDirectory, "revision23-partial-manual-recovery.json");
 const exactConfirmation =
-  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.12/" +
+  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.13/" +
   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const baseFixture = JSON.parse(fs.readFileSync(exactFixturePath, "utf8"));
 
@@ -51,7 +51,12 @@ const evidenceDocument = (kind, now, validUntil, fixture) => ({
   }
 });
 
-function runRecovery({mutate = () => {}, confirmation = exactConfirmation, apply = true} = {}) {
+function runRecovery({
+  mutate = () => {},
+  confirmation = exactConfirmation,
+  apply = true,
+  attemptCount = 1
+} = {}) {
   const scenarioDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "falcone-bbx-r23-partial-"));
   const binDirectory = path.join(scenarioDirectory, "bin");
   const scenarioFixturePath = path.join(scenarioDirectory, "fixture.json");
@@ -69,7 +74,14 @@ function runRecovery({mutate = () => {}, confirmation = exactConfirmation, apply
     statePath,
     `${JSON.stringify({
       upgrades: 0,
-      storeHandedOff: fixture.legacyStoreHandoff.initiallyHandedOff
+      storeHandedOff: fixture.legacyStoreHandoff.initiallyHandedOff,
+      authRecoveryApplied: false,
+      authRecoveryCompleted: false,
+      authRecoveryLogReads: 0,
+      authRecoveryCreatedRefs: [],
+      authRecoveryCompletedRefs: [],
+      authRecoveryCurrentRef: null,
+      authRecoveryWaitFailures: fixture.authRecovery?.waitFailures ?? 0
     })}\n`
   );
   fs.writeFileSync(tracePath, "");
@@ -107,25 +119,39 @@ function runRecovery({mutate = () => {}, confirmation = exactConfirmation, apply
           parityPath
         ]
       : [];
-    const result = spawnSync(
-      recoveryScript,
-      recoveryArguments,
-      {
-        cwd: repositoryRoot,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${binDirectory}:${process.env.PATH}`,
-          FALCONE_BBX_FIXTURE: scenarioFixturePath,
-          FALCONE_BBX_STATE: statePath,
-          FALCONE_BBX_TRACE: tracePath,
-          FALCONE_BBX_MUTATIONS: mutationPath
-        },
-        timeout: 20_000
-      }
-    );
+    const attempts = [];
+    for (let attempt = 0; attempt < attemptCount; attempt += 1) {
+      const traceBefore = fs.readFileSync(tracePath, "utf8");
+      const mutationsBefore = fs.readFileSync(mutationPath, "utf8");
+      const result = spawnSync(
+        recoveryScript,
+        recoveryArguments,
+        {
+          cwd: repositoryRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${binDirectory}:${process.env.PATH}`,
+            FALCONE_BBX_FIXTURE: scenarioFixturePath,
+            FALCONE_BBX_STATE: statePath,
+            FALCONE_BBX_TRACE: tracePath,
+            FALCONE_BBX_MUTATIONS: mutationPath
+          },
+          timeout: 30_000
+        }
+      );
+      const traceAfter = fs.readFileSync(tracePath, "utf8");
+      const mutationsAfter = fs.readFileSync(mutationPath, "utf8");
+      attempts.push({
+        ...result,
+        trace: traceAfter.slice(traceBefore.length),
+        mutations: mutationsAfter.slice(mutationsBefore.length)
+      });
+    }
+    const result = attempts.at(-1);
     return {
       ...result,
+      attempts,
       trace: fs.readFileSync(tracePath, "utf8"),
       mutations: fs.readFileSync(mutationPath, "utf8")
     };
@@ -161,14 +187,14 @@ function assertRejectedAfterFirstPhaseAUpgrade(result, drift) {
   const upgrades = result.mutations.split("\n").filter((line) => line.startsWith("helm upgrade "));
   assert.deepEqual(
     upgrades,
-    ["helm upgrade release=falcone version=0.4.12"],
+    ["helm upgrade release=falcone version=0.4.13"],
     `${drift} must stop after exactly the first Phase-A upgrade`
   );
 }
 
 export function registerRevision23PartialManualRecoveryContract() {
   test("bbx-repair-staging-057 admits only the exact revision-23 partial manual recovery", async (t) => {
-    await t.test("admits the exact partial recovery and applies immutable chart 0.4.12", () => {
+    await t.test("admits the exact partial recovery and applies immutable chart 0.4.13", () => {
       const result = runRecovery();
 
       assert.equal(
@@ -183,13 +209,13 @@ export function registerRevision23PartialManualRecoveryContract() {
       );
       assert.match(
         result.stdout,
-        /phase-a=applied revision=25 chart=in-falcone-0\.4\.12 package-digest=sha256:b{64}/
+        /phase-a=applied revision=25 chart=in-falcone-0\.4\.13 package-digest=sha256:b{64}/
       );
       assert.deepEqual(
         result.mutations.trim().split("\n"),
         [
-          "helm upgrade release=falcone version=0.4.12",
-          "helm upgrade release=falcone version=0.4.12"
+          "helm upgrade release=falcone version=0.4.13",
+          "helm upgrade release=falcone version=0.4.13"
         ]
       );
       assert.doesNotMatch(result.trace, /helm (rollback|uninstall)|kubectl .* (delete|scale) /);
@@ -425,8 +451,8 @@ export function registerRevision23PhaseAVectorPendingProgressContract() {
     assert.deepEqual(
       result.mutations.trim().split("\n"),
       [
-        "helm upgrade release=falcone version=0.4.12",
-        "helm upgrade release=falcone version=0.4.12"
+        "helm upgrade release=falcone version=0.4.13",
+        "helm upgrade release=falcone version=0.4.13"
       ],
       "the recovery must preserve exactly one Phase-A and one Phase-B/JIT mutation"
     );
@@ -451,10 +477,19 @@ const enableRevision24GlobalWaitRecovery = (fixture) => {
       description: revision24.description
     }
   ];
+  fixture.authRecovery ??= {};
+  Object.assign(fixture.authRecovery, {
+    enabled: true,
+    waitFailures: fixture.authRecovery.waitFailures ?? 0,
+    preflightLog: fixture.authRecovery.preflightLog ??
+      "result=changed code=AUTH_METADATA_CONVERGED canary=passed",
+    healthLog: fixture.authRecovery.healthLog ??
+      "result=unchanged code=AUTH_METADATA_MATCHED canary=passed"
+  });
 };
 
 const revision24Confirmation =
-  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.12/" +
+  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.13/" +
   baseFixture.revision24GlobalWait.packageDigest;
 
 function assertNoSecretReadsOrOwnershipEscape(result, contract) {
@@ -569,7 +604,36 @@ export function registerLegacyClusterSecretStoreHandoffContract() {
           },
           confirmation: revision24Confirmation
         });
-        assertRejectedBeforeMutation(result, name);
+        if (name === "concurrent store resourceVersion drift") {
+          assert.notEqual(result.status, 0, `${name} unexpectedly succeeded`);
+          const mutations = result.mutations.trim().split("\n").filter(Boolean);
+          assert.equal(
+            mutations.length,
+            1,
+            `${name} may create only the required auth attempt before the guarded CAS conflict`
+          );
+          const created = mutations[0].match(
+            /^kubectl create auth-reconcile-job ref=(\S+) generateName=(\S+) chart=(\S+) digest=(\S+) sourceRevision=(\S+) allowRecoveryRoot=(\S+)$/
+          );
+          assert.ok(created, `${name} did not record one semantic auth Job create: ${mutations[0]}`);
+          const digest = baseFixture.revision24GlobalWait.packageDigest;
+          const generateName = `openbao-auth-reconcile-r24-${digest.replace(/^sha256:/, "").slice(0, 12)}-`;
+          assert.equal(created[2], generateName);
+          assert.ok(
+            created[1].startsWith(`job.batch/${generateName}`) &&
+              /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(
+                created[1].slice(`job.batch/${generateName}`.length)
+              ),
+            `${name} returned an invalid fresh Job ref: ${created[1]}`
+          );
+          assert.equal(created[3], baseFixture.revision24GlobalWait.targetChart);
+          assert.equal(created[4], digest);
+          assert.equal(created[5], "24");
+          assert.equal(created[6], "true");
+          assert.doesNotMatch(result.mutations, /kubectl .*\bpatch clustersecretstore|^helm upgrade\b/m);
+        } else {
+          assertRejectedBeforeMutation(result, name);
+        }
         assert.match(
           result.trace,
           /kubectl .*\bget clustersecretstore(?:s)?(?:\.external-secrets\.io)?\b/,
@@ -584,7 +648,7 @@ export function registerLegacyClusterSecretStoreHandoffContract() {
 
 export function registerRevision24GlobalWaitRecoveryContract() {
   test("bbx-repair-staging-060 resumes only the exact revision-24 global-wait timeout", async (t) => {
-    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.12 passes", () => {
+    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.13 passes", () => {
       const result = runRecovery({
         mutate: enableRevision24GlobalWaitRecovery,
         confirmation: revision24Confirmation
@@ -599,7 +663,7 @@ export function registerRevision24GlobalWaitRecoveryContract() {
       const patchIndex = traceLines.findIndex((line) => /kubectl .*\bpatch clustersecretstore/.test(line));
       const upgrades = traceLines.filter((line) => line.startsWith("helm upgrade "));
       assert.equal(upgrades.length, 2, "r24 recovery must complete exactly two Phase-A passes");
-      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.12(?:\s|$)/.test(line)));
+      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.13(?:\s|$)/.test(line)));
       assert.ok(upgrades.every((line) => !/(?:^|\s)--wait(?:\s|$)/.test(line)));
       assert.ok(patchIndex !== -1 && patchIndex < traceLines.indexOf(upgrades[0]), "store handoff precedes Helm");
       assertNoSecretReadsOrOwnershipEscape(result, "r24 recovery");
@@ -644,6 +708,67 @@ export function registerRevision24GlobalWaitRecoveryContract() {
     }
   });
 }
+
+const revision24AuthRecoveryDigest = `sha256:${"0413".repeat(16)}`;
+const revision24AuthRecoveryConfirmation =
+  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.13/" +
+  revision24AuthRecoveryDigest;
+
+const enableRevision24AuthRecovery = (fixture, {
+  createMode,
+  preflightLog,
+  waitFailures,
+  storeWaitFails,
+  externalSecretWaitFailure
+}) => {
+  fixture.revision24GlobalWait.targetVersion = "0.4.13";
+  fixture.revision24GlobalWait.targetChart = "in-falcone-0.4.13";
+  fixture.revision24GlobalWait.packageDigest = revision24AuthRecoveryDigest;
+  enableRevision24GlobalWaitRecovery(fixture);
+  Object.assign(fixture.authRecovery, {
+    enabled: true,
+    createMode,
+    waitFailures,
+    preflightLog,
+    healthLog: "result=unchanged code=AUTH_METADATA_MATCHED canary=passed"
+  });
+  Object.assign(fixture.reachability, {
+    storeWaitFails,
+    externalSecretWaitFailure
+  });
+};
+
+export function runRevision24AuthRecovery({
+  createMode = "success",
+  preflightLog = "result=changed code=AUTH_METADATA_CONVERGED canary=passed",
+  waitFails = false,
+  waitFailures = waitFails ? 1 : 0,
+  attemptCount = 1,
+  storeWaitFails = false,
+  externalSecretWaitFailure = null
+} = {}) {
+  return runRecovery({
+    mutate: (fixture) => enableRevision24AuthRecovery(fixture, {
+      createMode,
+      preflightLog,
+      waitFailures,
+      storeWaitFails,
+      externalSecretWaitFailure
+    }),
+    confirmation: revision24AuthRecoveryConfirmation,
+    attemptCount
+  });
+}
+
+export const revision24AuthRecoveryContract = Object.freeze({
+  targetVersion: "0.4.13",
+  packageDigest: revision24AuthRecoveryDigest,
+  sourceRevision: "24",
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041304130413-",
+  staleJobRef: baseFixture.authRecovery.staleJobs[0].ref,
+  externalSecretNames: Object.freeze([...baseFixture.externalSecretNames]),
+  vectorResource: baseFixture.phaseAPendingVector.resource
+});
 
 const [tool, ...args] = process.argv.slice(2);
 if (tool === "helm" || tool === "kubectl" || tool === "sha256sum") {
@@ -911,6 +1036,45 @@ const livePods = () => {
     structuredClone(fixture.revision24GlobalWait.vectorPod)
   ];
 };
+
+const renderedAuthRecoveryJob = (allowRecoveryRoot) => `---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openbao-auth-reconcile
+  namespace: secret-store
+  annotations:
+    falcone.gntik.ai/attested-chart-version: "${fixture.targetVersion}"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      serviceAccountName: openbao-auth-reconciler
+      restartPolicy: OnFailure
+      containers:
+        - name: auth-metadata-reconciler
+          image: openbao/openbao:2.3.1
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              desired_policies="functions,gateway,iam,platform"
+              desired_token_no_default_policy="true"
+              echo "result=unchanged code=AUTH_METADATA_MATCHED canary=passed"
+          volumeMounts:
+            - name: tls
+              mountPath: /openbao/tls
+${allowRecoveryRoot ? `            - name: recovery
+              mountPath: /openbao-recovery
+` : ""}      volumes:
+        - name: tls
+          secret:
+            secretName: openbao-server-tls
+${allowRecoveryRoot ? `        - name: recovery
+          secret:
+            secretName: openbao-recovery
+` : ""}`;
 
 const renderedChart = () => {
   const imageContract = [
@@ -1181,7 +1345,12 @@ spec:
         resources:
           requests:
             storage: 10Gi`).join("\n");
-  return `${imageContract}\n${apisixDocument}\n${clusterSecretStoreDocument}\n${renderedStorageDocuments}\n${renderedSeaweedfsDocuments}\n${externalSecretDocuments.join("\n")}\n`;
+  const authRecoveryDocument = fixture.authRecovery?.enabled
+    ? renderedAuthRecoveryJob(
+        args.join(" ").includes("openbao.openbao.authReconcile.allowRecoveryRoot=true")
+      )
+    : "";
+  return `${imageContract}\n${apisixDocument}\n${clusterSecretStoreDocument}\n${renderedStorageDocuments}\n${renderedSeaweedfsDocuments}\n${externalSecretDocuments.join("\n")}\n${authRecoveryDocument}\n`;
 };
 
 if (tool === "helm") {
@@ -1222,7 +1391,15 @@ if (tool === "helm") {
   }
   if (command === "template") {
     assertTargetVersion();
-    process.stdout.write(renderedChart());
+    const showOnly = option("--show-only");
+    const allowRecoveryRoot = args.join(" ").includes(
+      "openbao.openbao.authReconcile.allowRecoveryRoot=true"
+    );
+    if (showOnly?.includes("openbao-auth-reconcile-job.yaml")) {
+      process.stdout.write(`${renderedAuthRecoveryJob(allowRecoveryRoot)}\n`);
+    } else {
+      process.stdout.write(renderedChart());
+    }
     process.exit(0);
   }
   if (command === "plugin" && args[1] === "list") {
@@ -1271,10 +1448,120 @@ if (kubectlCommand === "config" && kubectlArgs[1] === "current-context") {
   process.exit(0);
 }
 
+const authJobNamePrefix = () =>
+  `openbao-auth-reconcile-r24-${fixture.packageDigest.replace(/^sha256:/, "").slice(0, 12)}-`;
+const canonicalJobRef = (value) => {
+  const match = value?.match(/^job(?:\.batch)?\/(.+)$/);
+  return match ? `job.batch/${match[1]}` : null;
+};
+const createAuthRecoveryJob = (source) => {
+  if (!fixture.authRecovery?.enabled) return false;
+  const kinds = [...source.matchAll(/^kind:\s*([^\s]+)\s*$/gm)].map((match) => match[1]);
+  if (kinds.length !== 1 || kinds[0] !== "Job") return false;
+
+  const expectedGenerateName = authJobNamePrefix();
+  const generateName = source.match(/^\s{2}generateName:\s*([^\s]+)\s*$/m)?.[1];
+  if (generateName !== expectedGenerateName || /^\s{2}name:\s*openbao-auth-reconcile\s*$/m.test(source)) {
+    fail(`FAKE_AUTH_RECOVERY_GENERATE_NAME_REQUIRED expected=${expectedGenerateName}`);
+  }
+  if (!source.includes(`falcone.gntik.ai/attested-chart-version: "${fixture.targetVersion}"`)) {
+    fail("FAKE_AUTH_RECOVERY_JOB_NOT_FROM_ATTESTED_CHART");
+  }
+  if (!/^\s*activeDeadlineSeconds:\s*300\s*$/m.test(source)) {
+    fail("FAKE_AUTH_RECOVERY_ACTIVE_DEADLINE_DRIFT");
+  }
+  if (!/^\s*secretName:\s*openbao-recovery\s*$/m.test(source)) {
+    fail("FAKE_AUTH_RECOVERY_ROOT_NOT_ENABLED");
+  }
+  const metadata = source.match(/^metadata:\s*\n([\s\S]*?)^spec:\s*$/m)?.[1] ?? "";
+  const annotations = metadata.match(/^\s{2}annotations:\s*\n([\s\S]*)$/m)?.[1] ?? "";
+  const hasAnnotation = (key, value) => {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`^\\s{4}${escapedKey}:\\s*["']?${escapedValue}["']?\\s*$`, "m").test(annotations);
+  };
+  if (!hasAnnotation("in-falcone.io/recovery-package-digest", fixture.packageDigest)) {
+    fail("FAKE_AUTH_RECOVERY_ANNOTATION_MISSING field=package-digest");
+  }
+  if (!hasAnnotation("in-falcone.io/recovery-target-chart", fixture.targetChart)) {
+    fail("FAKE_AUTH_RECOVERY_ANNOTATION_MISSING field=chart");
+  }
+  if (!hasAnnotation("in-falcone.io/recovery-source-revision", "24")) {
+    fail("FAKE_AUTH_RECOVERY_ANNOTATION_MISSING field=source-revision");
+  }
+  for (const [key, value] of [
+    ["falcone.gntik.ai/attested-chart-version", fixture.targetVersion],
+    ["helm.sh/hook", "post-install,post-upgrade"],
+    ["helm.sh/hook-delete-policy", "before-hook-creation,hook-succeeded"]
+  ]) {
+    if (!hasAnnotation(key, value)) fail(`FAKE_AUTH_RECOVERY_METADATA_NOT_PRESERVED field=${key}`);
+  }
+  const nameOutput = kubectlArgs.some((argument, index) =>
+    argument === "--output=name" || argument === "-o=name" ||
+    ((argument === "-o" || argument === "--output") && kubectlArgs[index + 1] === "name")
+  );
+  if (!nameOutput) fail("FAKE_AUTH_RECOVERY_NAME_OUTPUT_REQUIRED");
+  if (namespace !== "secret-store" && !/^\s{2}namespace:\s*secret-store\s*$/m.test(source)) {
+    fail("FAKE_AUTH_RECOVERY_NAMESPACE_DRIFT");
+  }
+  if (fixture.authRecovery.createMode === "fail") {
+    fail("Error from server (InternalError): synthetic auth recovery Job create failure");
+  }
+
+  const state = readState();
+  const suffix = fixture.authRecovery.createdJobSuffixes[state.authRecoveryCreatedRefs.length];
+  if (!suffix) fail("FAKE_AUTH_RECOVERY_UNIQUE_SUFFIX_EXHAUSTED");
+  const ref = `job.batch/${expectedGenerateName}${suffix}`;
+  state.authRecoveryApplied = true;
+  state.authRecoveryCompleted = false;
+  state.authRecoveryCurrentRef = ref;
+  state.authRecoveryCreatedRefs.push(ref);
+  writeState(state);
+  const summary = [
+    "kubectl create auth-reconcile-job",
+    `ref=${ref}`,
+    `generateName=${expectedGenerateName}`,
+    `chart=${fixture.targetChart}`,
+    `digest=${fixture.packageDigest}`,
+    "sourceRevision=24",
+    "allowRecoveryRoot=true"
+  ].join(" ");
+  append(tracePath, summary);
+  append(mutationPath, summary);
+  if (fixture.authRecovery.createMode === "wrong-prefix") {
+    const returnedRef = `job.batch/openbao-auth-reconcile-unbound-${suffix}`;
+    append(tracePath, `kubectl create auth-reconcile-output lineCount=1 value=${returnedRef}`);
+    process.stdout.write(`${returnedRef}\n`);
+  } else if (fixture.authRecovery.createMode === "multiple") {
+    const extraRef = `job.batch/${expectedGenerateName}extra-${suffix}`;
+    append(tracePath, `kubectl create auth-reconcile-output lineCount=2 values=${ref},${extraRef}`);
+    process.stdout.write(`${ref}\n${extraRef}\n`);
+  } else {
+    append(tracePath, `kubectl create auth-reconcile-output lineCount=1 value=${ref}`);
+    process.stdout.write(`${ref}\n`);
+  }
+  return true;
+};
+
+const manifestInput = () => {
+  const fileIndex = kubectlArgs.findIndex((argument) => argument === "-f" || argument === "--filename");
+  if (fileIndex === -1) return fs.readFileSync(0, "utf8");
+  const source = kubectlArgs[fileIndex + 1];
+  return source === "-" ? fs.readFileSync(0, "utf8") : fs.readFileSync(source, "utf8");
+};
+
 if (kubectlCommand === "create") {
-  const source = fs.readFileSync(0, "utf8");
+  const source = manifestInput();
   const kind = source.match(/\n\s*kind:\s*([^\s]+)\s*\n/)?.[1];
   const name = source.match(/\n\s*name:\s*([^\s]+)\s*\n/)?.[1];
+  const generateName = source.match(/\n\s*generateName:\s*([^\s]+)\s*\n/)?.[1];
+  if (kind === "Job" && (name === "openbao-auth-reconcile" || generateName?.startsWith("openbao-auth-reconcile-r24-"))) {
+    if (kubectlArgs.some((argument) => argument.startsWith("--dry-run"))) {
+      json({apiVersion: "batch/v1", kind, metadata: {name, namespace: "secret-store"}});
+      process.exit(0);
+    }
+    if (createAuthRecoveryJob(source)) process.exit(0);
+  }
   if (kind === "Deployment" && name === "falcone-apisix") {
     json(renderedApisixDeployment());
     process.exit(0);
@@ -1301,14 +1588,57 @@ if (kubectlCommand === "create") {
   process.exit(0);
 }
 
+if (kubectlCommand === "apply" && kubectlArgs.some((argument) => argument === "-f" || argument === "--filename")) {
+  const source = manifestInput();
+  if (/^kind:\s*Job\s*$/m.test(source) && /openbao-auth-reconcile/.test(source)) {
+    fail("FAKE_AUTH_RECOVERY_CREATE_REQUIRED");
+  }
+  append(mutationPath, `kubectl ${kubectlArgs.join(" ")}`);
+  process.exit(0);
+}
+
 if (kubectlCommand === "wait") {
   const waitTarget = kubectlArgs.join(" ");
+  const requestedJobRef = kubectlArgs.map(canonicalJobRef).find(Boolean);
+  if (requestedJobRef?.startsWith(`job.batch/${authJobNamePrefix()}`)) {
+    const state = readState();
+    if (requestedJobRef !== state.authRecoveryCurrentRef) {
+      fail(`FAKE_AUTH_RECOVERY_STALE_JOB_WAIT ref=${requestedJobRef}`);
+    }
+    if (!/--for=condition=(?:Complete|complete)(?:\s|$)/.test(waitTarget)) {
+      fail("FAKE_AUTH_RECOVERY_COMPLETE_WAIT_REQUIRED");
+    }
+    if (!/(?:^|\s)--timeout(?:=|\s+)5m(?:\s|$)/.test(waitTarget)) {
+      fail("FAKE_AUTH_RECOVERY_FIVE_MINUTE_WAIT_REQUIRED");
+    }
+    if (state.authRecoveryWaitFailures > 0) {
+      state.authRecoveryWaitFailures -= 1;
+      writeState(state);
+      fail(`error: timed out waiting for the condition on ${requestedJobRef}`);
+    }
+    state.authRecoveryCompleted = true;
+    state.authRecoveryCompletedRefs.push(requestedJobRef);
+    writeState(state);
+    process.exit(0);
+  }
+  if (requestedJobRef === "job.batch/openbao-auth-reconcile" &&
+      fixture.authRecovery?.enabled && readState().authRecoveryLogReads === 0) {
+    fail("FAKE_AUTH_RECOVERY_FRESH_JOB_REF_REQUIRED");
+  }
   if (
     fixture.legacyStoreHandoff.enabled &&
     /(?:clustersecretstore|externalsecret)/.test(waitTarget) &&
     !storeIsHandedOff()
   ) {
     fail("FAKE_ESO_READINESS_REQUIRES_STORE_HANDOFF");
+  }
+  if (/clustersecretstore(?:\.external-secrets\.io)?\/openbao-backend/.test(waitTarget) &&
+      fixture.reachability?.storeWaitFails) {
+    fail("error: timed out waiting for condition Ready on clustersecretstore/openbao-backend");
+  }
+  const externalSecretName = waitTarget.match(/externalsecret(?:\.external-secrets\.io)?\/([^\s]+)/)?.[1];
+  if (externalSecretName && externalSecretName === fixture.reachability?.externalSecretWaitFailure) {
+    fail(`error: timed out waiting for condition Ready on externalsecret/${externalSecretName}`);
   }
   process.exit(0);
 }
@@ -1317,8 +1647,29 @@ if (kubectlCommand === "rollout" && kubectlArgs[1] === "status") {
   process.exit(0);
 }
 
-if (kubectlCommand === "logs" && kubectlArgs[1] === "job/openbao-auth-reconcile") {
-  process.stdout.write("result=unchanged code=AUTH_METADATA_MATCHED canary=passed\n");
+if (kubectlCommand === "logs" && canonicalJobRef(kubectlArgs[1])) {
+  if (fixture.authRecovery?.enabled) {
+    const state = readState();
+    const requestedJobRef = canonicalJobRef(kubectlArgs[1]);
+    if (requestedJobRef?.startsWith(`job.batch/${authJobNamePrefix()}`)) {
+      if (requestedJobRef !== state.authRecoveryCurrentRef) {
+        fail(`FAKE_AUTH_RECOVERY_STALE_JOB_LOG ref=${requestedJobRef}`);
+      }
+      if (!state.authRecoveryCompletedRefs.includes(requestedJobRef)) {
+        fail("FAKE_AUTH_RECOVERY_LOG_BEFORE_COMPLETE");
+      }
+    } else if (state.authRecoveryLogReads === 0) {
+      fail("FAKE_AUTH_RECOVERY_FRESH_JOB_LOG_REQUIRED");
+    }
+    const log = state.authRecoveryLogReads === 0
+      ? fixture.authRecovery.preflightLog
+      : fixture.authRecovery.healthLog;
+    state.authRecoveryLogReads += 1;
+    writeState(state);
+    process.stdout.write(`${log}\n`);
+  } else {
+    process.stdout.write("result=unchanged code=AUTH_METADATA_MATCHED canary=passed\n");
+  }
   process.exit(0);
 }
 
@@ -1329,6 +1680,9 @@ if (
   ) &&
   kubectlArgs[2] === "openbao-backend"
 ) {
+  if (fixture.authRecovery?.enabled && readState().authRecoveryLogReads < 1) {
+    fail("AUTH_RECOVERY_REQUIRED_BEFORE_CLUSTERSECRETSTORE_HANDOFF");
+  }
   const patchOptionIndex = kubectlArgs.findIndex((argument) => argument === "-p" || argument === "--patch");
   if (patchOptionIndex === -1) fail("FAKE_STORE_JSON_PATCH_REQUIRED");
   if (!kubectlArgs.some((argument, index) =>
@@ -1401,6 +1755,34 @@ if (
   name === "eso-openbao-auth"
 ) {
   json(fixture.legacyStoreHandoff.serviceAccount);
+  process.exit(0);
+}
+
+if (["job", "jobs", "job.batch", "jobs.batch"].includes(resource) && namespace === "secret-store") {
+  const state = readState();
+  const stale = (fixture.authRecovery?.staleJobs ?? []).map((job) => ({
+    apiVersion: "batch/v1",
+    kind: "Job",
+    metadata: {name: job.ref.replace(/^job(?:\.batch)?\//, ""), namespace},
+    status: {conditions: [{type: "Failed", status: "True"}]}
+  }));
+  const created = state.authRecoveryCreatedRefs.map((ref) => {
+    const completed = state.authRecoveryCompletedRefs.includes(ref);
+    return {
+      apiVersion: "batch/v1",
+      kind: "Job",
+      metadata: {name: ref.replace(/^job(?:\.batch)?\//, ""), namespace},
+      status: {conditions: [{type: completed ? "Complete" : "Failed", status: "True"}]}
+    };
+  });
+  const jobs = [...stale, ...created];
+  if (name) {
+    const job = jobs.find((candidate) => candidate.metadata.name === name);
+    if (!job) fail(`fake auth recovery Job not found: ${name}`);
+    json(job);
+  } else {
+    json({apiVersion: "v1", kind: "List", items: jobs});
+  }
   process.exit(0);
 }
 

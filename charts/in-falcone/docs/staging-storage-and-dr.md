@@ -1,7 +1,7 @@
 # Staging pgvector storage and disaster-recovery boundary
 
 Audience: P18 release engineers, P3 operators, P4 auditors, P9 workspace
-operators, and P17 responders. Chart 0.4.12 selects `local-path` only in
+operators, and P17 responders. Chart 0.4.13 selects `local-path` only in
 `values/staging.yaml` and restricts first placement to
 `topology.kubernetes.io/region=fsn1`. Base, production, HA, and OpenShift values
 remain operator-selected and do not inherit this setting.
@@ -26,8 +26,14 @@ parity and P13 isolation, then cut over.
 Phase B requires distinct, fresh, exact-target backup and parity attestations,
 the fresh final Phase-A attestation, a current revision/chart/package-bound
 confirmation, and a separate exact PVC name/UID confirmation. After Phase B,
-forward-reapply chart 0.4.12 on failure. Do not return to revision 20: its absent
+forward-reapply chart 0.4.13 on failure. Do not return to revision 20: its absent
 `hcloud-volumes` contract cannot recreate service. Do not delete a data-bearing
 claim to retry provisioning. Future production/HCloud CSI work needs
 an explicit component owner, cloud credential custody, pinned provisioner,
 snapshots, topology, restore rehearsal, monitoring, migration, and rollback plan.
+
+Revision-24 auth/store recovery is independent of the Phase-B PVC decision.
+Each auth retry creates a new digest-bound generated Job and retains earlier
+attempts as metadata-only evidence; it must not reuse or delete a stale Job to
+make storage remediation appear ready. Store or ExternalSecret readiness
+timeouts stop before Helm and never broaden the PVC deletion authorization.
