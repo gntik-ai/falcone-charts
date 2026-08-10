@@ -36,7 +36,7 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
 const phaseATemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
-const repairDigest = 'sha256:0411041104110411041104110411041104110411041104110411041104110411'
+const repairDigest = 'sha256:0412041204120412041204120412041204120412041204120412041204120412'
 const repairVersion = readFileSync(resolve(umbrellaChart, 'Chart.yaml'), 'utf8')
   .match(/^version:\s*([^\s]+)\s*$/m)?.[1]
 assert.ok(repairVersion, 'public umbrella chart has no unique top-level version')

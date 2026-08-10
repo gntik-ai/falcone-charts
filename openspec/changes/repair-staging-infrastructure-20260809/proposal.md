@@ -24,7 +24,7 @@ only destructive empty-PVC transition.
   structured short-lived evidence, semantic external-owner protection, detailed
   operations/security/storage documentation, and black-box contracts.
 - Extend fail-forward recovery to the exact revision-23 chart-0.4.9 named-user
-  rollout failure, targeting immutable chart 0.4.11 and rejecting evidence drift
+  rollout failure, targeting immutable chart 0.4.12 and rejecting evidence drift
   before mutation.
 - Admit the one exact observed partial manual recovery in which APISIX is 3/3
   Ready through an exact Deployment→ReplicaSet→Pod UID/revision owner chain as
@@ -32,6 +32,10 @@ only destructive empty-PVC transition.
   observability retains the sole named-user failure; make that mount and numeric
   identity declarative in staging without adopting the ConfigMap, and prove
   both APISIX and Prometheus numeric convergence after each upgrade pass.
+- Resume only the exact revision-24/chart-0.4.11 timeout, hand off the exact
+  revision-20 ClusterSecretStore hook to the rendered `eso-system` identity,
+  and replace Phase-A global Helm wait with bounded explicit non-vector rollout
+  checks while retaining Phase-B JIT and global wait.
 
 ## Impact
 

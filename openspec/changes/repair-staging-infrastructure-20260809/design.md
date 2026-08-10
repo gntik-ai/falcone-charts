@@ -39,7 +39,7 @@
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.11 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.12 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
 9. Revision-20 Phase A prevalidates the exact fourteen Falcone-owned
    `ExternalSecret` declarations before apply. It accepts only the all-absent
@@ -67,7 +67,7 @@
     preserved prior availability. The gate binds labels, ReplicaSet ownership,
     images, generations, replica counts and full kubelet error signatures without
     reading logs, Secrets or Helm manifests. Forward recovery delegates to the
-    existing two-pass Phase-A path and requires fresh 0.4.11/package-bound backup
+    existing two-pass Phase-A path and requires fresh 0.4.12/package-bound backup
     and parity evidence, but no fabricated Phase-A attestation.
 14. Chart 0.4.10 remains an immutable published but unapplied artifact. A later
     `kubectl-patch` left APISIX 3/3 Ready with pod UID 636 and the existing
@@ -79,6 +79,17 @@
     declarative but neither creates nor adopts the external ConfigMap. The
     rendered target is checked before mutation and both APISIX and Prometheus
     numeric identities are checked live after each upgrade pass.
+15. Revision 24 is admitted only as the exact failed chart-0.4.11 global-wait
+    attempt. Phase A leaves the proven-empty vector workload Pending for the JIT
+    Phase B, so its two Helm upgrades omit global wait and are followed by
+    explicit bounded rollouts for every other managed workload. Phase B keeps
+    global wait after claim recreation.
+16. The revision-20 store hook is handed off only from one exact legacy form.
+    The desired store is parsed from the local render; apply uses UID and
+    resourceVersion tests, removes only the two hook annotations, replaces only
+    the public provider spec, and waits for the store plus fourteen
+    ExternalSecrets. Secret payloads and the administrator-owned ESO release are
+    outside the mutation boundary.
 
 ## Failure and rollback
 
