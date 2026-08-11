@@ -71,7 +71,9 @@ if [ -n "$field" ]; then
     auth/kubernetes/role/eso-role:token_explicit_max_ttl) printf '0\n' ;;
     auth/kubernetes/role/eso-role:token_period) printf '0\n' ;;
     auth/kubernetes/role/eso-role:token_num_uses) printf '0\n' ;;
-    auth/kubernetes/role/eso-role:token_no_default_policy) printf 'false\n' ;;
+    auth/kubernetes/role/eso-role:token_no_default_policy)
+      if [ "$scenario" = "role-token-field-drift" ] && [ ! -f "$state_dir/role-written" ]; then printf 'false\n'; else printf 'true\n'; fi
+      ;;
     auth/kubernetes/role/eso-role:token_type) printf 'default\n' ;;
     *) printf 'unexpected bao field read: %s %s\n' "$path" "$field" >&2; exit 2 ;;
   esac

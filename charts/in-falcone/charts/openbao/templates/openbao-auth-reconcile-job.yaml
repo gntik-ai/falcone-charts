@@ -60,7 +60,7 @@ spec:
               desired_token_explicit_max_ttl="0"
               desired_token_period="0"
               desired_token_num_uses="0"
-              desired_token_no_default_policy="false"
+              desired_token_no_default_policy="true"
               desired_token_type="default"
               desired_token_bound_cidrs=""
               desired_token_strictly_bind_ip="false"

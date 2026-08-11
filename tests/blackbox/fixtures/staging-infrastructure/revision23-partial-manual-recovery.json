@@ -1,6 +1,6 @@
 {
-  "targetVersion": "0.4.12",
-  "targetChart": "in-falcone-0.4.12",
+  "targetVersion": "0.4.13",
+  "targetChart": "in-falcone-0.4.13",
   "packageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "renderedApisixPodSecurityContext": {
     "fsGroup": 1001,
@@ -137,8 +137,8 @@
   },
   "revision24GlobalWait": {
     "enabled": false,
-    "targetVersion": "0.4.12",
-    "targetChart": "in-falcone-0.4.12",
+    "targetVersion": "0.4.13",
+    "targetChart": "in-falcone-0.4.13",
     "packageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "release": {
       "name": "falcone",
@@ -1262,6 +1262,28 @@
         }
       }
     }
+  },
+  "authRecovery": {
+    "enabled": false,
+    "createMode": "success",
+    "waitFailures": 0,
+    "preflightLog": "result=changed code=AUTH_METADATA_CONVERGED canary=passed",
+    "healthLog": "result=unchanged code=AUTH_METADATA_MATCHED canary=passed",
+    "createdJobSuffixes": [
+      "fresh1",
+      "fresh2",
+      "fresh3"
+    ],
+    "staleJobs": [
+      {
+        "ref": "job.batch/openbao-auth-reconcile-r24-041304130413-old01",
+        "status": "Failed"
+      }
+    ]
+  },
+  "reachability": {
+    "storeWaitFails": false,
+    "externalSecretWaitFailure": null
   },
   "externalSecretNames": [
     "gateway-apisix-credentials",

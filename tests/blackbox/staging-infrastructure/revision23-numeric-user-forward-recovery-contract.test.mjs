@@ -36,7 +36,7 @@ const namedUserImages = [
   },
 ]
 
-const repairDigest = 'sha256:0412041204120412041204120412041204120412041204120412041204120412'
+const repairDigest = 'sha256:0413041304130413041304130413041304130413041304130413041304130413'
 const stagingFixtureDir = resolve(repoRoot, 'tests/blackbox/fixtures/staging-infrastructure')
 const stagingFakeBin = resolve(stagingFixtureDir, 'fake-bin')
 const recoveryCli = resolve(umbrellaChart, 'migrations/revision-20-forward-recovery.sh')
@@ -66,7 +66,7 @@ function invokeRecovery(scenario, options = {}) {
   const parityAttestation = resolve(work, 'parity-attestation.json')
   materializeAttestation('revision23-backup-attestation.template.json', backupAttestation)
   materializeAttestation('revision23-parity-attestation.template.json', parityAttestation)
-  const exactConfirmation = `default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.12/${repairDigest}`
+  const exactConfirmation = `default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.13/${repairDigest}`
   const args = options.apply
     ? [
         '--apply',
@@ -87,7 +87,7 @@ function invokeRecovery(scenario, options = {}) {
       FALCONE_STAGING_STATE_FILE: stateFile,
       FALCONE_STAGING_REAL_HELM: realHelm,
       FALCONE_STAGING_HELM_DELEGATE: realHelm,
-      FALCONE_STAGING_REPAIR_VERSION: '0.4.12',
+      FALCONE_STAGING_REPAIR_VERSION: '0.4.13',
       FALCONE_STAGING_REPAIR_PACKAGE_DIGEST: repairDigest,
       FALCONE_STAGING_PACKAGED_CHART_SOURCE: umbrellaChart,
       FALCONE_STAGING_REVISION20_MANIFEST: resolve(stagingFixtureDir, 'revision-20-ownership-manifest.json'),
@@ -136,11 +136,11 @@ function targetContainers(objects) {
 }
 
 // bbx-repair-staging-050 | fn-revision23-numeric-image-users | OpenSpec #### Scenario: Vanilla Kubernetes starts images that declare named users
-test('0.4.12 public values and vanilla render pin the verified numeric identities while remaining non-root', () => {
+test('0.4.13 public values and vanilla render pin the verified numeric identities while remaining non-root', () => {
   const chartResult = run('helm', ['show', 'chart', umbrellaChart])
   assertSuccess(chartResult, 'helm show chart')
   const [chart] = yamlDocuments(chartResult.stdout)
-  assert.equal(chart.version, '0.4.12', 'the repaired chart must be published as immutable version 0.4.12')
+  assert.equal(chart.version, '0.4.13', 'the repaired chart must be published as immutable version 0.4.13')
 
   const values = publicValues()
   const { objects } = render(umbrellaChart)
@@ -162,7 +162,7 @@ test('0.4.12 public values and vanilla render pin the verified numeric identitie
 })
 
 // bbx-repair-staging-055 | fn-revision23-jit-forward-recovery | OpenSpec #### Scenario: Phase A resumes the admitted revision-23 non-numeric image-user failure
-test('exact r23 apply uses fresh 0.4.12 evidence, delegates fail-forward, and performs exactly two non-atomic upgrades', (t) => {
+test('exact r23 apply uses fresh 0.4.13 evidence, delegates fail-forward, and performs exactly two non-atomic upgrades', (t) => {
   const invocation = invokeRecovery('r23-nonnumeric-safe', { apply: true })
   t.after(invocation.cleanup)
 
@@ -172,7 +172,7 @@ test('exact r23 apply uses fresh 0.4.12 evidence, delegates fail-forward, and pe
   const upgrades = invocation.helmCalls.filter((call) => /^upgrade falcone\b/.test(call))
   assert.equal(upgrades.length, 2, `fail-forward must perform the two Phase-A upgrades, observed ${upgrades.length}:\n${upgrades.join('\n')}`)
   for (const call of upgrades) {
-    assert.match(call, /(?:^| )--version 0\.4\.12(?: |$)/)
+    assert.match(call, /(?:^| )--version 0\.4\.13(?: |$)/)
     assert.doesNotMatch(call, /(?:^| )--atomic(?: |$)/)
     assert.doesNotMatch(call, /(?:^| )--reuse-values(?: |$)/)
   }
@@ -182,7 +182,7 @@ test('exact r23 apply uses fresh 0.4.12 evidence, delegates fail-forward, and pe
 
 // bbx-repair-staging-056 | fn-revision23-jit-confirmation-gate | OpenSpec #### Scenario: Phase A resumes the admitted revision-23 non-numeric image-user failure
 test('inexact r23 apply confirmation fails before every mutation', (t) => {
-  const wrongConfirmation = `default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.12/sha256:${'9'.repeat(64)}`
+  const wrongConfirmation = `default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.13/sha256:${'9'.repeat(64)}`
   const invocation = invokeRecovery('r23-nonnumeric-safe', { apply: true, confirmation: wrongConfirmation })
   t.after(invocation.cleanup)
 
@@ -215,7 +215,7 @@ test('recovery dry-run admits only the exact r20/r22/r23 chain plus the two live
   assert.ok(invocation.kubectlCalls.some((call) => /\bget deployments(?:\.apps)?\b.*(?:^|\s)-o\s+json(?:\s|$)|\bget deployment falcone-(?:apisix|observability)(?:\s|$).*?(?:^|\s)-o\s+json(?:\s|$)/.test(call)), 'preflight must verify preserved Deployment availability')
 
   for (const call of invocation.helmCalls.filter((line) => /^(?:template|diff upgrade|pull|upgrade)\b/.test(line))) {
-    assert.match(call, /(?:^| )--version 0\.4\.12(?: |$)/, `recovery target must be immutable 0.4.12: ${call}`)
+    assert.match(call, /(?:^| )--version 0\.4\.13(?: |$)/, `recovery target must be immutable 0.4.13: ${call}`)
   }
   assertNoMutation(invocation, 'admitted dry-run')
 })

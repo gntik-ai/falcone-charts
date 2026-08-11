@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.12"
+EXPECTED_REPAIR_VERSION="0.4.13"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -32,6 +32,7 @@ package_digest=""
 mutation_started=false
 render_file=""
 diff_file=""
+auth_job_file=""
 
 usage() {
   printf '%s\n' \
@@ -66,6 +67,7 @@ cleanup() {
   local rc=$?
   [[ -z "$render_file" ]] || rm -f "$render_file"
   [[ -z "$diff_file" ]] || rm -f "$diff_file"
+  [[ -z "$auth_job_file" ]] || rm -f "$auth_job_file"
   if [[ -n "$chart_package_dir" && "$chart_package_dir" == "${TMPDIR:-/tmp}/falcone-repair-package."* ]]; then
     rm -rf "$chart_package_dir"
   fi
@@ -892,7 +894,7 @@ phase_a_args=(
   --set global.webhookSigningKey.rotation.recoveryWindowSeconds=604800
   --set-string deployment.upgrade.currentVersion=0.3.1
   --set-string postgresqlVector.persistence.storageClass=hcloud-volumes
-  --set openbao.openbao.authReconcile.allowRecoveryRoot=true
+  --set openbao.openbao.authReconcile.allowRecoveryRoot=false
   --set global.webhookDatabase.migration.backupVerified=true
   --set global.webhookDatabase.migration.parityVerified=true
   --set-string "global.webhookDatabase.migration.backupReference=${backup_reference:-READ-ONLY-PREFLIGHT}"
@@ -1184,6 +1186,102 @@ PY
     "$legacy_store_state" "$legacy_store_uid" "$legacy_store_resource_version"
 }
 
+run_revision24_pre_handoff_auth_reconcile() {
+  [[ "$actual_revision" == 24 ]] || return 0
+  # The auth-first pre-handoff Job is the 0.4.13 forward fix only. The immutable
+  # 0.4.12 failed-recovery lineage never rendered or ran it.
+  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.13" ]] || return 0
+
+  auth_job_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision24-auth-reconcile.XXXXXX")"
+  helm template "$EXPECTED_RELEASE" "$chart_source" \
+    --version "$EXPECTED_REPAIR_VERSION" \
+    --namespace "$EXPECTED_NAMESPACE" \
+    "${phase_a_no_root_args[@]}" \
+    --set openbao.openbao.authReconcile.allowRecoveryRoot=true \
+    --show-only charts/openbao/templates/openbao-auth-reconcile-job.yaml \
+    >"$auth_job_file" || die "REVISION24_AUTH_RECONCILE_RENDER_FAILED"
+
+  python3 - "$auth_job_file" "$package_digest" "$EXPECTED_REPAIR_CHART" "$actual_revision" <<'PY' || \
+    die "REVISION24_AUTH_RECONCILE_RENDER_DRIFT"
+import re
+import sys
+
+import yaml
+
+
+class DoubleQuoted(str):
+    pass
+
+
+yaml.SafeDumper.add_representer(
+    DoubleQuoted,
+    lambda dumper, value: dumper.represent_scalar("tag:yaml.org,2002:str", value, style='"'),
+)
+
+path, package_digest, target_chart, source_revision = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    documents = [document for document in yaml.safe_load_all(stream) if isinstance(document, dict)]
+
+if len(documents) != 1:
+    raise SystemExit(1)
+job = documents[0]
+metadata = job.get("metadata", {})
+if (
+    job.get("apiVersion") != "batch/v1"
+    or job.get("kind") != "Job"
+    or metadata.get("name") != "openbao-auth-reconcile"
+    or metadata.get("namespace") != "secret-store"
+    or not re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
+    or target_chart != "in-falcone-0.4.13"
+    or source_revision != "24"
+):
+    raise SystemExit(1)
+
+digest12 = package_digest.removeprefix("sha256:")[:12]
+metadata.pop("name")
+metadata["generateName"] = f"openbao-auth-reconcile-r24-{digest12}-"
+annotations = metadata.setdefault("annotations", {})
+annotations["in-falcone.io/recovery-package-digest"] = package_digest
+annotations["in-falcone.io/recovery-target-chart"] = target_chart
+annotations["in-falcone.io/recovery-source-revision"] = source_revision
+if "falcone.gntik.ai/attested-chart-version" in annotations:
+    annotations["falcone.gntik.ai/attested-chart-version"] = DoubleQuoted(
+        str(annotations["falcone.gntik.ai/attested-chart-version"])
+    )
+
+with open(path, "w", encoding="utf-8") as stream:
+    yaml.safe_dump_all([job], stream, explicit_start=True, sort_keys=False)
+PY
+
+  local auth_job_ref auth_job_suffix auth_log digest12 expected_job_prefix terminal_lines
+  digest12="${package_digest#sha256:}"
+  digest12="${digest12:0:12}"
+  expected_job_prefix="job.batch/openbao-auth-reconcile-r24-${digest12}-"
+  auth_job_ref="$(kubectl -n secret-store create -f "$auth_job_file" -o name)" || \
+    die "REVISION24_AUTH_RECONCILE_CREATE_FAILED"
+  auth_job_suffix="${auth_job_ref#"$expected_job_prefix"}"
+  if [[ "$auth_job_ref" == *$'\n'* \
+    || "$auth_job_ref" != "${expected_job_prefix}${auth_job_suffix}" \
+    || -z "$auth_job_suffix" \
+    || ! "$auth_job_suffix" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+    die "REVISION24_AUTH_RECONCILE_CREATE_REF_DRIFT"
+  fi
+  kubectl -n secret-store wait --for=condition=Complete \
+    "$auth_job_ref" --timeout=5m >/dev/null || \
+    die "REVISION24_AUTH_RECONCILE_INCOMPLETE"
+
+  auth_log="$(kubectl -n secret-store logs "$auth_job_ref")" || \
+    die "REVISION24_AUTH_RECONCILE_LOG_UNAVAILABLE"
+  terminal_lines="$(printf '%s\n' "$auth_log" | grep '^result=' || true)"
+  case "$terminal_lines" in
+    "result=changed code=AUTH_METADATA_CONVERGED canary=passed"|\
+    "result=unchanged code=AUTH_METADATA_MATCHED canary=passed") ;;
+    *) die "REVISION24_AUTH_RECONCILE_EVIDENCE_DRIFT" ;;
+  esac
+  printf 'revision24-auth-reconcile=validated chart=%s job=%s recovery-root=pre-handoff-only canary=passed\n' \
+    "$EXPECTED_REPAIR_CHART" "$auth_job_ref"
+}
+
 apply_legacy_clustersecretstore_handoff() {
   [[ "$actual_revision" == 24 ]] || return 0
   if [[ "$legacy_store_state" == required ]]; then
@@ -1191,9 +1289,11 @@ apply_legacy_clustersecretstore_handoff() {
       --type=json -p "$legacy_store_patch" >/dev/null
   fi
   kubectl wait --for=condition=Ready clustersecretstore.external-secrets.io/openbao-backend --timeout=10m >/dev/null
-  kubectl -n "$EXPECTED_NAMESPACE" wait --for=condition=Ready \
-    externalsecret.external-secrets.io --all --timeout=10m >/dev/null
-  local external_secrets
+  local external_secret_name external_secrets
+  while IFS= read -r external_secret_name; do
+    kubectl -n "$EXPECTED_NAMESPACE" wait --for=condition=Ready \
+      "externalsecret.external-secrets.io/${external_secret_name}" --timeout=10m >/dev/null
+  done < <(printf '%s' "$expected_external_secret_names" | jq -r '.[]')
   external_secrets="$(kubectl -n "$EXPECTED_NAMESPACE" get externalsecrets.external-secrets.io -o json)" || \
     die "LEGACY_CLUSTERSECRETSTORE_EXTERNALSECRET_EVIDENCE_UNAVAILABLE"
   printf '%s' "$external_secrets" | jq -e --argjson expected "$expected_external_secret_names" '
@@ -1498,6 +1598,7 @@ if [[ "$mode" == phase-a ]]; then
   [[ "$confirm_target" == "$expected_confirmation" ]] || die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${expected_confirmation}"
   owner_before="$(owner_metadata)"
   mutation_started=true
+  run_revision24_pre_handoff_auth_reconcile
   apply_legacy_clustersecretstore_handoff
   adopt_falcone_external_secrets true
   helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --timeout 20m "${phase_a_args[@]}"
