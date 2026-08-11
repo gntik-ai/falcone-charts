@@ -18,7 +18,7 @@ const recoveryScript = path.join(
 );
 const exactFixturePath = path.join(helperDirectory, "revision23-partial-manual-recovery.json");
 const exactConfirmation =
-  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.13/" +
+  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.14/" +
   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const baseFixture = JSON.parse(fs.readFileSync(exactFixturePath, "utf8"));
 
@@ -55,7 +55,10 @@ function runRecovery({
   mutate = () => {},
   confirmation = exactConfirmation,
   apply = true,
-  attemptCount = 1
+  attemptCount = 1,
+  recoveryEntrypoint = recoveryScript,
+  invokeWithBash = false,
+  entrypointArguments = []
 } = {}) {
   const scenarioDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "falcone-bbx-r23-partial-"));
   const binDirectory = path.join(scenarioDirectory, "bin");
@@ -108,8 +111,10 @@ function runRecovery({
   }
 
   try {
-    const recoveryArguments = apply
-      ? [
+    const recoveryArguments = [
+      ...entrypointArguments,
+      ...(apply
+        ? [
           "--apply",
           "--confirm-target",
           confirmation,
@@ -118,14 +123,15 @@ function runRecovery({
           "--parity-attestation",
           parityPath
         ]
-      : [];
+        : [])
+    ];
     const attempts = [];
     for (let attempt = 0; attempt < attemptCount; attempt += 1) {
       const traceBefore = fs.readFileSync(tracePath, "utf8");
       const mutationsBefore = fs.readFileSync(mutationPath, "utf8");
       const result = spawnSync(
-        recoveryScript,
-        recoveryArguments,
+        invokeWithBash ? "bash" : recoveryEntrypoint,
+        invokeWithBash ? [recoveryEntrypoint, ...recoveryArguments] : recoveryArguments,
         {
           cwd: repositoryRoot,
           encoding: "utf8",
@@ -187,14 +193,14 @@ function assertRejectedAfterFirstPhaseAUpgrade(result, drift) {
   const upgrades = result.mutations.split("\n").filter((line) => line.startsWith("helm upgrade "));
   assert.deepEqual(
     upgrades,
-    ["helm upgrade release=falcone version=0.4.13"],
+    ["helm upgrade release=falcone version=0.4.14"],
     `${drift} must stop after exactly the first Phase-A upgrade`
   );
 }
 
 export function registerRevision23PartialManualRecoveryContract() {
   test("bbx-repair-staging-057 admits only the exact revision-23 partial manual recovery", async (t) => {
-    await t.test("admits the exact partial recovery and applies immutable chart 0.4.13", () => {
+    await t.test("admits the exact partial recovery and applies immutable chart 0.4.14", () => {
       const result = runRecovery();
 
       assert.equal(
@@ -209,13 +215,13 @@ export function registerRevision23PartialManualRecoveryContract() {
       );
       assert.match(
         result.stdout,
-        /phase-a=applied revision=25 chart=in-falcone-0\.4\.13 package-digest=sha256:b{64}/
+        /phase-a=applied revision=25 chart=in-falcone-0\.4\.14 package-digest=sha256:b{64}/
       );
       assert.deepEqual(
         result.mutations.trim().split("\n"),
         [
-          "helm upgrade release=falcone version=0.4.13",
-          "helm upgrade release=falcone version=0.4.13"
+          "helm upgrade release=falcone version=0.4.14",
+          "helm upgrade release=falcone version=0.4.14"
         ]
       );
       assert.doesNotMatch(result.trace, /helm (rollback|uninstall)|kubectl .* (delete|scale) /);
@@ -451,8 +457,8 @@ export function registerRevision23PhaseAVectorPendingProgressContract() {
     assert.deepEqual(
       result.mutations.trim().split("\n"),
       [
-        "helm upgrade release=falcone version=0.4.13",
-        "helm upgrade release=falcone version=0.4.13"
+        "helm upgrade release=falcone version=0.4.14",
+        "helm upgrade release=falcone version=0.4.14"
       ],
       "the recovery must preserve exactly one Phase-A and one Phase-B/JIT mutation"
     );
@@ -489,7 +495,7 @@ const enableRevision24GlobalWaitRecovery = (fixture) => {
 };
 
 const revision24Confirmation =
-  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.13/" +
+  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.14/" +
   baseFixture.revision24GlobalWait.packageDigest;
 
 function assertNoSecretReadsOrOwnershipEscape(result, contract) {
@@ -648,7 +654,7 @@ export function registerLegacyClusterSecretStoreHandoffContract() {
 
 export function registerRevision24GlobalWaitRecoveryContract() {
   test("bbx-repair-staging-060 resumes only the exact revision-24 global-wait timeout", async (t) => {
-    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.13 passes", () => {
+    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.14 passes", () => {
       const result = runRecovery({
         mutate: enableRevision24GlobalWaitRecovery,
         confirmation: revision24Confirmation
@@ -663,7 +669,7 @@ export function registerRevision24GlobalWaitRecoveryContract() {
       const patchIndex = traceLines.findIndex((line) => /kubectl .*\bpatch clustersecretstore/.test(line));
       const upgrades = traceLines.filter((line) => line.startsWith("helm upgrade "));
       assert.equal(upgrades.length, 2, "r24 recovery must complete exactly two Phase-A passes");
-      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.13(?:\s|$)/.test(line)));
+      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.14(?:\s|$)/.test(line)));
       assert.ok(upgrades.every((line) => !/(?:^|\s)--wait(?:\s|$)/.test(line)));
       assert.ok(patchIndex !== -1 && patchIndex < traceLines.indexOf(upgrades[0]), "store handoff precedes Helm");
       assertNoSecretReadsOrOwnershipEscape(result, "r24 recovery");
@@ -709,20 +715,18 @@ export function registerRevision24GlobalWaitRecoveryContract() {
   });
 }
 
-const revision24AuthRecoveryDigest = `sha256:${"0413".repeat(16)}`;
-const revision24AuthRecoveryConfirmation =
-  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.13/" +
-  revision24AuthRecoveryDigest;
-
+const revision24AuthRecoveryDigest = `sha256:${"0414".repeat(16)}`;
 const enableRevision24AuthRecovery = (fixture, {
   createMode,
   preflightLog,
   waitFailures,
   storeWaitFails,
-  externalSecretWaitFailure
+  externalSecretWaitFailure,
+  targetVersion,
+  requireUpgradeRenderContext
 }) => {
-  fixture.revision24GlobalWait.targetVersion = "0.4.13";
-  fixture.revision24GlobalWait.targetChart = "in-falcone-0.4.13";
+  fixture.revision24GlobalWait.targetVersion = targetVersion;
+  fixture.revision24GlobalWait.targetChart = `in-falcone-${targetVersion}`;
   fixture.revision24GlobalWait.packageDigest = revision24AuthRecoveryDigest;
   enableRevision24GlobalWaitRecovery(fixture);
   Object.assign(fixture.authRecovery, {
@@ -730,6 +734,7 @@ const enableRevision24AuthRecovery = (fixture, {
     createMode,
     waitFailures,
     preflightLog,
+    requireUpgradeRenderContext,
     healthLog: "result=unchanged code=AUTH_METADATA_MATCHED canary=passed"
   });
   Object.assign(fixture.reachability, {
@@ -745,7 +750,12 @@ export function runRevision24AuthRecovery({
   waitFailures = waitFails ? 1 : 0,
   attemptCount = 1,
   storeWaitFails = false,
-  externalSecretWaitFailure = null
+  externalSecretWaitFailure = null,
+  targetVersion = "0.4.14",
+  requireUpgradeRenderContext = false,
+  recoveryEntrypoint = recoveryScript,
+  invokeWithBash = false,
+  entrypointArguments = []
 } = {}) {
   return runRecovery({
     mutate: (fixture) => enableRevision24AuthRecovery(fixture, {
@@ -753,18 +763,25 @@ export function runRevision24AuthRecovery({
       preflightLog,
       waitFailures,
       storeWaitFails,
-      externalSecretWaitFailure
+      externalSecretWaitFailure,
+      targetVersion,
+      requireUpgradeRenderContext
     }),
-    confirmation: revision24AuthRecoveryConfirmation,
-    attemptCount
+    confirmation:
+      `default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-${targetVersion}/` +
+      revision24AuthRecoveryDigest,
+    attemptCount,
+    recoveryEntrypoint,
+    invokeWithBash,
+    entrypointArguments
   });
 }
 
 export const revision24AuthRecoveryContract = Object.freeze({
-  targetVersion: "0.4.13",
+  targetVersion: "0.4.14",
   packageDigest: revision24AuthRecoveryDigest,
   sourceRevision: "24",
-  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041304130413-",
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041404140414-",
   staleJobRef: baseFixture.authRecovery.staleJobs[0].ref,
   externalSecretNames: Object.freeze([...baseFixture.externalSecretNames]),
   vectorResource: baseFixture.phaseAPendingVector.resource
@@ -1396,6 +1413,12 @@ if (tool === "helm") {
       "openbao.openbao.authReconcile.allowRecoveryRoot=true"
     );
     if (showOnly?.includes("openbao-auth-reconcile-job.yaml")) {
+      if (fixture.authRecovery?.requireUpgradeRenderContext && !args.includes("--is-upgrade")) {
+        fail(
+          "Error: execution error at (in-falcone/templates/validate.yaml): " +
+          "webhook key adoption/rotation/recovery/finalization is upgrade-only"
+        );
+      }
       process.stdout.write(`${renderedAuthRecoveryJob(allowRecoveryRoot)}\n`);
     } else {
       process.stdout.write(renderedChart());

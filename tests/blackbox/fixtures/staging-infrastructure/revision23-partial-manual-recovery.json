@@ -1,6 +1,6 @@
 {
-  "targetVersion": "0.4.13",
-  "targetChart": "in-falcone-0.4.13",
+  "targetVersion": "0.4.14",
+  "targetChart": "in-falcone-0.4.14",
   "packageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "renderedApisixPodSecurityContext": {
     "fsGroup": 1001,
@@ -137,8 +137,8 @@
   },
   "revision24GlobalWait": {
     "enabled": false,
-    "targetVersion": "0.4.13",
-    "targetChart": "in-falcone-0.4.13",
+    "targetVersion": "0.4.14",
+    "targetChart": "in-falcone-0.4.14",
     "packageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "release": {
       "name": "falcone",
@@ -1276,7 +1276,7 @@
     ],
     "staleJobs": [
       {
-        "ref": "job.batch/openbao-auth-reconcile-r24-041304130413-old01",
+        "ref": "job.batch/openbao-auth-reconcile-r24-041404140414-old01",
         "status": "Failed"
       }
     ]

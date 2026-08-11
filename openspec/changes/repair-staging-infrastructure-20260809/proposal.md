@@ -1,4 +1,4 @@
-# Change: Repair revision-20/r24 staging infrastructure with chart 0.4.13
+# Change: Repair revision-20/r24 staging infrastructure with chart 0.4.14
 
 ## Why
 
@@ -8,8 +8,14 @@ External Secrets Operator. The live revision-24 recovery with chart 0.4.12
 proved that handing the store to `eso-system/eso-openbao-auth` before updating
 `eso-role` exposes a 403 authorization gap, and that allowing OpenBao's default
 policy makes the official reconciliation canary reject otherwise converged
-metadata. Chart 0.4.13 must close both gaps without weakening external ownership,
+metadata. Chart 0.4.14 must close both gaps without weakening external ownership,
 credential secrecy, storage gates, or the fail-forward boundary.
+
+The immutable 0.4.13 package was published but not applied. Package-level
+verification found that Helm extracts the delegated repair CLI without executable
+mode while the forward wrapper invokes it directly, and that the r24 auth-only
+render omits Helm upgrade context and trips the upgrade-only validation gate.
+Chart 0.4.14 corrects only those packaged recovery defects.
 
 ## What Changes
 
@@ -29,7 +35,7 @@ credential secrecy, storage gates, or the fail-forward boundary.
   structured short-lived evidence, semantic external-owner protection, detailed
   operations/security/storage documentation, and black-box contracts.
 - Extend fail-forward recovery to the exact revision-23 chart-0.4.9 named-user
-  rollout failure, targeting immutable chart 0.4.13 and rejecting evidence drift
+  rollout failure, targeting immutable chart 0.4.14 and rejecting evidence drift
   before mutation.
 - Admit the one exact observed partial manual recovery in which APISIX is 3/3
   Ready through an exact Deployment→ReplicaSet→Pod UID/revision owner chain as
@@ -54,7 +60,9 @@ credential secrecy, storage gates, or the fail-forward boundary.
 - Treat network/egress from the administrator-owned ESO controller to OpenBao as
   an external prerequisite: fail closed before Helm when the store and fourteen
   ExternalSecrets cannot converge, without taking ownership of `external-secrets`.
-- Publish the correction as immutable chart 0.4.13, update operator/recovery
+- Invoke the packaged repair delegate through Bash and render the r24 auth-only
+  preflight with Helm's explicit upgrade context before any mutation.
+- Publish the correction as immutable chart 0.4.14, update operator/recovery
   documentation, and keep recovery forward-only with no Helm rollback.
 
 ## Capabilities
@@ -88,9 +96,9 @@ Code evidence:
   currently performs the r24 store handoff before the first package Helm pass.
 - `charts/in-falcone/migrations/revision-20-repair.sh::phase_a_args-and-waits:874-925,1445-1476`
   establishes the two recovery-root/no-root passes and explicit non-vector wait
-  vector that 0.4.13 must preserve.
-- `charts/in-falcone/Chart.yaml::version:5` identifies the failed recovery
-  package baseline as 0.4.12.
+  vector that 0.4.14 must preserve.
+- `charts/in-falcone/Chart.yaml::version:5` identifies 0.4.14 as the new
+  immutable target while 0.4.13 remains published, defective, and unapplied.
 
 ## Exclusions and gates
 

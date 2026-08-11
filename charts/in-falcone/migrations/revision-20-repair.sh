@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.13"
+EXPECTED_REPAIR_VERSION="0.4.14"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -1188,14 +1188,15 @@ PY
 
 run_revision24_pre_handoff_auth_reconcile() {
   [[ "$actual_revision" == 24 ]] || return 0
-  # The auth-first pre-handoff Job is the 0.4.13 forward fix only. The immutable
-  # 0.4.12 failed-recovery lineage never rendered or ran it.
-  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.13" ]] || return 0
+  # The auth-first pre-handoff Job is enabled by the corrected 0.4.14 recovery
+  # package. Immutable 0.4.12 and 0.4.13 never completed this live recovery.
+  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.14" ]] || return 0
 
   auth_job_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision24-auth-reconcile.XXXXXX")"
   helm template "$EXPECTED_RELEASE" "$chart_source" \
     --version "$EXPECTED_REPAIR_VERSION" \
     --namespace "$EXPECTED_NAMESPACE" \
+    --is-upgrade \
     "${phase_a_no_root_args[@]}" \
     --set openbao.openbao.authReconcile.allowRecoveryRoot=true \
     --show-only charts/openbao/templates/openbao-auth-reconcile-job.yaml \
@@ -1232,7 +1233,7 @@ if (
     or metadata.get("name") != "openbao-auth-reconcile"
     or metadata.get("namespace") != "secret-store"
     or not re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
-    or target_chart != "in-falcone-0.4.13"
+    or target_chart != "in-falcone-0.4.14"
     or source_revision != "24"
 ):
     raise SystemExit(1)
