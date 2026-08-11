@@ -31,7 +31,8 @@ for suite in \
   tests/webhook-signing-key-chart.test.mjs \
   tests/webhook-database-credential-script.test.mjs \
   tests/webhook-database-principals-chart.test.mjs \
-  tests/webhook-key-lifecycle-hook-order.test.mjs
+  tests/webhook-key-lifecycle-hook-order.test.mjs \
+  tests/networkpolicy-selector-reality.test.mjs
 do
   node --check "$suite"
 done
@@ -44,6 +45,7 @@ node tests/webhook-signing-key-chart.test.mjs
 node tests/webhook-database-credential-script.test.mjs
 node tests/webhook-database-principals-chart.test.mjs
 node tests/webhook-key-lifecycle-hook-order.test.mjs
+node tests/networkpolicy-selector-reality.test.mjs
 sh tests/webhook-database-bootstrap-postgres16.test.sh
 
 helm lint --strict "$chart"

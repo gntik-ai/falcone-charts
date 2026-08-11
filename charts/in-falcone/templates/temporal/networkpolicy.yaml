@@ -6,11 +6,22 @@
   Only pods carrying an allowed `app.kubernetes.io/component` label — OR Temporal's own
   internal components — may connect.
 
-  LABEL CONTRACT (Decision 5, design.md) — sibling changes MUST set these pod labels:
-    - add-flows-control-plane-api  (#365): app.kubernetes.io/component: flows-api
+  LABEL CONTRACT (Decision 5, design.md). The allow-list must name components this
+  chart actually renders:
+    - control-plane-executor: app.kubernetes.io/component: control-plane-executor
+      — the component that starts workflows and registers cron/webhook triggers. It is
+      the ONLY component that builds a Temporal client (apps/control-plane-executor).
     - add-flows-dsl-interpreter-worker (#359): app.kubernetes.io/component: flows-worker
-  If those changes ship different labels, flows traffic to Temporal will be silently
-  blocked. Keep this list in sync with values.temporal.networkPolicy.allowedComponents.
+
+  This comment used to promise `flows-api` for add-flows-control-plane-api (#365), and
+  warned that "if those changes ship different labels, flows traffic to Temporal will be
+  silently blocked". That is exactly what happened: no pod any chart artifact produces
+  has ever carried `flows-api`, the executor was denied, and zero workflows ever ran.
+  See gntik-ai/falcone-charts#20 and gntik-ai/falcone#997.
+
+  A warning comment was not enough, so the invariant is now executable:
+  tests/networkpolicy-selector-reality.test.mjs fails the render if any selector in any
+  NetworkPolicy this chart ships matches no rendered pod template.
 
   Temporal's OWN internals also need the frontend gRPC port: the worker role embeds an
   SDK client and the bootstrap Job registers the namespace + custom search attributes —
