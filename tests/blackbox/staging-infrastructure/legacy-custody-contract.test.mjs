@@ -33,9 +33,9 @@ const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
 const phaseATemplate = resolve(fixtureRoot, 'phase-a-attestation.template.json')
-const repairVersion = '0.4.14'
+const repairVersion = '0.4.15'
 const repairChart = `in-falcone-${repairVersion}`
-const repairDigest = 'sha256:0414041404140414041404140414041404140414041404140414041404140414'
+const repairDigest = 'sha256:0415041504150415041504150415041504150415041504150415041504150415'
 const phaseAConfirmation = `default/in-falcone-staging/falcone@20/in-falcone-0.4.1->${repairChart}/${repairDigest}`
 const failedResumeConfirmation = `default/in-falcone-staging/falcone@21/in-falcone-0.4.7->${repairChart}/${repairDigest}`
 const postPhaseAConfirmation = `default/in-falcone-staging/falcone@25/${repairChart}/${repairDigest}`
@@ -278,7 +278,7 @@ test('the exact revision-21 credential-hook failure resumes without rollback and
       'failed-hook resume attempted rollback')
     assert.ok(!invocation.args.includes('--phase-a-attestation'),
       'failed-hook resume incorrectly required a Phase-A attestation')
-    assert.match(combined(invocation.result), /phase-a=applied revision=23 chart=in-falcone-0\.4\.14/)
+    assert.match(combined(invocation.result), /phase-a=applied revision=23 chart=in-falcone-0\.4\.15/)
     assert.match(combined(invocation.result), /recovery-root(?:-allowance)?=(?:false|disabled)|no-root/i)
   } finally {
     invocation.cleanup()

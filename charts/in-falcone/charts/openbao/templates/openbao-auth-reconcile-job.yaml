@@ -116,6 +116,8 @@ spec:
               # That identity cannot read KV data, policy documents, mounts, or
               # audit configuration and cannot change its own policy or login role.
               if [ "$auth_source" = "recovery_root" ]; then
+                bao policy write platform /openbao-platform/platform.hcl \
+                  >/dev/null || fail PLATFORM_POLICY_BOOTSTRAP_FAILED
                 bao policy write auth-reconcile /openbao-auth-reconcile/auth-reconcile.hcl \
                   >/dev/null || fail RECONCILER_POLICY_BOOTSTRAP_FAILED
                 bao write auth/kubernetes/role/openbao-init-role \
@@ -262,6 +264,9 @@ spec:
             - name: auth-reconcile-policy
               mountPath: /openbao-auth-reconcile
               readOnly: true
+            - name: platform-policy
+              mountPath: /openbao-platform
+              readOnly: true
             - name: recovery
               mountPath: /openbao-recovery
               readOnly: true
@@ -277,6 +282,9 @@ spec:
         - name: auth-reconcile-policy
           configMap:
             name: openbao-policy-auth-reconcile
+        - name: platform-policy
+          configMap:
+            name: openbao-policy-platform
         - name: recovery
           secret:
             secretName: {{ .Values.openbao.recovery.secretName }}

@@ -18,7 +18,7 @@ const recoveryScript = path.join(
 );
 const exactFixturePath = path.join(helperDirectory, "revision23-partial-manual-recovery.json");
 const exactConfirmation =
-  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.14/" +
+  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.15/" +
   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const baseFixture = JSON.parse(fs.readFileSync(exactFixturePath, "utf8"));
 
@@ -193,14 +193,14 @@ function assertRejectedAfterFirstPhaseAUpgrade(result, drift) {
   const upgrades = result.mutations.split("\n").filter((line) => line.startsWith("helm upgrade "));
   assert.deepEqual(
     upgrades,
-    ["helm upgrade release=falcone version=0.4.14"],
+    ["helm upgrade release=falcone version=0.4.15"],
     `${drift} must stop after exactly the first Phase-A upgrade`
   );
 }
 
 export function registerRevision23PartialManualRecoveryContract() {
   test("bbx-repair-staging-057 admits only the exact revision-23 partial manual recovery", async (t) => {
-    await t.test("admits the exact partial recovery and applies immutable chart 0.4.14", () => {
+    await t.test("admits the exact partial recovery and applies immutable chart 0.4.15", () => {
       const result = runRecovery();
 
       assert.equal(
@@ -215,13 +215,13 @@ export function registerRevision23PartialManualRecoveryContract() {
       );
       assert.match(
         result.stdout,
-        /phase-a=applied revision=25 chart=in-falcone-0\.4\.14 package-digest=sha256:b{64}/
+        /phase-a=applied revision=25 chart=in-falcone-0\.4\.15 package-digest=sha256:b{64}/
       );
       assert.deepEqual(
         result.mutations.trim().split("\n"),
         [
-          "helm upgrade release=falcone version=0.4.14",
-          "helm upgrade release=falcone version=0.4.14"
+          "helm upgrade release=falcone version=0.4.15",
+          "helm upgrade release=falcone version=0.4.15"
         ]
       );
       assert.doesNotMatch(result.trace, /helm (rollback|uninstall)|kubectl .* (delete|scale) /);
@@ -457,8 +457,8 @@ export function registerRevision23PhaseAVectorPendingProgressContract() {
     assert.deepEqual(
       result.mutations.trim().split("\n"),
       [
-        "helm upgrade release=falcone version=0.4.14",
-        "helm upgrade release=falcone version=0.4.14"
+        "helm upgrade release=falcone version=0.4.15",
+        "helm upgrade release=falcone version=0.4.15"
       ],
       "the recovery must preserve exactly one Phase-A and one Phase-B/JIT mutation"
     );
@@ -495,7 +495,7 @@ const enableRevision24GlobalWaitRecovery = (fixture) => {
 };
 
 const revision24Confirmation =
-  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.14/" +
+  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.15/" +
   baseFixture.revision24GlobalWait.packageDigest;
 
 function assertNoSecretReadsOrOwnershipEscape(result, contract) {
@@ -654,7 +654,7 @@ export function registerLegacyClusterSecretStoreHandoffContract() {
 
 export function registerRevision24GlobalWaitRecoveryContract() {
   test("bbx-repair-staging-060 resumes only the exact revision-24 global-wait timeout", async (t) => {
-    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.14 passes", () => {
+    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.15 passes", () => {
       const result = runRecovery({
         mutate: enableRevision24GlobalWaitRecovery,
         confirmation: revision24Confirmation
@@ -669,7 +669,7 @@ export function registerRevision24GlobalWaitRecoveryContract() {
       const patchIndex = traceLines.findIndex((line) => /kubectl .*\bpatch clustersecretstore/.test(line));
       const upgrades = traceLines.filter((line) => line.startsWith("helm upgrade "));
       assert.equal(upgrades.length, 2, "r24 recovery must complete exactly two Phase-A passes");
-      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.14(?:\s|$)/.test(line)));
+      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.15(?:\s|$)/.test(line)));
       assert.ok(upgrades.every((line) => !/(?:^|\s)--wait(?:\s|$)/.test(line)));
       assert.ok(patchIndex !== -1 && patchIndex < traceLines.indexOf(upgrades[0]), "store handoff precedes Helm");
       assertNoSecretReadsOrOwnershipEscape(result, "r24 recovery");
@@ -715,7 +715,7 @@ export function registerRevision24GlobalWaitRecoveryContract() {
   });
 }
 
-const revision24AuthRecoveryDigest = `sha256:${"0414".repeat(16)}`;
+const revision24AuthRecoveryDigest = `sha256:${"0415".repeat(16)}`;
 const enableRevision24AuthRecovery = (fixture, {
   createMode,
   preflightLog,
@@ -723,11 +723,13 @@ const enableRevision24AuthRecovery = (fixture, {
   storeWaitFails,
   externalSecretWaitFailure,
   targetVersion,
-  requireUpgradeRenderContext
+  requireUpgradeRenderContext,
+  packageDigest,
+  fixtureMutator
 }) => {
   fixture.revision24GlobalWait.targetVersion = targetVersion;
   fixture.revision24GlobalWait.targetChart = `in-falcone-${targetVersion}`;
-  fixture.revision24GlobalWait.packageDigest = revision24AuthRecoveryDigest;
+  fixture.revision24GlobalWait.packageDigest = packageDigest;
   enableRevision24GlobalWaitRecovery(fixture);
   Object.assign(fixture.authRecovery, {
     enabled: true,
@@ -741,6 +743,7 @@ const enableRevision24AuthRecovery = (fixture, {
     storeWaitFails,
     externalSecretWaitFailure
   });
+  fixtureMutator(fixture);
 };
 
 export function runRevision24AuthRecovery({
@@ -751,11 +754,13 @@ export function runRevision24AuthRecovery({
   attemptCount = 1,
   storeWaitFails = false,
   externalSecretWaitFailure = null,
-  targetVersion = "0.4.14",
+  targetVersion = "0.4.15",
+  packageDigest = revision24AuthRecoveryDigest,
   requireUpgradeRenderContext = false,
   recoveryEntrypoint = recoveryScript,
   invokeWithBash = false,
-  entrypointArguments = []
+  entrypointArguments = [],
+  fixtureMutator = () => {}
 } = {}) {
   return runRecovery({
     mutate: (fixture) => enableRevision24AuthRecovery(fixture, {
@@ -765,11 +770,13 @@ export function runRevision24AuthRecovery({
       storeWaitFails,
       externalSecretWaitFailure,
       targetVersion,
-      requireUpgradeRenderContext
+      requireUpgradeRenderContext,
+      packageDigest,
+      fixtureMutator
     }),
     confirmation:
       `default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-${targetVersion}/` +
-      revision24AuthRecoveryDigest,
+      packageDigest,
     attemptCount,
     recoveryEntrypoint,
     invokeWithBash,
@@ -778,13 +785,78 @@ export function runRevision24AuthRecovery({
 }
 
 export const revision24AuthRecoveryContract = Object.freeze({
-  targetVersion: "0.4.14",
+  targetVersion: "0.4.15",
   packageDigest: revision24AuthRecoveryDigest,
   sourceRevision: "24",
-  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041404140414-",
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041504150415-",
   staleJobRef: baseFixture.authRecovery.staleJobs[0].ref,
   externalSecretNames: Object.freeze([...baseFixture.externalSecretNames]),
   vectorResource: baseFixture.phaseAPendingVector.resource
+});
+
+const revision24SelfTokenPolicyDigest = `sha256:${"0415".repeat(16)}`;
+const revision24PublishedPartialJobRef =
+  "job.batch/openbao-auth-reconcile-r24-859e037a14be-7v86n";
+const revision24AuthBlockedMessage =
+  "unable to validate store: invalid vault credentials: Error making API request.\n\n" +
+  "URL: GET https://openbao.secret-store.svc.cluster.local:8200/v1/auth/token/lookup-self\n" +
+  "Code: 403. Errors:\n\n" +
+  "* 1 error occurred:\n\t* permission denied\n\n";
+
+const enableRevision24SelfTokenPolicyPrecursor = (fixture, mutatePrecursor) => {
+  const store = structuredClone(fixture.legacyStoreHandoff.live);
+  delete store.metadata.annotations["helm.sh/hook"];
+  delete store.metadata.annotations["helm.sh/hook-weight"];
+  store.metadata.annotations["in-falcone.io/reconcile-request"] =
+    "phase-a-0.4.12-auth-updated";
+  store.metadata.resourceVersion = String(Number(store.metadata.resourceVersion) + 1);
+  store.spec = structuredClone(fixture.legacyStoreHandoff.desiredSpec);
+  store.status = {
+    conditions: [{
+      type: "Ready",
+      status: "False",
+      reason: "ValidationFailed",
+      message: revision24AuthBlockedMessage
+    }]
+  };
+  fixture.authBlockedStore = {enabled: true, store};
+  fixture.legacyStoreHandoff.initiallyHandedOff = true;
+  fixture.authRecovery.staleJobs = [{
+    ref: revision24PublishedPartialJobRef,
+    status: "Failed"
+  }];
+  mutatePrecursor(fixture);
+};
+
+export function runRevision24SelfTokenPolicyRecovery({
+  targetVersion = "0.4.15",
+  attemptCount = 1,
+  waitFailures = 0,
+  mutatePrecursor = () => {}
+} = {}) {
+  return runRevision24AuthRecovery({
+    targetVersion,
+    packageDigest: revision24SelfTokenPolicyDigest,
+    attemptCount,
+    waitFailures,
+    fixtureMutator: (fixture) =>
+      enableRevision24SelfTokenPolicyPrecursor(fixture, mutatePrecursor)
+  });
+}
+
+export const revision24SelfTokenPolicyContract = Object.freeze({
+  targetVersion: "0.4.15",
+  packageDigest: revision24SelfTokenPolicyDigest,
+  sourceRevision: "24",
+  sourceChart: "in-falcone-0.4.11",
+  publishedPartialVersion: "0.4.14",
+  publishedPartialJobRef: revision24PublishedPartialJobRef,
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041504150415-",
+  storeUid: "f70a5ffd-56f3-4b37-8119-d54ba1108b69",
+  storeReconcileRequest: "phase-a-0.4.12-auth-updated",
+  storeReason: "ValidationFailed",
+  storeMessage: revision24AuthBlockedMessage,
+  externalSecretNames: Object.freeze([...baseFixture.externalSecretNames])
 });
 
 const [tool, ...args] = process.argv.slice(2);
@@ -848,6 +920,20 @@ const storeIsHandedOff = () =>
   readState().storeHandedOff || fixture.legacyStoreHandoff.initiallyHandedOff;
 
 const liveClusterSecretStore = () => {
+  if (fixture.authBlockedStore?.enabled) {
+    const store = structuredClone(fixture.authBlockedStore.store);
+    if (readState().authRecoveryCompletedRefs.length > 0) {
+      store.status = {
+        conditions: [{
+          type: "Ready",
+          status: "True",
+          reason: "Valid",
+          message: "store validated after self-token policy reconciliation"
+        }]
+      };
+    }
+    return store;
+  }
   const store = structuredClone(fixture.legacyStoreHandoff.live);
   if (fixture.legacyStoreHandoff.enabled && !storeIsHandedOff()) return store;
   delete store.metadata.annotations["helm.sh/hook"];
@@ -863,9 +949,12 @@ const liveClusterSecretStore = () => {
 };
 
 const externalSecrets = () => fixture.externalSecretNames.map((name, index) => {
-  const ready = !fixture.legacyStoreHandoff.enabled ||
+  const authBlockedReady = fixture.authBlockedStore?.externalSecretFailureName !== name;
+  const ready = authBlockedReady && (
+    !fixture.legacyStoreHandoff.enabled ||
     storeIsHandedOff() ||
-    (fixture.legacyStoreHandoff.forcedReadyNames ?? []).includes(name);
+    (fixture.legacyStoreHandoff.forcedReadyNames ?? []).includes(name)
+  );
   return {
     apiVersion: "external-secrets.io/v1beta1",
     kind: "ExternalSecret",

@@ -11,3 +11,9 @@ data:
     path "secret/metadata/platform/*" {
       capabilities = ["list", "read"]
     }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "auth/token/revoke-self" {
+      capabilities = ["update"]
+    }

@@ -58,7 +58,7 @@ function assertMaterializedAuthJob(creation, context) {
     creation.generateName,
     revision24AuthRecoveryContract.jobPrefix.replace(/^job\.batch\//, ''),
   )
-  assert.equal(creation.chart, 'in-falcone-0.4.14')
+  assert.equal(creation.chart, 'in-falcone-0.4.15')
   assert.equal(creation.digest, revision24AuthRecoveryContract.packageDigest)
   assert.equal(creation.sourceRevision, revision24AuthRecoveryContract.sourceRevision)
   assert.equal(creation.allowRecoveryRoot, 'true')
@@ -129,7 +129,7 @@ function assertRecoveryRootOnlyForAuthJob(lines, executionIndex, context) {
   )
   const rootCall = lines[rootIndexes[0]]
   assert.match(rootCall, /^helm template\b/)
-  assert.match(rootCall, /(?:^|\s)--version 0\.4\.14(?:\s|$)/)
+  assert.match(rootCall, /(?:^|\s)--version 0\.4\.15(?:\s|$)/)
   assert.ok(rootIndexes[0] < executionIndex, `${context} must render before executing the recovery Job`)
 
   for (const line of lines.filter((candidate) => /^helm (?:diff |upgrade )/.test(candidate))) {
@@ -256,15 +256,15 @@ test('rendered auth reconcile excludes default and validates exactly the four ES
 })
 
 // bbx-repair-staging-062 | fn-revision24-auth-recovery-preflight | OpenSpec #### Scenario: Revision-24 recovery reconciles OpenBao auth before ESO handoff
-test('exact r24 recovery runs the attested 0.4.14 auth Job before CAS handoff and preserves both health gates', () => {
+test('exact r24 recovery runs the attested 0.4.15 auth Job before CAS handoff and preserves both health gates', () => {
   const result = runRevision24AuthRecovery()
   assert.equal(
     result.status,
     0,
-    `exact 0.4.14 auth-first recovery failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ntrace:\n${result.trace}`,
+    `exact 0.4.15 auth-first recovery failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ntrace:\n${result.trace}`,
   )
   assert.match(result.stdout, /revision24-global-wait-recovery=validated/)
-  assert.match(result.stdout, /chart=in-falcone-0\.4\.14/)
+  assert.match(result.stdout, /chart=in-falcone-0\.4\.15/)
 
   const lines = traceLines(result)
   const authExecution = assertFreshAuthExecution(lines, 'exact r24 recovery')
@@ -306,7 +306,7 @@ test('exact r24 recovery runs the attested 0.4.14 auth Job before CAS handoff an
   }
 
   for (const upgradeIndex of upgrades) {
-    assert.match(lines[upgradeIndex], /(?:^|\s)--version 0\.4\.14(?:\s|$)/)
+    assert.match(lines[upgradeIndex], /(?:^|\s)--version 0\.4\.15(?:\s|$)/)
     assert.doesNotMatch(lines[upgradeIndex], /(?:^|\s)--wait(?:\s|$)/)
     assert.doesNotMatch(lines[upgradeIndex], /allowRecoveryRoot=true/)
   }

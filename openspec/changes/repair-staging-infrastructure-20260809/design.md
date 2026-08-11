@@ -1,4 +1,4 @@
-# Design: Revision-20/r24 staging infrastructure repair to 0.4.14
+# Design: Revision-20/r24 staging infrastructure repair to 0.4.15
 
 ## Context
 
@@ -7,7 +7,7 @@ behavioral contract. The live r24 recovery exposed two ordering/metadata defects
 in the 0.4.12 baseline: `revision-20-repair.sh` applies the legacy store handoff
 before the package Helm pass that can reconcile `eso-role`, while the rendered
 auth Job requests `token_no_default_policy=false` but accepts only the four
-application policies in its canary lookup. The 0.4.14 correction must use the
+application policies in its canary lookup. The 0.4.15 correction must use the
 published package as authority and must retain the exact r24 fingerprint, CAS
 guards, external ESO custody, storage evidence, and two-pass Phase-A behavior.
 
@@ -24,7 +24,7 @@ Code evidence:
 **Goals:**
 
 - Make exact r24 recovery converge OpenBao Kubernetes auth from the verified
-  0.4.14 package before exposing the new ESO identity through the store.
+  0.4.15 package before exposing the new ESO identity through the store.
 - Prove the Job, exact terminal metadata result, credential-silent behavior,
   store CAS, fourteen ExternalSecrets, and both Helm passes in fail-closed order.
 - Preserve forward-only recovery and the separately gated Phase-B storage
@@ -79,7 +79,7 @@ Code evidence:
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.14 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.15 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
 9. Revision-20 Phase A prevalidates the exact fourteen Falcone-owned
    `ExternalSecret` declarations before apply. It accepts only the all-absent
@@ -107,7 +107,7 @@ Code evidence:
     preserved prior availability. The gate binds labels, ReplicaSet ownership,
     images, generations, replica counts and full kubelet error signatures without
     reading logs, Secrets or Helm manifests. Forward recovery delegates to the
-    existing two-pass Phase-A path and requires fresh 0.4.14/package-bound backup
+    existing two-pass Phase-A path and requires fresh 0.4.15/package-bound backup
     and parity evidence, but no fabricated Phase-A attestation.
 14. Chart 0.4.10 remains an immutable published but unapplied artifact. A later
     `kubectl-patch` left APISIX 3/3 Ready with pod UID 636 and the existing
@@ -129,7 +129,7 @@ Code evidence:
     claim recreation.
 16. Exact r24 recovery inserts an auth-first gate before the existing store,
     ExternalSecret-owner, and Helm mutation sequence. It renders the official
-    auth-reconcile Job from the digest-verified 0.4.14 package with
+    auth-reconcile Job from the digest-verified 0.4.15 package with
     `allowRecoveryRoot=true` and `activeDeadlineSeconds=300`, then validates the
     package-bound object before creating an attempt. The attempt is a copy whose
     only changes are Job metadata: remove `metadata.name`, set
@@ -137,7 +137,7 @@ Code evidence:
     `openbao-auth-reconcile-r24-<digest12>-` where `<digest12>` is the first
     twelve lowercase hex characters after `sha256:`, and add
     `in-falcone.io/recovery-package-digest=<full digest>`,
-    `in-falcone.io/recovery-target-chart=in-falcone-0.4.14`, and
+    `in-falcone.io/recovery-target-chart=in-falcone-0.4.15`, and
     `in-falcone.io/recovery-source-revision=24`. Spec, pod template, labels,
     namespace, hook annotations and all other fields remain identical to the
     validated official Job.
@@ -173,15 +173,28 @@ Code evidence:
 19. Chart 0.4.12 remains an immutable failed-recovery artifact; chart 0.4.13
     remains an immutable published-but-unapplied artifact because its packaged
     delegate was not executable and its auth-only preflight lacked Helm upgrade
-    context. The
-    correction is a new immutable chart 0.4.14; evidence, confirmations, release
-    material, recovery paths, and operator procedures all bind 0.4.14 rather than
-    rewriting either historical package.
+    context. Chart 0.4.14 fixed those package execution defects and remains the
+    immutable published partial recovery attempt whose Job ran while live Helm
+    stayed failed revision 24/chart 0.4.11. The correction is a new immutable
+    chart 0.4.15; evidence, confirmations, release material, recovery paths, and
+    operator procedures all bind 0.4.15 rather than rewriting historical packages.
 20. The public forward-recovery wrapper invokes its package-local repair
     delegate as `bash <delegate>` so correctness does not depend on executable
     mode retained by the Helm archive. The r24 auth-only `helm template` includes
     `--is-upgrade`, matching the subsequent upgrade and satisfying the chart's
     upgrade-only validation without weakening that validation.
+21. The platform policy gains only `auth/token/lookup-self` read and
+    `auth/token/revoke-self` update. Fresh init already writes the projected
+    platform policy before `eso-role`. Recovery-root auth reconciliation mounts
+    that ConfigMap read-only and writes it before role mutation/validation and
+    canary login; `PLATFORM_POLICY_BOOTSTRAP_FAILED` stops the sequence. The
+    dedicated reconciler gains no policy-write, mount, Secret, or KV authority.
+22. The additional r24 precursor is one exact 0.4.14 partial state: desired store
+    spec, exact labels/Helm owner/UID, no hooks, exact reconcile-request, single
+    lookup-self 403 `ValidationFailed` condition, and fourteen unique Ready
+    ExternalSecrets. ResourceVersion is captured dynamically. Apply does not
+    patch that desired store; it creates a fresh 0.4.15 digest-bound Job before
+    readiness waits. The retained 0.4.14 Job is never reused or deleted.
 
 ## Failure and rollback
 
@@ -196,14 +209,14 @@ fall back to payload operations. A matching role plus denial reports
 Unexpected PVC binding/data invalidates Phase B. Before Phase A, revision 20 is
 untouched. Once any mutation starts, every failure emits a forward-recovery
 instruction; neither apply tool uses atomic upgrade or rollback, and none of
-0.4.11, 0.4.12, or 0.4.13 is a rollback target. After PVC
+0.4.11, 0.4.12, 0.4.13, or 0.4.14 is a rollback target. After PVC
 deletion, revision-20 restoration is storage-incompatible. Data-bearing storage
 changes require a separate backup/restore and isolation-parity design.
 
 ## Migration Plan
 
-1. Publish immutable 0.4.14 and bind fresh backup/parity evidence plus the exact
-   r24→0.4.14 confirmation to its registry digest.
+1. Publish immutable 0.4.15 and bind fresh backup/parity evidence plus the exact
+   r24→0.4.15 confirmation to its registry digest.
 2. Revalidate the exact r20/r22/r23/r24 history, storage, workload, identity,
    owner, and external ESO evidence without reading Secrets.
 3. From the validated package-derived recovery-root Job, create a new
@@ -223,14 +236,14 @@ changes require a separate backup/restore and isolation-parity design.
    recovery-root disabled. Stop with `PHASE_A_HEALTH_GATE_FAILED` or
    `FINAL_HEALTH_GATE_FAILED` plus `FORWARD_RECOVERY_REQUIRED`; never roll back.
 6. Keep Phase B separately JIT-gated. Any failure after mutation is recovered by
-   forward-applying 0.4.14; no Helm rollback is allowed.
+   forward-applying 0.4.15; no Helm rollback is allowed.
 
 ## Verification
 
 Strict lint/schema, managed/external ESO renders, upgrade render, black-box
 contracts mapped to the exact Scenario headers, non-staging storage
 non-regression, six digest assertions, shell syntax, OpenSpec strict validation,
-and 0.4.14 package checksum validation run on the source commit. Operator and
+and 0.4.15 package checksum validation run on the source commit. Operator and
 release material must state the auth-first order, external egress prerequisite,
 credential-silent checks, and forward-only rollback boundary. Independent
 disposable live verification occurs after maker handoff.

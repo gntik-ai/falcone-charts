@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.14"
+EXPECTED_REPAIR_VERSION="0.4.15"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -1144,12 +1144,27 @@ PY
       die "LEGACY_CLUSTERSECRETSTORE_HOOK_DRIFT"
     legacy_store_state="required"
   elif [[ "$(printf '%s' "$store" | jq -cS .spec)" == "$desired_spec" ]]; then
-    printf '%s' "$store" | jq -e '
+    if printf '%s' "$store" | jq -e '
       ((.metadata.annotations | has("helm.sh/hook")) | not)
       and ((.metadata.annotations | has("helm.sh/hook-weight")) | not)
-      and any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null || \
+      and any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null; then
+      legacy_store_state="complete"
+    elif printf '%s' "$store" | jq -e '
+      .metadata.annotations == {
+        "in-falcone.io/reconcile-request": "phase-a-0.4.12-auth-updated",
+        "meta.helm.sh/release-name": "falcone",
+        "meta.helm.sh/release-namespace": "in-falcone-staging"
+      }
+      and (.status.conditions | length) == 1
+      and any(.status.conditions[]?;
+        .type == "Ready"
+        and .status == "False"
+        and .reason == "ValidationFailed"
+        and .message == "unable to validate store: invalid vault credentials: Error making API request.\n\nURL: GET https://openbao.secret-store.svc.cluster.local:8200/v1/auth/token/lookup-self\nCode: 403. Errors:\n\n* 1 error occurred:\n\t* permission denied\n\n")' >/dev/null; then
+      legacy_store_state="auth-policy-required"
+    else
       die "LEGACY_CLUSTERSECRETSTORE_HANDOFF_DRIFT"
-    legacy_store_state="complete"
+    fi
   else
     die "LEGACY_CLUSTERSECRETSTORE_SPEC_DRIFT"
   fi
@@ -1188,9 +1203,9 @@ PY
 
 run_revision24_pre_handoff_auth_reconcile() {
   [[ "$actual_revision" == 24 ]] || return 0
-  # The auth-first pre-handoff Job is enabled by the corrected 0.4.14 recovery
-  # package. Immutable 0.4.12 and 0.4.13 never completed this live recovery.
-  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.14" ]] || return 0
+  # The auth-first pre-handoff Job is enabled by the corrected 0.4.15 recovery
+  # package. Immutable 0.4.12 through 0.4.14 never completed live recovery.
+  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.15" ]] || return 0
 
   auth_job_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision24-auth-reconcile.XXXXXX")"
   helm template "$EXPECTED_RELEASE" "$chart_source" \
@@ -1233,7 +1248,7 @@ if (
     or metadata.get("name") != "openbao-auth-reconcile"
     or metadata.get("namespace") != "secret-store"
     or not re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
-    or target_chart != "in-falcone-0.4.14"
+    or target_chart != "in-falcone-0.4.15"
     or source_revision != "24"
 ):
     raise SystemExit(1)

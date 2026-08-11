@@ -1,4 +1,4 @@
-# Migration: Revision 20/r24 to chart 0.4.14
+# Migration: Revision 20/r24 to chart 0.4.15
 
 Before mutation, repair validates the non-secret legacy C-25 webhook custody
 contract stored in Helm revision 20 and passes explicit legacy overrides to
@@ -13,7 +13,7 @@ global-wait timeout described below. Arbitrary failed Helm revisions are rejecte
 
 - Exact context `default`, namespace `in-falcone-staging`, release `falcone`,
   revision `20`, and starting chart `in-falcone-0.4.1`.
-- A published chart 0.4.14 package digest, not a source-only estimate. Chart
+- A published chart 0.4.15 package digest, not a source-only estimate. Chart
   0.4.5 remains the historical artifact blocked by nested dependency-version
   parsing. Chart 0.4.6 remains the historical artifact whose live apply reached
   Helm's existing-object ownership gate. Neither artifact is overwritten or
@@ -35,11 +35,15 @@ global-wait timeout described below. Arbitrary failed Helm revisions are rejecte
   extracted its repair delegate without executable mode, so the forward wrapper's
   direct execution returned 126, and its isolated r24 auth render lacked
   `--is-upgrade`, so upgrade-only validation failed before mutation.
+  Chart 0.4.14 remains immutable and published as the partial recovery attempt:
+  its Job normalized the no-default role while Helm stayed at failed revision
+  24/chart 0.4.11, then the desired store exposed the exact platform-policy
+  `lookup-self` 403 described below.
 - Separate, fresh `Revision20BackupEvidence` and `Revision20ParityEvidence`
   documents. Both bind the exact source target and repair package; parity names
   the exact backup reference it verified. Their observation windows must still
   be valid when apply begins.
-- Apply pulls the published 0.4.14 OCI artifact, verifies the registry-reported
+- Apply pulls the published 0.4.15 OCI artifact, verifies the registry-reported
   digest against the attestations, and uses the staging profile extracted from
   that same artifact; a local checkout is not the production apply source.
 - Secret-suppressed semantic diff shows no create/update/removal among the
@@ -53,7 +57,7 @@ global-wait timeout described below. Arbitrary failed Helm revisions are rejecte
 
 Run `revision-20-repair.sh --phase-a` first; it is read-only by default. Apply
 requires both structured evidence files and an exact confirmation containing
-20, source chart 0.4.1, target chart 0.4.14 and package digest. It retains the
+20, source chart 0.4.1, target chart 0.4.15 and package digest. It retains the
 immutable hcloud-volumes claim contract, applies repairs, verifies exact owner
 metadata/images/store/fourteen unique Ready ExternalSecrets/auth/FerretDB/
 endpoints, disables recovery-root, and repeats the complete gate. The final auth
@@ -100,9 +104,9 @@ identity and Prometheus container UID/GID 65534:65534; drift stops the sequence
 before the next pass and requires forward recovery.
 
 Revision-23 forward recovery delegates directly to this Phase-A procedure. The
-apply confirmation binds `23`, source chart 0.4.9, target chart 0.4.14 and the
+apply confirmation binds `23`, source chart 0.4.9, target chart 0.4.15 and the
 published package digest. Fresh backup and parity attestations must also target
-0.4.14. Because revision 23 is itself a failed Phase-A attempt, no successful
+0.4.15. Because revision 23 is itself a failed Phase-A attempt, no successful
 Phase-A attestation is invented or required. The procedure still performs the
 same two non-atomic Helm upgrades, never rolls back and never deletes a PVC.
 
@@ -111,19 +115,30 @@ chart-0.4.11 timeout fingerprint: the unbound vector PVC, vector StatefulSet
 0/1, legacy store, all fourteen provider failures and deadline exceeded. Live
 evidence must prove the same PVC UID with no volume/PV, every non-vector rollout
 healthy, numeric APISIX/Prometheus convergence and zero named-user failures.
-The evidence gate also admits only the idempotent desired-store state left by the
-failed 0.4.12 recovery; no other live or history drift is accepted.
+Besides the legacy hook form and an already-Ready idempotent retry, the evidence
+gate admits only the 0.4.14 partial attempt: exact desired spec, labels, Helm
+owner and UID; no hooks; exact
+`in-falcone.io/reconcile-request=phase-a-0.4.12-auth-updated`; one
+`Ready=False`, `ValidationFailed` condition with the literal OpenBao FQDN
+`GET /v1/auth/token/lookup-self`, code 403 and permission-denied message; and all
+fourteen unique ExternalSecrets Ready. ResourceVersion is required but captured
+dynamically. No other live or history drift is accepted.
 
 After all read-only and package-bound gates but before mutating the store, any
 ExternalSecret owner metadata, or Helm, exact r24 apply renders and executes the
-official auth-reconcile Job from the digest-verified 0.4.14 package with
+official auth-reconcile Job from the digest-verified 0.4.15 package with
 `allowRecoveryRoot=true` and `spec.activeDeadlineSeconds=300`. After validating
+that it mounts the rendered platform policy read-only, only the recovery-root
+branch writes `platform` from that file before changing/validating the role and
+canary. The policy contains only `lookup-self` read and `revoke-self` update;
+`PLATFORM_POLICY_BOOTSTRAP_FAILED` is stable and credential-silent. The dedicated
+identity gains no policy-write, mount, Secret, or KV authority. After validating
 that official object, each attempt changes only its metadata: it removes
 `metadata.name`, sets `metadata.generateName` to
 `openbao-auth-reconcile-r24-<digest12>-` using the first twelve lowercase package
 digest hex characters, and adds
 `in-falcone.io/recovery-package-digest=<full sha256 digest>`,
-`in-falcone.io/recovery-target-chart=in-falcone-0.4.14`, and
+`in-falcone.io/recovery-target-chart=in-falcone-0.4.15`, and
 `in-falcone.io/recovery-source-revision=24`. Namespace, annotations already in
 the official object, labels, spec and pod template do not change.
 
@@ -149,6 +164,8 @@ failed attempts are retained; the successful attempt is retained at least until
 r24 recovery completes. A retry repeats the whole live/package preflight and
 creates a new generated Job identity. It never deletes, reuses or reapplies a
 prior identity, and no stale Job or stale log can satisfy the current attempt.
+That includes retained 0.4.14 Job
+`openbao-auth-reconcile-r24-859e037a14be-7v86n`.
 
 The distributed forward-recovery entrypoint invokes its package-local repair
 delegate through `bash`, independent of archive executable mode. The isolated
@@ -158,7 +175,8 @@ before the first mutating command.
 
 Only after that auth-first proof may apply hand off the exact legacy store to the
 unique rendered spec with its UID/resourceVersion-guarded patch, or recognize an
-exact already-desired retry. It waits separately with `--timeout=10m` for the
+exact already-desired retry/0.4.14 precursor. It never patches that desired
+precursor. It waits separately with `--timeout=10m` for the
 store and for `gateway-apisix-credentials`, `gateway-shared-secret`,
 `iam-identity-client`, `iam-keycloak-credentials`, `iam-superadmin`,
 `platform-documentdb-credentials`, `platform-documentdb-replication`,
@@ -202,11 +220,11 @@ All mutation paths are fail-forward. There is no atomic apply or rollback path.
 A failed mutation prints `FORWARD_RECOVERY_REQUIRED`. The recovery tool defaults
 to read-only, revalidates the three structured attestations, actual current
 revision/chart/package confirmation, semantic external-owner diff and exact owner
-metadata, and reapplies chart 0.4.14. It never deletes storage. Charts 0.4.11,
-0.4.12, and the published-but-unapplied defective 0.4.13 are not rollback
+metadata, and reapplies chart 0.4.15. It never deletes storage. Charts 0.4.11,
+0.4.12, 0.4.13, and the published partial 0.4.14 are not rollback
 targets; Helm rollback,
 `--atomic`, and restoration to revision 20 remain forbidden. Once data exists,
 claim deletion is forbidden until a separately approved backup/restore and P13
 parity proof. Release notes and operator recovery/storage procedures must identify
-0.4.14, the auth-first gate, exact credential-silent log proof, external ESO
+0.4.15, the auth-first gate, exact credential-silent log proof, external ESO
 network prerequisite, two-pass wait behavior, and this forward-only boundary.
