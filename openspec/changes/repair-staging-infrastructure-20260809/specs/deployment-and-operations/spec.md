@@ -163,8 +163,17 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.13,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.14,
   and neither path uses atomic upgrade or rollback to revision 20
+
+#### Scenario: Packaged forward recovery invokes its repair delegate without executable mode
+
+- **WHEN** the public Helm archive extracts `revision-20-repair.sh` without an
+  executable bit and an admitted r22, r23, or r24 recovery delegates from
+  `revision-20-forward-recovery.sh`
+- **THEN** the forward-recovery CLI SHALL invoke the package-local repair script
+  through Bash, preserve every validated argument, and SHALL NOT depend on the
+  delegate executable mode
 
 #### Scenario: Phase A encounters the admitted revision-22 immutable-field failure
 
@@ -187,7 +196,7 @@ confirmation.
   one new observability Pod are Pending with their full named-user
   `CreateContainerConfigError`, while three APISIX and one observability replicas
   from the prior ReplicaSets remain Ready
-- **THEN** Phase A targets immutable chart 0.4.13 and requires fresh backup and
+- **THEN** Phase A targets immutable chart 0.4.14 and requires fresh backup and
   parity evidence plus the exact source/target/package confirmation
 - **AND** it delegates to the existing two-pass Phase-A implementation without a
   fabricated Phase-A attestation, rollback, atomic upgrade or PVC deletion
@@ -207,8 +216,8 @@ confirmation.
 - **AND** that existing ConfigMap contains only `apisix.yaml` with the approved
   SHA-256, observability remains one Ready plus one exact Pending `nobody`
   named-user failure, and no other namespace has such a failure
-- **THEN** Phase A targets immutable chart 0.4.13, makes the APISIX identity and
-  mount declarative, and requires fresh 0.4.13-bound backup/parity evidence plus
+- **THEN** Phase A targets immutable chart 0.4.14, makes the APISIX identity and
+  mount declarative, and requires fresh 0.4.14-bound backup/parity evidence plus
   the exact one-use target/package confirmation
 - **AND** the rendered target SHALL contain APISIX pod and container UID/GID
   636:636, and each post-upgrade health gate SHALL observe that APISIX state plus
@@ -271,7 +280,7 @@ confirmation.
 
 - **WHEN** exact r24 recovery apply has validated the revision-20, revision-22,
   revision-23 and failed revision-24/chart-0.4.11 fingerprints plus fresh
-  0.4.13 package-bound evidence and target confirmation
+  0.4.14 package-bound evidence and target confirmation
 - **THEN** before mutating the ClusterSecretStore, any ExternalSecret owner
   metadata, or the Helm release, the CLI SHALL execute the official
   auth-reconcile Job rendered from that exact package with
@@ -282,7 +291,7 @@ confirmation.
   twelve lowercase hex characters following `sha256:` in the verified package
   digest; preserve all other metadata and every non-metadata field; and add
   annotations `in-falcone.io/recovery-package-digest=<full verified digest>`,
-  `in-falcone.io/recovery-target-chart=in-falcone-0.4.13`, and
+  `in-falcone.io/recovery-target-chart=in-falcone-0.4.14`, and
   `in-falcone.io/recovery-source-revision=24`
 - **AND** the CLI SHALL create, never apply, the attempt with
   `kubectl create -f <attempt> -o name`; it SHALL accept exactly one newly
@@ -321,6 +330,17 @@ confirmation.
   identity from the newly validated package-bound object, never delete, reuse,
   patch or reapply a prior attempt, and never accept a stale Job or log as current
   evidence
+
+#### Scenario: Revision-24 auth preflight renders in Helm upgrade context
+
+- **WHEN** exact revision-24 Phase-A recovery renders only the package-bound
+  `openbao-auth-reconcile` Job before any mutation
+- **THEN** the Helm template command SHALL include `--is-upgrade` while retaining
+  the exact target version, namespace, values, recovery-root override, and
+  `--show-only charts/openbao/templates/openbao-auth-reconcile-job.yaml`
+- **AND** upgrade-only validation failure SHALL emit
+  `REVISION24_AUTH_RECONCILE_RENDER_FAILED`, perform no mutation, and SHALL NOT
+  weaken or bypass the chart's upgrade-only validation contract
 
 #### Scenario: Revision-24 recovery requires exact auth reconciliation evidence
 
@@ -376,8 +396,8 @@ confirmation.
   the vector PVC retains its exact UID/Pending/no-volume/no-PV state, all
   non-vector workloads are converged, APISIX is 3/3 at UID/GID 636,
   Prometheus is 1/1 at UID/GID 65534 and no named-user error remains
-- **THEN** recovery SHALL target immutable chart 0.4.13 with fresh
-  package-bound backup/parity evidence and exact r24→0.4.13 confirmation
+- **THEN** recovery SHALL target immutable chart 0.4.14 with fresh
+  package-bound backup/parity evidence and exact r24→0.4.14 confirmation
 - **AND** it SHALL complete the auth-first gate, the UID/resourceVersion-guarded
   idempotent store handoff, and the ten-minute-per-resource Ready gates for those
   exact fourteen identities in that order before either Helm upgrade

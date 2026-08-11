@@ -40,7 +40,7 @@
   package-bound r24 recovery, detailed runbooks and release notes.
 - [x] 1.20 Run complete source/package validation and independent review for 0.4.12.
 
-## 2. Chart 0.4.13 auth contract
+## 2. Historical chart 0.4.13 auth contract
 
 - [x] 2.1 Add failing black-box coverage mapped exactly to `Auth reconcile
   excludes the default policy from ESO tokens`; require
@@ -57,7 +57,7 @@
 
 - [x] 3.1 Add failing black-box coverage mapped exactly to `Revision-24 recovery
   reconciles OpenBao auth before ESO handoff`, binding the Job render to the
-  pulled 0.4.13 package digest and proving `allowRecoveryRoot=true`,
+  pulled 0.4.14 package digest and proving `allowRecoveryRoot=true`,
   `activeDeadlineSeconds=300`, metadata-only `generateName` transformation, the
   three full provenance annotations, exact fresh create ref, five-minute wait,
   retained attempt evidence, and zero store/ExternalSecret-owner/Helm mutation
@@ -103,12 +103,13 @@
   recovery-root disabled on the second pass; retain Phase-B global wait.
 - [x] 4.4 Rebind backup/parity evidence, one-use target confirmations, rendered
   package checks, Phase-A attestations, and forward-recovery selection to
-  immutable chart 0.4.13 without weakening the r20/r22/r23/r24 fingerprints.
+  immutable chart 0.4.14 without weakening the r20/r22/r23/r24 fingerprints.
 
 ## 5. Release, operations, and validation
 
-- [x] 5.1 Bump the chart and every package-bound public value/schema/fixture
-  surface to 0.4.13 while retaining 0.4.12 as immutable failed-recovery history.
+- [x] 5.1 Bump the chart and every package-bound public surface to 0.4.14 while
+  retaining failed-recovery chart 0.4.12 and the published-but-unapplied
+  defective chart 0.4.13 as distinct immutable history.
 - [x] 5.2 Update release notes and operator repair/storage procedures with the
   auth-first order, 300-second Job deadline, five-minute completion wait,
   generated per-attempt identity/provenance annotations, exact create ref,
@@ -119,14 +120,21 @@
   forward-only/no-rollback boundary.
 - [x] 5.3 Run shell syntax, chart lint/schema/render, all staging repair black-box
   contracts, package/version/digest checks, secret-leak assertions, and
-  non-staging/external-owner regression checks on the final 0.4.13 diff.
-- [x] 5.4 Run `openspec validate repair-staging-infrastructure-20260809 --strict`
-  and obtain independent reviewer approval before any live apply.
+  non-staging/external-owner regression checks on the final 0.4.14 diff.
+- [x] 5.4 Run `openspec validate repair-staging-infrastructure-20260809 --strict`.
+- [x] 5.5 Make packaged forward recovery invoke its package-local repair
+  delegate through Bash so extracted mode 0644 cannot produce exit 126.
+- [x] 5.6 Render the exact r24 auth-only preflight with `--is-upgrade`, preserving
+  upgrade-only chart validation and the pre-mutation failure boundary.
+- [x] 5.7 Run the packaged bbx071/bbx072 regression contracts, shell syntax,
+  Helm lint/render, package/version, OpenSpec strict, and diff hygiene on 0.4.14.
+- [x] 5.8 Obtain independent reviewer approval on the 0.4.14 diff before any
+  live apply.
 
 ## 6. Independently gated live proof
 
 - [ ] 6.1 Complete disposable clean-install and revision-20
-  upgrade/failure/forward-recovery proof against immutable chart 0.4.13; do not
+  upgrade/failure/forward-recovery proof against immutable chart 0.4.14; do not
   use Helm rollback.
 - [ ] 6.2 Obtain separate shared-staging authorization and Phase-B JIT destructive
   confirmation before any PVC mutation.

@@ -8,7 +8,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.13"
+EXPECTED_REPAIR_VERSION="0.4.14"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -90,7 +90,7 @@ if [[ "$actual_revision" == 22 || "$actual_revision" == 23 || "$actual_revision"
   [[ -z "$backup_reference" ]] || delegated_args+=(--backup-reference "$backup_reference")
   [[ -z "$backup_attestation" ]] || delegated_args+=(--backup-attestation "$backup_attestation")
   [[ -z "$parity_attestation" ]] || delegated_args+=(--parity-attestation "$parity_attestation")
-  exec "$script_dir/revision-20-repair.sh" "${delegated_args[@]}"
+  exec bash "$script_dir/revision-20-repair.sh" "${delegated_args[@]}"
 fi
 
 if [[ "$actual_revision" == 21 ]]; then
