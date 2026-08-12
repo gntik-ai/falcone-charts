@@ -1,4 +1,4 @@
-# Change: Repair revision-20/r24 staging infrastructure with chart 0.4.14
+# Change: Repair revision-20/r24 staging infrastructure with chart 0.4.15
 
 ## Why
 
@@ -8,7 +8,7 @@ External Secrets Operator. The live revision-24 recovery with chart 0.4.12
 proved that handing the store to `eso-system/eso-openbao-auth` before updating
 `eso-role` exposes a 403 authorization gap, and that allowing OpenBao's default
 policy makes the official reconciliation canary reject otherwise converged
-metadata. Chart 0.4.14 must close both gaps without weakening external ownership,
+metadata. Chart 0.4.15 must close both gaps without weakening external ownership,
 credential secrecy, storage gates, or the fail-forward boundary.
 
 The immutable 0.4.13 package was published but not applied. Package-level
@@ -16,6 +16,13 @@ verification found that Helm extracts the delegated repair CLI without executabl
 mode while the forward wrapper invokes it directly, and that the r24 auth-only
 render omits Helm upgrade context and trips the upgrade-only validation gate.
 Chart 0.4.14 corrects only those packaged recovery defects.
+
+The 0.4.14 package was then published and its recovery-root Job partially ran,
+but Helm remained failed revision 24/chart 0.4.11. The desired store failed its
+OpenBao self-token validation with an exact `lookup-self` 403 because the
+`platform` policy lacked the two token self-service capabilities used by ESO.
+Chart 0.4.15 must install only those least-privilege capabilities and admit only
+that exact metadata-visible partial precursor.
 
 ## What Changes
 
@@ -35,7 +42,7 @@ Chart 0.4.14 corrects only those packaged recovery defects.
   structured short-lived evidence, semantic external-owner protection, detailed
   operations/security/storage documentation, and black-box contracts.
 - Extend fail-forward recovery to the exact revision-23 chart-0.4.9 named-user
-  rollout failure, targeting immutable chart 0.4.14 and rejecting evidence drift
+  rollout failure, targeting immutable chart 0.4.15 and rejecting evidence drift
   before mutation.
 - Admit the one exact observed partial manual recovery in which APISIX is 3/3
   Ready through an exact Deployment→ReplicaSet→Pod UID/revision owner chain as
@@ -62,7 +69,13 @@ Chart 0.4.14 corrects only those packaged recovery defects.
   ExternalSecrets cannot converge, without taking ownership of `external-secrets`.
 - Invoke the packaged repair delegate through Bash and render the r24 auth-only
   preflight with Helm's explicit upgrade context before any mutation.
-- Publish the correction as immutable chart 0.4.14, update operator/recovery
+- Add only `auth/token/lookup-self` read and `auth/token/revoke-self` update to
+  the platform policy; install it on fresh bootstrap and only from the explicitly
+  recovery-root auth branch before the no-default role/canary validation.
+- Admit only the exact 0.4.14 desired-store/lookup-self-403 precursor with all
+  fourteen ExternalSecrets Ready, create a fresh digest-bound 0.4.15 Job, and
+  leave the already-desired store unpatched.
+- Publish the correction as immutable chart 0.4.15, update operator/recovery
   documentation, and keep recovery forward-only with no Helm rollback.
 
 ## Capabilities
@@ -96,9 +109,10 @@ Code evidence:
   currently performs the r24 store handoff before the first package Helm pass.
 - `charts/in-falcone/migrations/revision-20-repair.sh::phase_a_args-and-waits:874-925,1445-1476`
   establishes the two recovery-root/no-root passes and explicit non-vector wait
-  vector that 0.4.14 must preserve.
-- `charts/in-falcone/Chart.yaml::version:5` identifies 0.4.14 as the new
-  immutable target while 0.4.13 remains published, defective, and unapplied.
+  vector that 0.4.15 must preserve.
+- `charts/in-falcone/Chart.yaml::version:5` identifies 0.4.15 as the new
+  immutable target while 0.4.14 remains the published partial recovery attempt
+  and live Helm remains revision 24/chart 0.4.11.
 
 ## Exclusions and gates
 

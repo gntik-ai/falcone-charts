@@ -12,8 +12,8 @@
   },
   "result": {
     "revision": "25",
-    "chart": "in-falcone-0.4.14",
-    "packageDigest": "sha256:0414041404140414041404140414041404140414041404140414041404140414"
+    "chart": "in-falcone-0.4.15",
+    "packageDigest": "sha256:0415041504150415041504150415041504150415041504150415041504150415"
   },
   "health": {
     "recoveryRootAllowed": false,

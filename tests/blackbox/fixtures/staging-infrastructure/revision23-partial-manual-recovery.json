@@ -1,6 +1,6 @@
 {
-  "targetVersion": "0.4.14",
-  "targetChart": "in-falcone-0.4.14",
+  "targetVersion": "0.4.15",
+  "targetChart": "in-falcone-0.4.15",
   "packageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "renderedApisixPodSecurityContext": {
     "fsGroup": 1001,
@@ -137,8 +137,8 @@
   },
   "revision24GlobalWait": {
     "enabled": false,
-    "targetVersion": "0.4.14",
-    "targetChart": "in-falcone-0.4.14",
+    "targetVersion": "0.4.15",
+    "targetChart": "in-falcone-0.4.15",
     "packageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "release": {
       "name": "falcone",
