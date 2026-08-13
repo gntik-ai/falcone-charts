@@ -1,4 +1,4 @@
-# Design: Revision-20/r24 staging infrastructure repair to 0.4.17
+# Design: Revision-20/r24 staging infrastructure repair to 0.4.18
 
 ## Context
 
@@ -7,7 +7,7 @@ behavioral contract. The live r24 recovery exposed two ordering/metadata defects
 in the 0.4.12 baseline: `revision-20-repair.sh` applies the legacy store handoff
 before the package Helm pass that can reconcile `eso-role`, while the rendered
 auth Job requests `token_no_default_policy=false` but accepts only the four
-application policies in its canary lookup. The 0.4.17 correction must use the
+application policies in its canary lookup. The 0.4.18 correction must use the
 published package as authority and must retain the exact r24 fingerprint, CAS
 guards, external ESO custody, storage evidence, and two-pass Phase-A behavior.
 
@@ -24,7 +24,7 @@ Code evidence:
 **Goals:**
 
 - Make exact r24 recovery converge OpenBao Kubernetes auth from the verified
-  0.4.17 package before exposing the new ESO identity through the store.
+  0.4.18 package before exposing the new ESO identity through the store.
 - Prove the Job, exact terminal metadata result, credential-silent behavior,
   store CAS, fourteen ExternalSecrets, and both Helm passes in fail-closed order.
 - Preserve forward-only recovery and the separately gated Phase-B storage
@@ -79,7 +79,7 @@ Code evidence:
    requires a fresh Phase-A attestation bound to the live revision and final
    no-root health. Target confirmation includes current revision, chart and
    package digest; PVC confirmation remains a separate exact name/UID gate. Real
-   apply pulls the 0.4.17 OCI artifact, verifies its registry-reported digest, and
+   apply pulls the 0.4.18 OCI artifact, verifies its registry-reported digest, and
    uses the staging values extracted from that artifact.
 9. Revision-20 Phase A prevalidates the exact fourteen Falcone-owned
    `ExternalSecret` declarations before apply. It accepts only the all-absent
@@ -107,7 +107,7 @@ Code evidence:
     preserved prior availability. The gate binds labels, ReplicaSet ownership,
     images, generations, replica counts and full kubelet error signatures without
     reading logs, Secrets or Helm manifests. Forward recovery delegates to the
-    existing two-pass Phase-A path and requires fresh 0.4.17/package-bound backup
+    existing two-pass Phase-A path and requires fresh 0.4.18/package-bound backup
     and parity evidence, but no fabricated Phase-A attestation.
 14. Chart 0.4.10 remains an immutable published but unapplied artifact. A later
     `kubectl-patch` left APISIX 3/3 Ready with pod UID 636 and the existing
@@ -129,7 +129,7 @@ Code evidence:
     claim recreation.
 16. Exact r24 recovery inserts an auth-first gate before the existing store,
     ExternalSecret-owner, and Helm mutation sequence. It renders the official
-    auth-reconcile Job from the digest-verified 0.4.17 package with
+    auth-reconcile Job from the digest-verified 0.4.18 package with
     `allowRecoveryRoot=true` and `activeDeadlineSeconds=300`, then validates the
     package-bound object before creating an attempt. The attempt is a copy whose
     only changes are Job metadata: remove `metadata.name`, set
@@ -137,7 +137,7 @@ Code evidence:
     `openbao-auth-reconcile-r24-<digest12>-` where `<digest12>` is the first
     twelve lowercase hex characters after `sha256:`, and add
     `in-falcone.io/recovery-package-digest=<full digest>`,
-    `in-falcone.io/recovery-target-chart=in-falcone-0.4.17`, and
+    `in-falcone.io/recovery-target-chart=in-falcone-0.4.18`, and
     `in-falcone.io/recovery-source-revision=24`. Spec, pod template, labels,
     namespace, hook annotations and all other fields remain identical to the
     validated official Job.
@@ -180,8 +180,8 @@ Code evidence:
     its ExternalSecret precursor gate was incomplete. Chart 0.4.16 fixed that
     gate but its attempted Job kept a successful dedicated credential effective,
     skipped the root-only platform policy write, and failed. The correction is a
-    new immutable chart 0.4.17; evidence, confirmations, release material,
-    recovery paths, and operator procedures all bind 0.4.17 rather than
+    new immutable chart 0.4.18; evidence, confirmations, release material,
+    recovery paths, and operator procedures all bind 0.4.18 rather than
     rewriting historical packages.
 20. The public forward-recovery wrapper invokes its package-local repair
     delegate as `bash <delegate>` so correctness does not depend on executable
@@ -203,11 +203,11 @@ Code evidence:
     condition. Mixed states, extra or absent conditions, identity/cardinality/
     namespace drift, and reason/message drift fail before mutation; ES UIDs are
     not hardcoded. ResourceVersion is captured dynamically. Apply does not patch
-    that desired store; it creates a fresh 0.4.17 digest-bound Job before
+    that desired store; it creates a fresh 0.4.18 digest-bound Job before
     readiness waits. The retained 0.4.14 Job is never reused or deleted.
 23. The early Phase-A confirmation gate binds the exact current revision/chart
-    to immutable target 0.4.17 and a digest-shaped suffix before attestations are
-    loaded. A 0.4.16 confirmation therefore fails with
+    to immutable target 0.4.18 and a digest-shaped suffix before attestations are
+    loaded. A 0.4.17 confirmation therefore fails with
     `JIT_TARGET_CONFIRMATION_REQUIRED` before any mutation rather than being
     misclassified as evidence drift.
 24. `forceRecoveryRoot` defaults to false and is valid only with
@@ -218,16 +218,36 @@ Code evidence:
     platform policy, and only then reconciles roles and runs the canary. The
     structural package guard and log evidence gate both require that contract.
 25. For the exact stable provider-error precursor, a public list requires two
-    exact retained r24 auth anchors. The 0.4.14 and 0.4.16 objects must match
+    exact retained r24 auth anchors. The 0.4.14, 0.4.16 and 0.4.17 objects must match
     their exact names, UIDs, package/target/source and hook annotations,
     `failed=1`, and exactly two uniquely typed `FailureTarget` and `Failed`
     conditions, both `True/BackoffLimitExceeded`, in either order.
     Resource versions and timestamps remain dynamic. Extra prefix Jobs are
-    allowed only as fully attested failed attempts for the current 0.4.17
+    allowed only as fully attested failed attempts for the current 0.4.18
     digest/target: exact generated-name prefix and valid suffix, unique UUID UID,
     exact provenance/hooks, and the same exact failed state. Names and UIDs are
-    globally unique. Drift fails before the fresh 0.4.17 create; no retained
+    globally unique. Drift fails before the fresh 0.4.18 create; no retained
     object is reused, logged or mutated.
+26. The failed 0.4.17 Job proves that rendering a new Job does not make a named
+    ConfigMap mount package-bound: Kubernetes resolves the mount from the live
+    0.4.11 object. Platform and auth-reconcile HCL therefore have one helper
+    source. Canonical ConfigMaps include those helpers, while only forced r24
+    recovery embeds the same bytes into its script, writes them to `emptyDir`,
+    verifies package-rendered SHA-256 values, and mounts no canonical policy
+    ConfigMap. An init ConfigMap or a differently named transient Kubernetes
+    object was rejected because it would introduce another mutation/ownership
+    surface before the guarded Job.
+27. Forced recovery uses `restartPolicy: Never` and `backoffLimit: 0` so a
+    terminal credential-silent container log remains attached to one failed Pod.
+    Routine reconciliation retains `OnFailure`/backoff two and remains
+    dedicated-only. Recovery retries are explicit, rerun all gates, and create a
+    new digest-bound identity; Kubernetes automatic retry cannot replace the
+    diagnostic attempt.
+28. The r24 history fence adds the exact failed 0.4.17 object as the third
+    immutable anchor. Zero or more additional objects are admitted only as
+    exact current-digest/current-target 0.4.18 failures with unique generated
+    names and UUID UIDs. This preserves fail-forward retries without treating
+    0.4.17 as a current package or rollback target.
 
 ## Failure and rollback
 
@@ -248,8 +268,8 @@ changes require a separate backup/restore and isolation-parity design.
 
 ## Migration Plan
 
-1. Publish immutable 0.4.17 and bind fresh backup/parity evidence plus the exact
-   r24→0.4.17 confirmation to its registry digest.
+1. Publish immutable 0.4.18 and bind fresh backup/parity evidence plus the exact
+   r24→0.4.18 confirmation to its registry digest.
 2. Revalidate the exact r20/r22/r23/r24 history, storage, workload, identity,
    owner, and external ESO evidence without reading Secrets.
 3. From the validated package-derived recovery-root Job, create a new
@@ -269,14 +289,14 @@ changes require a separate backup/restore and isolation-parity design.
    recovery-root disabled. Stop with `PHASE_A_HEALTH_GATE_FAILED` or
    `FINAL_HEALTH_GATE_FAILED` plus `FORWARD_RECOVERY_REQUIRED`; never roll back.
 6. Keep Phase B separately JIT-gated. Any failure after mutation is recovered by
-   forward-applying 0.4.17; no Helm rollback is allowed.
+   forward-applying 0.4.18; no Helm rollback is allowed.
 
 ## Verification
 
 Strict lint/schema, managed/external ESO renders, upgrade render, black-box
 contracts mapped to the exact Scenario headers, non-staging storage
 non-regression, six digest assertions, shell syntax, OpenSpec strict validation,
-and 0.4.17 package checksum validation run on the source commit. Operator and
+and 0.4.18 package checksum validation run on the source commit. Operator and
 release material must state the auth-first order, external egress prerequisite,
 credential-silent checks, and forward-only rollback boundary. Independent
 disposable live verification occurs after maker handoff.

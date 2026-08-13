@@ -1,5 +1,5 @@
 /**
- * Public package/CLI contracts for the 0.4.17 forward-recovery candidate.
+ * Public package/CLI contracts for the 0.4.18 forward-recovery candidate.
  *
  * The tests package and extract the public Helm chart, then invoke only its
  * distributed recovery CLIs against process-isolated public-tool fixtures.
@@ -27,7 +27,7 @@ import {
   runRevision24AuthRecovery,
 } from '../fixtures/staging-infrastructure/revision23-partial-manual-recovery-tools.mjs'
 
-const targetVersion = '0.4.17'
+const targetVersion = '0.4.18'
 
 function packageRecoveryCandidate() {
   const work = mkdtempSync(resolve(tmpdir(), 'falcone-packaged-recovery-bbx-'))
@@ -92,7 +92,7 @@ test('bbx-repair-staging-071 packaged forward recovery is independent of repair 
         `public trace:\n${result.trace}`,
       ].join('\n'),
     )
-    assert.equal(candidate.version, targetVersion, 'the corrected package must be 0.4.17')
+    assert.equal(candidate.version, targetVersion, 'the corrected package must be 0.4.18')
   } finally {
     candidate.cleanup()
   }
@@ -136,7 +136,7 @@ test('bbx-repair-staging-072 revision-24 auth preflight renders as a Helm upgrad
       `auth Job must render in upgrade context before mutation:\n${result.trace}`,
     )
     assert.equal(result.status, 0, `revision-24 recovery failed:\n${combined(result)}`)
-    assert.equal(candidate.version, targetVersion, 'the corrected package must be 0.4.17')
+    assert.equal(candidate.version, targetVersion, 'the corrected package must be 0.4.18')
   } finally {
     candidate.cleanup()
   }

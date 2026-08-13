@@ -1,5 +1,5 @@
 /**
- * Public black-box contracts for the 0.4.17 OpenBao self-token policy repair.
+ * Public black-box contracts for the 0.4.18 OpenBao self-token policy repair.
  * Only rendered Helm resources and the offline recovery CLI surface are used.
  */
 import assert from 'node:assert/strict'
@@ -86,7 +86,7 @@ function createdAuthJobs(result) {
   })
 }
 
-function assertFresh017Job(job, context) {
+function assertFresh018Job(job, context) {
   assert.ok(job, `${context} did not create a fresh recovery Job`)
   assert.match(job.ref, new RegExp(
     `^${revision24SelfTokenPolicyContract.jobPrefix.replaceAll('.', '\\.')}[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`,
@@ -95,7 +95,7 @@ function assertFresh017Job(job, context) {
     job.generateName,
     revision24SelfTokenPolicyContract.jobPrefix.replace(/^job\.batch\//, ''),
   )
-  assert.equal(job.chart, 'in-falcone-0.4.17')
+  assert.equal(job.chart, 'in-falcone-0.4.18')
   assert.equal(job.digest, revision24SelfTokenPolicyContract.packageDigest)
   assert.equal(job.sourceRevision, '24')
   assert.equal(job.allowRecoveryRoot, 'true')
@@ -124,7 +124,7 @@ test('platform policy grants only exact lookup-self and revoke-self capabilities
   ])
   assert.doesNotMatch(hcl, /path\s+"auth\/token\/(?:\*|lookup|revoke|create|renew|roles?)"/)
   assert.doesNotMatch(hcl, /\bdefault\b/i)
-  assert.equal(publicChartVersion(), '0.4.17', 'the corrected public package must be 0.4.17')
+  assert.equal(publicChartVersion(), '0.4.18', 'the corrected public package must be 0.4.18')
 })
 
 // bbx-repair-staging-074 | fn-openbao-platform-policy-recovery-bootstrap | OpenSpec #### Scenario: Auth reconciliation installs the platform policy before no-default canary validation
@@ -137,6 +137,7 @@ test('recovery-root auth reconciliation applies platform policy before the no-de
     '--set-string', 'global.webhookDatabase.migration.backupReference=bbx-self-token-policy',
     '--set-string', 'deployment.upgrade.currentVersion=0.3.1',
     '--set', 'openbao.openbao.authReconcile.allowRecoveryRoot=true',
+    '--set', 'openbao.openbao.authReconcile.forceRecoveryRoot=true',
     '--show-only', authReconcileTemplate,
   ])
   const job = oneObject(objects, 'Job', 'openbao-auth-reconcile')
@@ -145,14 +146,18 @@ test('recovery-root auth reconciliation applies platform policy before the no-de
     (container) => container.name === 'auth-metadata-reconciler',
   )
   const script = shellScript(reconciler)
-  const platformVolume = podSpec?.volumes?.find(
-    (volume) => volume.configMap?.name === 'openbao-policy-platform',
+  const platformVolume = podSpec?.volumes?.find((volume) => volume.name === 'platform-policy')
+  assert.deepEqual(platformVolume?.emptyDir, {},
+    'recovery Job must materialize the package policy into emptyDir')
+  assert.equal(
+    podSpec?.volumes?.some((volume) => volume.configMap?.name === 'openbao-policy-platform'),
+    false,
+    'recovery Job must not consume the same-name live ConfigMap',
   )
-  assert.ok(platformVolume, 'recovery Job must mount the rendered platform policy ConfigMap')
   const platformMount = reconciler.volumeMounts?.find(
     (mount) => mount.name === platformVolume.name,
   )
-  assert.ok(platformMount?.readOnly, 'platform policy mount must be read-only')
+  assert.equal(platformMount?.mountPath, '/openbao-platform')
 
   const rootStart = script.indexOf('if [ "$auth_source" = "recovery_root" ]; then')
   const rootEnd = script.indexOf('\nfi', rootStart)
@@ -168,7 +173,7 @@ test('recovery-root auth reconciliation applies platform policy before the no-de
   )
   assert.ok(policyWrite < roleWrite, 'platform policy must precede the no-default ESO role write')
   assert.ok(policyWrite < canaryLogin, 'platform policy must precede the no-default canary login')
-  assert.equal(publicChartVersion(), '0.4.17', 'the corrected public package must be 0.4.17')
+  assert.equal(publicChartVersion(), '0.4.18', 'the corrected public package must be 0.4.18')
 })
 
 // bbx-repair-staging-075 | fn-openbao-platform-policy-install-and-least-privilege | OpenSpec #### Scenario: Auth reconciliation installs the platform policy before no-default canary validation
@@ -213,7 +218,7 @@ test('fresh install writes platform policy while routine reconciler retains no p
     routinePolicy,
     /path\s+"sys\/policies[^"}]*"[\s\S]*?capabilities\s*=\s*\[[^\]]*"(?:create|update|delete|patch|sudo)"/,
   )
-  assert.equal(publicChartVersion(), '0.4.17', 'the corrected public package must be 0.4.17')
+  assert.equal(publicChartVersion(), '0.4.18', 'the corrected public package must be 0.4.18')
 })
 
 // bbx-repair-staging-076 | fn-revision24-self-token-policy-recovery | OpenSpec #### Scenario: Revision-24 recovery admits only the exact 0.4.14 self-token policy failure
@@ -229,7 +234,7 @@ test('r24 fail-forward admits the exact published 0.4.14 lookup-self 403 precurs
   assert.match(result.stdout, /chart=in-falcone-0\.4\.11/)
   const creations = createdAuthJobs(result)
   assert.equal(creations.length, 1)
-  assertFresh017Job(creations[0], 'exact self-token precursor')
+  assertFresh018Job(creations[0], 'exact self-token precursor')
   assert.doesNotMatch(result.trace, /kubectl .*\bpatch clustersecretstore/,
     'already desired ClusterSecretStore must not be patched again')
   assert.doesNotMatch(
@@ -240,10 +245,14 @@ test('r24 fail-forward admits the exact published 0.4.14 lookup-self 403 precurs
     result.trace,
     new RegExp(`kubectl .*\\b(?:wait|logs|delete)\\b.*${revision24SelfTokenPolicyContract.publishedFailedJobRef.replaceAll('.', '\\.')}`),
   )
+  assert.doesNotMatch(
+    result.trace,
+    new RegExp(`kubectl .*\\b(?:wait|logs|delete)\\b.*${revision24SelfTokenPolicyContract.publishedFailed017JobRef.replaceAll('.', '\\.')}`),
+  )
   const upgrades = traceLines(result).filter((line) => line.startsWith('helm upgrade '))
   assert.equal(upgrades.length, 2)
-  assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.17(?:\s|$)/.test(line)))
-  assert.equal(version, '0.4.17', 'the recovery target must be public chart 0.4.17')
+  assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.18(?:\s|$)/.test(line)))
+  assert.equal(version, '0.4.18', 'the recovery target must be public chart 0.4.18')
 })
 
 // bbx-repair-staging-077 | fn-revision24-self-token-policy-precursor-gate | OpenSpec #### Scenario: Revision-24 recovery admits only the exact 0.4.14 self-token policy failure
@@ -302,7 +311,7 @@ test('r24 rejects every self-token precursor drift before mutation', async (t) =
 })
 
 // bbx-repair-staging-078 | fn-revision24-self-token-policy-retry-identity | OpenSpec #### Scenario: Revision-24 recovery admits only the exact 0.4.14 self-token policy failure
-test('r24 retry retains the 0.4.14 and 0.4.16 failed Jobs and creates a new 0.4.17 identity per attempt', () => {
+test('r24 retry retains the 0.4.14, 0.4.16, and 0.4.17 failed Jobs and creates a new 0.4.18 identity per attempt', () => {
   const version = publicChartVersion()
   const result = runRevision24SelfTokenPolicyRecovery({
     targetVersion: version,
@@ -315,7 +324,7 @@ test('r24 retry retains the 0.4.14 and 0.4.16 failed Jobs and creates a new 0.4.
   assert.equal(result.attempts[1].status, 0, combined(result.attempts[1]))
   const creations = createdAuthJobs(result)
   assert.equal(creations.length, 2)
-  creations.forEach((creation) => assertFresh017Job(creation, 'self-token retry'))
+  creations.forEach((creation) => assertFresh018Job(creation, 'self-token retry'))
   assert.notEqual(creations[0].ref, creations[1].ref)
   assert.doesNotMatch(
     result.trace,
@@ -325,6 +334,10 @@ test('r24 retry retains the 0.4.14 and 0.4.16 failed Jobs and creates a new 0.4.
     result.trace,
     new RegExp(`kubectl .*\\b(?:wait|logs|delete)\\b.*${revision24SelfTokenPolicyContract.publishedFailedJobRef.replaceAll('.', '\\.')}`),
   )
+  assert.doesNotMatch(
+    result.trace,
+    new RegExp(`kubectl .*\\b(?:wait|logs|delete)\\b.*${revision24SelfTokenPolicyContract.publishedFailed017JobRef.replaceAll('.', '\\.')}`),
+  )
   assert.doesNotMatch(result.trace, /kubectl .*\bdelete\b.*openbao-auth-reconcile/)
-  assert.equal(version, '0.4.17', 'the retry target must be public chart 0.4.17')
+  assert.equal(version, '0.4.18', 'the retry target must be public chart 0.4.18')
 })

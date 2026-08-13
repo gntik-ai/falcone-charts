@@ -142,7 +142,7 @@
 ## 6. Independently gated live proof
 
 - [ ] 6.1 Complete disposable clean-install and revision-20
-  upgrade/failure/forward-recovery proof against immutable chart 0.4.17; do not
+  upgrade/failure/forward-recovery proof against immutable chart 0.4.18; do not
   use Helm rollback.
 - [ ] 6.2 Obtain separate shared-staging authorization and Phase-B JIT destructive
   confirmation before any PVC mutation.
@@ -199,3 +199,33 @@
 - [x] 8.8 Run the checker-owned full black-box suite once against the frozen
   0.4.17 diff: 14 files, 329 tests, 329 pass, 0 fail, with no runner-created
   workspace delta.
+
+## 9. Package-bound policy correction in chart 0.4.18
+
+- [x] 9.1 Add bbx086-bbx090 for byte-equal package policy snapshots, poisoned
+  live ConfigMap isolation, policy-before-role/canary order, terminal diagnostic
+  retention, routine isolation, exact .14/.16/.17 anchors, 0..N exact .18 retry
+  history and early .17 target rejection.
+- [x] 9.2 Move platform and auth-reconcile HCL into one helper source per policy;
+  render canonical ConfigMaps from those helpers and, only in forced recovery,
+  embed the exact bytes, write them to private emptyDirs and verify rendered
+  SHA-256 values without mounting the live canonical ConfigMaps.
+- [x] 9.3 Require the structural guard to validate package snapshot bytes/hashes,
+  emptyDir-only policy mounts, forced source, platform→auth policy→roles→canary
+  ordering, and `restartPolicy=Never`/`backoffLimit=0` before create.
+- [x] 9.4 Preserve routine dedicated-only rendering without recovery or snapshot
+  mounts, embedded HCL, policy writes or authorization expansion.
+- [x] 9.5 Add the exact failed 0.4.17 Job to the immutable history anchors, admit
+  only 0..N fully attested current 0.4.18 failures, target 0.4.18 throughout and
+  reject 0.4.17 before mutation.
+- [x] 9.6 Add release notes, runbook and OpenSpec coverage for package/live policy
+  provenance, retained diagnostic logs, retry, forward-only recovery and the
+  unchanged ESO/PVC/Phase gates.
+- [x] 9.7 Run focal bbx086-bbx090 plus historical bbx061-bbx085, shell syntax,
+  strict Helm lint/schema, routine/forced/full-upgrade renders, package snapshot
+  equality/order, OpenSpec strict and diff hygiene. The checker-owned full
+  black-box suite passed once on the frozen diff: 15 files, 347 tests, 347 pass,
+  0 fail, with no runner-created workspace delta.
+- [x] 9.8 Obtain independent reviewer approval of the frozen 0.4.18 diff before
+  publication or live apply. The independent reviewer returned APPROVE with no
+  blocking or non-blocking findings.

@@ -31,6 +31,9 @@ esac
 case "$*" in
   policy\ write\ platform*|policy\ write\ auth-reconcile*)
     printf '%s\n' "$*" >>"$state_dir/policy-writes"
+    if [ "$#" -ge 4 ] && [ -f "$4" ]; then
+      cp "$4" "$state_dir/policy-$3.hcl"
+    fi
     exit 0
     ;;
   write*"auth/kubernetes/login"*)

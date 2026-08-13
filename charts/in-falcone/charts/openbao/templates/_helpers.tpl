@@ -63,3 +63,31 @@ imagePullSecrets:
 {{- end }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Canonical OpenBao policy sources. Both the durable ConfigMaps and the isolated
+forced-recovery snapshots include these helpers so policy bytes cannot drift
+between fresh install, routine reconciliation and package-bound recovery.
+*/}}
+{{- define "openbao.policy.platform" -}}
+path "secret/data/platform/*" {
+  capabilities = ["read"]
+}
+path "secret/metadata/platform/*" {
+  capabilities = ["list", "read"]
+}
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+path "auth/token/revoke-self" {
+  capabilities = ["update"]
+}
+{{- end -}}
+
+{{- define "openbao.policy.authReconcile" -}}
+path "auth/kubernetes/config" { capabilities = ["read", "update"] }
+path "auth/kubernetes/role/{{ .Values.openbao.authReconcile.roleName }}" { capabilities = ["read", "update"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }
+path "auth/token/revoke-self" { capabilities = ["update"] }
+path "sys/policies/acl" { capabilities = ["list"] }
+{{- end -}}

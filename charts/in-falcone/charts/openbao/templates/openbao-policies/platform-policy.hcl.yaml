@@ -4,16 +4,4 @@ metadata:
   name: openbao-policy-platform
   namespace: {{ .Values.openbao.namespace }}
 data:
-  platform.hcl: |
-    path "secret/data/platform/*" {
-      capabilities = ["read"]
-    }
-    path "secret/metadata/platform/*" {
-      capabilities = ["list", "read"]
-    }
-    path "auth/token/lookup-self" {
-      capabilities = ["read"]
-    }
-    path "auth/token/revoke-self" {
-      capabilities = ["update"]
-    }
+  platform.hcl: |{{ include "openbao.policy.platform" . | nindent 4 }}

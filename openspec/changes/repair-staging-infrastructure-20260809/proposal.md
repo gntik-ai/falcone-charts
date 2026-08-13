@@ -1,4 +1,4 @@
-# Change: Repair revision-20/r24 staging infrastructure with chart 0.4.17
+# Change: Repair revision-20/r24 staging infrastructure with chart 0.4.18
 
 ## Why
 
@@ -8,7 +8,8 @@ External Secrets Operator. The live revision-24 recovery with chart 0.4.12
 proved that handing the store to `eso-system/eso-openbao-auth` before updating
 `eso-role` exposes a 403 authorization gap, and that allowing OpenBao's default
 policy makes the official reconciliation canary reject otherwise converged
-metadata. Chart 0.4.17 must close both gaps without weakening external ownership,
+metadata. Chart 0.4.18 must close those gaps and the package/live policy-source
+mismatch without weakening external ownership,
 credential secrecy, storage gates, or the fail-forward boundary.
 
 The immutable 0.4.13 package was published but not applied. Package-level
@@ -32,9 +33,12 @@ set under the already exact self-token-policy store fingerprint.
 
 Chart 0.4.16 was published and attempted, but the isolated Job used a successful
 dedicated login and therefore skipped the recovery-root-only platform write. It
-failed without advancing r24/0.4.11. Chart 0.4.17 must force root only in that
+failed without advancing r24/0.4.11. Chart 0.4.17 forced root, but mounted the
+old canonical ConfigMaps from live 0.4.11, so its policy writes could not install
+the package self-service paths and lookup-self remained 403. Chart 0.4.18 must
+use package-bound snapshots only in that
 bounded pre-handoff Job, bind success to an explicit root-source marker, and
-admit only the exact retained 0.4.14 plus 0.4.16 Job chain.
+admit only the exact retained 0.4.14, 0.4.16 plus 0.4.17 Job chain.
 
 ## What Changes
 
@@ -54,7 +58,7 @@ admit only the exact retained 0.4.14 plus 0.4.16 Job chain.
   structured short-lived evidence, semantic external-owner protection, detailed
   operations/security/storage documentation, and black-box contracts.
 - Extend fail-forward recovery to the exact revision-23 chart-0.4.9 named-user
-  rollout failure, targeting immutable chart 0.4.17 and rejecting evidence drift
+  rollout failure, targeting immutable chart 0.4.18 and rejecting evidence drift
   before mutation.
 - Admit the one exact observed partial manual recovery in which APISIX is 3/3
   Ready through an exact Deployment→ReplicaSet→Pod UID/revision owner chain as
@@ -86,17 +90,21 @@ admit only the exact retained 0.4.14 plus 0.4.16 Job chain.
   recovery-root auth branch before the no-default role/canary validation.
 - Admit only the exact desired-store/lookup-self-403 precursor with either all
   fourteen ExternalSecrets each exactly Ready or all fourteen each in the exact
-  homogeneous provider-error state, create a fresh digest-bound 0.4.17 Job, and
+  homogeneous provider-error state, create a fresh digest-bound 0.4.18 Job, and
   leave the already-desired store unpatched. Reject mixtures, condition drift,
   identity drift and the published 0.4.15 target before mutation.
 - Add `forceRecoveryRoot=false` to schema and defaults; reject force without
   explicit `allowRecoveryRoot=true`, keep routine reconciliation dedicated-only,
   and set both flags only in isolated r24 recovery.
-- Require exact public metadata/status for the two retained failed anchors and
+- Require exact public metadata/status for the three retained failed anchors and
   every additional current-package retry, reject history drift before mutation,
-  force the fresh digest-bound 0.4.17 Job to emit
+  force the fresh digest-bound 0.4.18 Job to emit
   a recovery-root marker before policy/auth/canary work, and reject 0.4.16 early.
-- Publish the correction as immutable chart 0.4.17, update operator/recovery
+- Render canonical platform/auth-reconcile ConfigMaps and forced snapshots from
+  one HCL helper source; use writable package snapshots only for forced recovery,
+  forbid canonical ConfigMap mounts there, and retain one terminal diagnostic
+  attempt with `Never`/backoff zero.
+- Publish the correction as immutable chart 0.4.18, update operator/recovery
   documentation, and keep recovery forward-only with no Helm rollback.
 
 ## Capabilities
@@ -130,8 +138,8 @@ Code evidence:
   currently performs the r24 store handoff before the first package Helm pass.
 - `charts/in-falcone/migrations/revision-20-repair.sh::phase_a_args-and-waits:874-925,1445-1476`
   establishes the two recovery-root/no-root passes and explicit non-vector wait
-  vector that 0.4.17 must preserve.
-- `charts/in-falcone/Chart.yaml::version:5` identifies 0.4.17 as the new
+  vector that 0.4.18 must preserve.
+- `charts/in-falcone/Chart.yaml::version:5` identifies 0.4.18 as the new
   immutable target while 0.4.16 remains the published failed Job attempt,
   0.4.15 remains published but unapplied, 0.4.14 remains the published partial
   auth-Job attempt, and live Helm remains revision 24/chart 0.4.11.
