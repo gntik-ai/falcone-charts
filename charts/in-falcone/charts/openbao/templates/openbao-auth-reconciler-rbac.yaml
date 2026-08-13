@@ -11,10 +11,5 @@ metadata:
   name: openbao-policy-auth-reconcile
   namespace: {{ .Values.openbao.namespace }}
 data:
-  auth-reconcile.hcl: |
-    path "auth/kubernetes/config" { capabilities = ["read", "update"] }
-    path "auth/kubernetes/role/{{ .Values.openbao.authReconcile.roleName }}" { capabilities = ["read", "update"] }
-    path "auth/token/lookup-self" { capabilities = ["read"] }
-    path "auth/token/revoke-self" { capabilities = ["update"] }
-    path "sys/policies/acl" { capabilities = ["list"] }
+  auth-reconcile.hcl: |{{ include "openbao.policy.authReconcile" . | nindent 4 }}
 {{- end }}

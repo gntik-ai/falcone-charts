@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.17"
+EXPECTED_REPAIR_VERSION="0.4.18"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -1247,7 +1247,7 @@ PY
         and all(.status.conditions[];
           .status == "True" and .reason == "BackoffLimitExceeded");
       [.items[] | select(.metadata.name | startswith("openbao-auth-reconcile-r24-"))] as $jobs
-      | ($jobs | length) >= 2
+      | ($jobs | length) >= 3
       and ([$jobs[].metadata.name] | unique | length) == ($jobs | length)
       and ([$jobs[].metadata.uid] | unique | length) == ($jobs | length)
       and any($jobs[]; exact_failed_job(
@@ -1260,6 +1260,11 @@ PY
         "979dac0c-507c-4b19-9f07-2c5e98a66acc";
         "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e";
         "in-falcone-0.4.16"))
+      and any($jobs[]; exact_failed_job(
+        "openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw";
+        "c8fd1c27-f68b-4d33-b10f-3b832c741cd3";
+        "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328";
+        "in-falcone-0.4.17"))
       and all($jobs[];
         exact_failed_job(
           "openbao-auth-reconcile-r24-859e037a14be-7v86n";
@@ -1271,6 +1276,11 @@ PY
           "979dac0c-507c-4b19-9f07-2c5e98a66acc";
           "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e";
           "in-falcone-0.4.16")
+        or exact_failed_job(
+          "openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw";
+          "c8fd1c27-f68b-4d33-b10f-3b832c741cd3";
+          "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328";
+          "in-falcone-0.4.17")
         or exact_current_failed_job($package_digest; $target_chart; $digest12))' >/dev/null || \
       die "REVISION24_AUTH_RECONCILE_HISTORY_DRIFT"
   fi
@@ -1294,9 +1304,9 @@ PY
 
 run_revision24_pre_handoff_auth_reconcile() {
   [[ "$actual_revision" == 24 ]] || return 0
-  # The auth-first pre-handoff Job is enabled by the corrected 0.4.17 recovery
-  # package. Immutable 0.4.12 through 0.4.16 never completed live recovery.
-  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.17" ]] || return 0
+  # The auth-first pre-handoff Job is enabled by the corrected 0.4.18 recovery
+  # package. Immutable 0.4.12 through 0.4.17 never completed live recovery.
+  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.18" ]] || return 0
 
   auth_job_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision24-auth-reconcile.XXXXXX")"
   helm template "$EXPECTED_RELEASE" "$chart_source" \
@@ -1311,6 +1321,7 @@ run_revision24_pre_handoff_auth_reconcile() {
 
   python3 - "$auth_job_file" "$package_digest" "$EXPECTED_REPAIR_CHART" "$actual_revision" <<'PY' || \
     die "REVISION24_AUTH_RECONCILE_RENDER_DRIFT"
+import hashlib
 import re
 import sys
 
@@ -1340,7 +1351,7 @@ if (
     or metadata.get("name") != "openbao-auth-reconcile"
     or metadata.get("namespace") != "secret-store"
     or not re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
-    or target_chart != "in-falcone-0.4.17"
+    or target_chart != "in-falcone-0.4.18"
     or source_revision != "24"
 ):
     raise SystemExit(1)
@@ -1361,17 +1372,75 @@ mounts = {
 volumes = {volume.get("name"): volume for volume in pod_spec.get("volumes", [])}
 force_marker = 'force_recovery_root="true"'
 source_marker = 'auth_source=recovery_root result=accepted'
-policy_write = 'bao policy write platform /openbao-platform/platform.hcl'
+platform_policy_write = 'bao policy write platform /openbao-platform/platform.hcl'
+reconciler_policy_write = 'bao policy write auth-reconcile /openbao-auth-reconcile/auth-reconcile.hcl'
+first_role_write = 'bao write auth/kubernetes/role/openbao-init-role'
+canary_marker = 'bao write -format=json auth/kubernetes/login'
 terminal_marker = 'result=unchanged code=AUTH_METADATA_MATCHED canary=passed'
+
+
+def package_snapshot(target_path, delimiter, hash_variable):
+    match = re.search(
+        rf"cat > {re.escape(target_path)} <<'{delimiter}'\n(.*?)\n{delimiter}\n",
+        script,
+        re.DOTALL,
+    )
+    digest = re.search(rf'{hash_variable}="([0-9a-f]{{64}})"', script)
+    if match is None or digest is None:
+        raise SystemExit(1)
+    content = match.group(1) + "\n"
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() != digest.group(1):
+        raise SystemExit(1)
+    return content, match.start()
+
+
+platform_snapshot, platform_snapshot_index = package_snapshot(
+    "/openbao-platform/platform.hcl",
+    "FALCONE_PLATFORM_POLICY_SNAPSHOT",
+    "platform_policy_sha256",
+)
+reconciler_snapshot, reconciler_snapshot_index = package_snapshot(
+    "/openbao-auth-reconcile/auth-reconcile.hcl",
+    "FALCONE_AUTH_RECONCILE_POLICY_SNAPSHOT",
+    "auth_reconcile_policy_sha256",
+)
 if (
-    force_marker not in script
+    'path "auth/token/lookup-self" {\n  capabilities = ["read"]\n}' not in platform_snapshot
+    or 'path "auth/token/revoke-self" {\n  capabilities = ["update"]\n}' not in platform_snapshot
+    or 'path "auth/token/*"' in platform_snapshot
+    or f'path "auth/kubernetes/role/eso-role" {{ capabilities = ["read", "update"] }}' not in reconciler_snapshot
+):
+    raise SystemExit(1)
+if (
+    job.get("spec", {}).get("backoffLimit") != 0
+    or pod_spec.get("restartPolicy") != "Never"
+    or force_marker not in script
     or source_marker not in script
-    or policy_write not in script
+    or platform_policy_write not in script
+    or reconciler_policy_write not in script
+    or first_role_write not in script
+    or canary_marker not in script
     or terminal_marker not in script
-    or script.index(source_marker) > script.index(policy_write)
-    or script.index(policy_write) > script.index(terminal_marker)
+    or platform_snapshot_index > reconciler_snapshot_index
+    or reconciler_snapshot_index > script.index(source_marker)
+    or script.index(source_marker) > script.index(platform_policy_write)
+    or script.index(platform_policy_write) > script.index(reconciler_policy_write)
+    or script.index(reconciler_policy_write) > script.index(first_role_write)
+    or script.index(first_role_write) > script.index(canary_marker)
+    or script.index(canary_marker) > script.index(terminal_marker)
     or ("recovery", "/openbao-recovery") not in mounts
+    or ("platform-policy", "/openbao-platform") not in mounts
+    or ("auth-reconcile-policy", "/openbao-auth-reconcile") not in mounts
     or volumes.get("recovery", {}).get("secret", {}).get("secretName") != "openbao-recovery"
+    or volumes.get("platform-policy", {}).get("emptyDir") != {}
+    or volumes.get("auth-reconcile-policy", {}).get("emptyDir") != {}
+    or any(
+        volume.get("configMap", {}).get("name") in {
+            "openbao-policy-platform",
+            "openbao-policy-auth-reconcile",
+        }
+        for volume in pod_spec.get("volumes", [])
+    )
 ):
     raise SystemExit(1)
 

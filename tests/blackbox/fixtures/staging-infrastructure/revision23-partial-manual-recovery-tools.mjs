@@ -18,7 +18,7 @@ const recoveryScript = path.join(
 );
 const exactFixturePath = path.join(helperDirectory, "revision23-partial-manual-recovery.json");
 const exactConfirmation =
-  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.17/" +
+  "default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.18/" +
   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const baseFixture = JSON.parse(fs.readFileSync(exactFixturePath, "utf8"));
 
@@ -193,14 +193,14 @@ function assertRejectedAfterFirstPhaseAUpgrade(result, drift) {
   const upgrades = result.mutations.split("\n").filter((line) => line.startsWith("helm upgrade "));
   assert.deepEqual(
     upgrades,
-    ["helm upgrade release=falcone version=0.4.17"],
+    ["helm upgrade release=falcone version=0.4.18"],
     `${drift} must stop after exactly the first Phase-A upgrade`
   );
 }
 
 export function registerRevision23PartialManualRecoveryContract() {
   test("bbx-repair-staging-057 admits only the exact revision-23 partial manual recovery", async (t) => {
-    await t.test("admits the exact partial recovery and applies immutable chart 0.4.17", () => {
+    await t.test("admits the exact partial recovery and applies immutable chart 0.4.18", () => {
       const result = runRecovery();
 
       assert.equal(
@@ -215,13 +215,13 @@ export function registerRevision23PartialManualRecoveryContract() {
       );
       assert.match(
         result.stdout,
-        /phase-a=applied revision=25 chart=in-falcone-0\.4\.17 package-digest=sha256:b{64}/
+        /phase-a=applied revision=25 chart=in-falcone-0\.4\.18 package-digest=sha256:b{64}/
       );
       assert.deepEqual(
         result.mutations.trim().split("\n"),
         [
-          "helm upgrade release=falcone version=0.4.17",
-          "helm upgrade release=falcone version=0.4.17"
+          "helm upgrade release=falcone version=0.4.18",
+          "helm upgrade release=falcone version=0.4.18"
         ]
       );
       assert.doesNotMatch(result.trace, /helm (rollback|uninstall)|kubectl .* (delete|scale) /);
@@ -457,8 +457,8 @@ export function registerRevision23PhaseAVectorPendingProgressContract() {
     assert.deepEqual(
       result.mutations.trim().split("\n"),
       [
-        "helm upgrade release=falcone version=0.4.17",
-        "helm upgrade release=falcone version=0.4.17"
+        "helm upgrade release=falcone version=0.4.18",
+        "helm upgrade release=falcone version=0.4.18"
       ],
       "the recovery must preserve exactly one Phase-A and one Phase-B/JIT mutation"
     );
@@ -496,7 +496,7 @@ const enableRevision24GlobalWaitRecovery = (fixture) => {
 };
 
 const revision24Confirmation =
-  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.17/" +
+  "default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.18/" +
   baseFixture.revision24GlobalWait.packageDigest;
 
 function assertNoSecretReadsOrOwnershipEscape(result, contract) {
@@ -655,7 +655,7 @@ export function registerLegacyClusterSecretStoreHandoffContract() {
 
 export function registerRevision24GlobalWaitRecoveryContract() {
   test("bbx-repair-staging-060 resumes only the exact revision-24 global-wait timeout", async (t) => {
-    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.17 passes", () => {
+    await t.test("admits the exact r24 precursor, hands off the store, and completes two 0.4.18 passes", () => {
       const result = runRecovery({
         mutate: enableRevision24GlobalWaitRecovery,
         confirmation: revision24Confirmation
@@ -670,7 +670,7 @@ export function registerRevision24GlobalWaitRecoveryContract() {
       const patchIndex = traceLines.findIndex((line) => /kubectl .*\bpatch clustersecretstore/.test(line));
       const upgrades = traceLines.filter((line) => line.startsWith("helm upgrade "));
       assert.equal(upgrades.length, 2, "r24 recovery must complete exactly two Phase-A passes");
-      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.17(?:\s|$)/.test(line)));
+      assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.18(?:\s|$)/.test(line)));
       assert.ok(upgrades.every((line) => !/(?:^|\s)--wait(?:\s|$)/.test(line)));
       assert.ok(patchIndex !== -1 && patchIndex < traceLines.indexOf(upgrades[0]), "store handoff precedes Helm");
       assertNoSecretReadsOrOwnershipEscape(result, "r24 recovery");
@@ -716,7 +716,7 @@ export function registerRevision24GlobalWaitRecoveryContract() {
   });
 }
 
-const revision24AuthRecoveryDigest = `sha256:${"0417".repeat(16)}`;
+const revision24AuthRecoveryDigest = `sha256:${"0418".repeat(16)}`;
 const enableRevision24AuthRecovery = (fixture, {
   createMode,
   preflightLog,
@@ -762,7 +762,7 @@ export function runRevision24AuthRecovery({
   attemptCount = 1,
   storeWaitFails = false,
   externalSecretWaitFailure = null,
-  targetVersion = "0.4.17",
+  targetVersion = "0.4.18",
   packageDigest = revision24AuthRecoveryDigest,
   requireUpgradeRenderContext = false,
   recoveryEntrypoint = recoveryScript,
@@ -794,16 +794,16 @@ export function runRevision24AuthRecovery({
 }
 
 export const revision24AuthRecoveryContract = Object.freeze({
-  targetVersion: "0.4.17",
+  targetVersion: "0.4.18",
   packageDigest: revision24AuthRecoveryDigest,
   sourceRevision: "24",
-  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041704170417-",
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041804180418-",
   staleJobRef: baseFixture.authRecovery.staleJobs[0].ref,
   externalSecretNames: Object.freeze([...baseFixture.externalSecretNames]),
   vectorResource: baseFixture.phaseAPendingVector.resource
 });
 
-const revision24SelfTokenPolicyDigest = `sha256:${"0417".repeat(16)}`;
+const revision24SelfTokenPolicyDigest = `sha256:${"0418".repeat(16)}`;
 const revision24PublishedPartialJobRef =
   "job.batch/openbao-auth-reconcile-r24-859e037a14be-7v86n";
 const revision24Published016FailedJobRef =
@@ -845,6 +845,14 @@ const revision24Published016FailedJob = retainedAuthFailureJob({
   digest: "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e",
   targetChart: "in-falcone-0.4.16"
 });
+const revision24Published017FailedJobRef =
+  "job.batch/openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw";
+const revision24Published017FailedJob = retainedAuthFailureJob({
+  name: revision24Published017FailedJobRef.replace(/^job(?:\.batch)?\//, ""),
+  uid: "c8fd1c27-f68b-4d33-b10f-3b832c741cd3",
+  digest: "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328",
+  targetChart: "in-falcone-0.4.17"
+});
 
 export function makeRevision24FailedRetryJob({
   suffix = "prior1",
@@ -859,7 +867,7 @@ export function makeRevision24FailedRetryJob({
       name,
       uid,
       digest: revision24SelfTokenPolicyDigest,
-      targetChart: "in-falcone-0.4.17"
+      targetChart: "in-falcone-0.4.18"
     })
   };
 }
@@ -897,13 +905,18 @@ const enableRevision24SelfTokenPolicyPrecursor = (fixture, mutatePrecursor) => {
       ref: revision24Published016FailedJobRef,
       status: "Failed",
       object: structuredClone(revision24Published016FailedJob)
+    },
+    {
+      ref: revision24Published017FailedJobRef,
+      status: "Failed",
+      object: structuredClone(revision24Published017FailedJob)
     }
   ];
   mutatePrecursor(fixture);
 };
 
 export function runRevision24SelfTokenPolicyRecovery({
-  targetVersion = "0.4.17",
+  targetVersion = "0.4.18",
   attemptCount = 1,
   waitFailures = 0,
   mutatePrecursor = () => {}
@@ -919,7 +932,7 @@ export function runRevision24SelfTokenPolicyRecovery({
 }
 
 export const revision24SelfTokenPolicyContract = Object.freeze({
-  targetVersion: "0.4.17",
+  targetVersion: "0.4.18",
   packageDigest: revision24SelfTokenPolicyDigest,
   sourceRevision: "24",
   sourceChart: "in-falcone-0.4.11",
@@ -927,7 +940,9 @@ export const revision24SelfTokenPolicyContract = Object.freeze({
   publishedPartialJobRef: revision24PublishedPartialJobRef,
   publishedFailedVersion: "0.4.16",
   publishedFailedJobRef: revision24Published016FailedJobRef,
-  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041704170417-",
+  publishedFailed017Version: "0.4.17",
+  publishedFailed017JobRef: revision24Published017FailedJobRef,
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041804180418-",
   failedRetryJob: Object.freeze(makeRevision24FailedRetryJob()),
   storeUid: "f70a5ffd-56f3-4b37-8119-d54ba1108b69",
   storeReconcileRequest: "phase-a-0.4.12-auth-updated",
@@ -936,7 +951,7 @@ export const revision24SelfTokenPolicyContract = Object.freeze({
   externalSecretNames: Object.freeze([...baseFixture.externalSecretNames])
 });
 
-const revision24ExternalSecretPrecursorDigest = `sha256:${"0417".repeat(16)}`;
+const revision24ExternalSecretPrecursorDigest = `sha256:${"0418".repeat(16)}`;
 const revision24Published015Digest = `sha256:${"0415".repeat(16)}`;
 const revision24Published016Digest =
   "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e";
@@ -958,7 +973,7 @@ const enableRevision24ExternalSecretPrecursor = (
 };
 
 export function runRevision24ExternalSecretPrecursorRecovery({
-  targetVersion = "0.4.17",
+  targetVersion = "0.4.18",
   packageDigest = revision24ExternalSecretPrecursorDigest,
   externalSecretState = "ready",
   attemptCount = 1,
@@ -980,7 +995,7 @@ export function runRevision24ExternalSecretPrecursorRecovery({
 }
 
 export const revision24ExternalSecretPrecursorContract = Object.freeze({
-  targetVersion: "0.4.17",
+  targetVersion: "0.4.18",
   packageDigest: revision24ExternalSecretPrecursorDigest,
   sourceRevision: "24",
   sourceChart: "in-falcone-0.4.11",
@@ -989,9 +1004,13 @@ export const revision24ExternalSecretPrecursorContract = Object.freeze({
   publishedFailedVersion: "0.4.16",
   publishedFailedDigest: revision24Published016Digest,
   publishedFailedJobRef: revision24Published016FailedJobRef,
+  publishedFailed017Version: "0.4.17",
+  publishedFailed017Digest:
+    "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328",
+  publishedFailed017JobRef: revision24Published017FailedJobRef,
   partialJobVersion: "0.4.14",
   partialJobRef: revision24PublishedPartialJobRef,
-  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041704170417-",
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041804180418-",
   storeUid: "f70a5ffd-56f3-4b37-8119-d54ba1108b69",
   storeReconcileRequest: "phase-a-0.4.12-auth-updated",
   storeReason: "ValidationFailed",
@@ -1011,7 +1030,7 @@ export const revision24ExternalSecretPrecursorContract = Object.freeze({
   externalSecretNames: Object.freeze([...baseFixture.externalSecretNames])
 });
 
-const revision24ForcedRecoveryRootDigest = `sha256:${"0417".repeat(16)}`;
+const revision24ForcedRecoveryRootDigest = `sha256:${"0418".repeat(16)}`;
 const revision24ForcedRootSuccessLog =
   "auth_source=recovery_root result=accepted\n" +
   "result=changed code=AUTH_METADATA_CONVERGED canary=passed";
@@ -1028,13 +1047,18 @@ const enableRevision24ForcedRecoveryRootPrecursor = (fixture, mutatePrecursor) =
       ref: revision24Published016FailedJobRef,
       status: "Failed",
       object: structuredClone(revision24Published016FailedJob)
+    },
+    {
+      ref: revision24Published017FailedJobRef,
+      status: "Failed",
+      object: structuredClone(revision24Published017FailedJob)
     }
   ];
   mutatePrecursor(fixture);
 };
 
 export function runRevision24ForcedRecoveryRoot({
-  targetVersion = "0.4.17",
+  targetVersion = "0.4.18",
   packageDigest = revision24ForcedRecoveryRootDigest,
   attemptCount = 1,
   waitFailures = 0,
@@ -1054,7 +1078,7 @@ export function runRevision24ForcedRecoveryRoot({
 }
 
 export const revision24ForcedRecoveryRootContract = Object.freeze({
-  targetVersion: "0.4.17",
+  targetVersion: "0.4.18",
   packageDigest: revision24ForcedRecoveryRootDigest,
   sourceRevision: "24",
   sourceChart: "in-falcone-0.4.11",
@@ -1062,11 +1086,86 @@ export const revision24ForcedRecoveryRootContract = Object.freeze({
   publishedPartial014JobRef: revision24PublishedPartialJobRef,
   publishedFailed016Version: "0.4.16",
   publishedFailed016JobRef: revision24Published016FailedJobRef,
+  publishedFailed017Version: "0.4.17",
+  publishedFailed017JobRef: revision24Published017FailedJobRef,
   retainedJobs: Object.freeze([
     structuredClone(revision24Published014FailedJob),
-    structuredClone(revision24Published016FailedJob)
+    structuredClone(revision24Published016FailedJob),
+    structuredClone(revision24Published017FailedJob)
   ]),
-  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041704170417-",
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041804180418-",
+  successLog: revision24ForcedRootSuccessLog,
+  storeMessage: revision24AuthBlockedMessage,
+  externalSecretCondition: Object.freeze({
+    type: "Ready",
+    status: "False",
+    reason: "SecretSyncedError",
+    message: revision24ExternalSecretErrorMessage
+  }),
+  externalSecretNames: Object.freeze([...baseFixture.externalSecretNames])
+});
+
+const revision24DigestBoundPolicyDigest = `sha256:${"0418".repeat(16)}`;
+
+export function makeRevision24Failed018RetryJob({
+  suffix = "prior1",
+  uid = "00000000-0000-4000-8000-000000000118"
+} = {}) {
+  const digest12 = revision24DigestBoundPolicyDigest.replace(/^sha256:/, "").slice(0, 12);
+  const name = `openbao-auth-reconcile-r24-${digest12}-${suffix}`;
+  return {
+    ref: `job.batch/${name}`,
+    status: "Failed",
+    object: retainedAuthFailureJob({
+      name,
+      uid,
+      digest: revision24DigestBoundPolicyDigest,
+      targetChart: "in-falcone-0.4.18"
+    })
+  };
+}
+
+const enableRevision24DigestBoundPolicyPrecursor = (fixture, mutatePrecursor) => {
+  enableRevision24ForcedRecoveryRootPrecursor(fixture, () => {});
+  mutatePrecursor(fixture);
+};
+
+export function runRevision24DigestBoundPolicyRecovery({
+  targetVersion = "0.4.18",
+  packageDigest = revision24DigestBoundPolicyDigest,
+  attemptCount = 1,
+  waitFailures = 0,
+  preflightLog = revision24ForcedRootSuccessLog,
+  mutatePrecursor = () => {}
+} = {}) {
+  return runRevision24AuthRecovery({
+    targetVersion,
+    packageDigest,
+    attemptCount,
+    waitFailures,
+    preflightLog,
+    requireForcedRecoveryRoot: true,
+    fixtureMutator: (fixture) =>
+      enableRevision24DigestBoundPolicyPrecursor(fixture, mutatePrecursor)
+  });
+}
+
+export const revision24DigestBoundPolicyContract = Object.freeze({
+  targetVersion: "0.4.18",
+  packageDigest: revision24DigestBoundPolicyDigest,
+  sourceRevision: "24",
+  sourceChart: "in-falcone-0.4.11",
+  publishedPartial014JobRef: revision24PublishedPartialJobRef,
+  publishedFailed016JobRef: revision24Published016FailedJobRef,
+  publishedFailed017JobRef: revision24Published017FailedJobRef,
+  publishedFailed017Digest:
+    "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328",
+  jobPrefix: "job.batch/openbao-auth-reconcile-r24-041804180418-",
+  retainedJobs: Object.freeze([
+    structuredClone(revision24Published014FailedJob),
+    structuredClone(revision24Published016FailedJob),
+    structuredClone(revision24Published017FailedJob)
+  ]),
   successLog: revision24ForcedRootSuccessLog,
   storeMessage: revision24AuthBlockedMessage,
   externalSecretCondition: Object.freeze({
@@ -1387,13 +1486,15 @@ metadata:
   annotations:
     falcone.gntik.ai/attested-chart-version: "${fixture.targetVersion}"
     helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-3"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
+  backoffLimit: 0
   activeDeadlineSeconds: 300
   template:
     spec:
       serviceAccountName: openbao-auth-reconciler
-      restartPolicy: OnFailure
+      restartPolicy: Never
       containers:
         - name: auth-metadata-reconciler
           image: openbao/openbao:2.3.1
@@ -1403,21 +1504,67 @@ spec:
               desired_policies="functions,gateway,iam,platform"
               desired_token_no_default_policy="true"
               force_recovery_root="${forceRecoveryRoot}"
-${forceRecoveryRoot ? `              auth_source=recovery_root
+${forceRecoveryRoot ? `              fail() {
+                echo "result=error code=$1" >&2
+                exit 1
+              }
+              platform_policy_sha256="19e9b84ea64ace31f9d077cf448af04411aa9ae1256f9e001bb175cd053efd2b"
+              auth_reconcile_policy_sha256="7968565b1e24ef962b1f90a73df59fe3dd234f18bc28e1d2b94cfedfd81b5cf8"
+              cat > /openbao-platform/platform.hcl <<'FALCONE_PLATFORM_POLICY_SNAPSHOT'
+              path "secret/data/platform/*" {
+                capabilities = ["read"]
+              }
+              path "secret/metadata/platform/*" {
+                capabilities = ["list", "read"]
+              }
+              path "auth/token/lookup-self" {
+                capabilities = ["read"]
+              }
+              path "auth/token/revoke-self" {
+                capabilities = ["update"]
+              }
+              FALCONE_PLATFORM_POLICY_SNAPSHOT
+              cat > /openbao-auth-reconcile/auth-reconcile.hcl <<'FALCONE_AUTH_RECONCILE_POLICY_SNAPSHOT'
+              path "auth/kubernetes/config" { capabilities = ["read", "update"] }
+              path "auth/kubernetes/role/eso-role" { capabilities = ["read", "update"] }
+              path "auth/token/lookup-self" { capabilities = ["read"] }
+              path "auth/token/revoke-self" { capabilities = ["update"] }
+              path "sys/policies/acl" { capabilities = ["list"] }
+              FALCONE_AUTH_RECONCILE_POLICY_SNAPSHOT
+              [ "$(sha256sum /openbao-platform/platform.hcl | awk '{print $1}')" = "$platform_policy_sha256" ] \\
+                || fail PLATFORM_POLICY_SNAPSHOT_DRIFT
+              [ "$(sha256sum /openbao-auth-reconcile/auth-reconcile.hcl | awk '{print $1}')" = "$auth_reconcile_policy_sha256" ] \\
+                || fail RECONCILER_POLICY_SNAPSHOT_DRIFT
+              auth_source=recovery_root
               echo "auth_source=recovery_root result=accepted"
               bao policy write platform /openbao-platform/platform.hcl
+              bao policy write auth-reconcile /openbao-auth-reconcile/auth-reconcile.hcl
+              bao write auth/kubernetes/role/openbao-init-role token_policies=init
+              bao write auth/kubernetes/role/openbao-auth-reconcile-role token_policies=auth-reconcile
+              bao write auth/kubernetes/role/eso-role token_policies=platform,functions,gateway,iam token_no_default_policy=true
+              bao write -format=json auth/kubernetes/login role=eso-role jwt="$(cat /canary/token)"
+              bao read -format=json auth/token/lookup-self
+              bao write -force auth/token/revoke-self
 ` : ""}
               echo "result=unchanged code=AUTH_METADATA_MATCHED canary=passed"
           volumeMounts:
             - name: tls
               mountPath: /openbao/tls
-${allowRecoveryRoot ? `            - name: recovery
+${allowRecoveryRoot ? `            - name: auth-reconcile-policy
+              mountPath: /openbao-auth-reconcile
+            - name: platform-policy
+              mountPath: /openbao-platform
+            - name: recovery
               mountPath: /openbao-recovery
 ` : ""}      volumes:
         - name: tls
           secret:
             secretName: openbao-server-tls
-${allowRecoveryRoot ? `        - name: recovery
+${allowRecoveryRoot ? `        - name: auth-reconcile-policy
+          emptyDir: {}
+        - name: platform-policy
+          emptyDir: {}
+        - name: recovery
           secret:
             secretName: openbao-recovery
 ` : ""}`;
@@ -1830,11 +1977,7 @@ const createAuthRecoveryJob = (source) => {
     fail("FAKE_AUTH_RECOVERY_ROOT_NOT_ENABLED");
   }
   if (fixture.authRecovery.requireForcedRecoveryRoot) {
-    if (!/^\s*force_recovery_root="true"\s*$/m.test(source)) {
-      fail("FAKE_AUTH_RECOVERY_FORCE_ROOT_REQUIRED");
-    }
-    if (!/^\s*auth_source=recovery_root\s*$/m.test(source) ||
-        !source.includes('auth_source=recovery_root result=accepted')) {
+    if (!source.includes('auth_source=recovery_root result=accepted')) {
       fail("FAKE_AUTH_RECOVERY_FORCE_ROOT_MARKER_REQUIRED");
     }
   }

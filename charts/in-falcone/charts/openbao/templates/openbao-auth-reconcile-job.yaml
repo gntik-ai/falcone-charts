@@ -12,7 +12,7 @@ metadata:
     "helm.sh/hook-weight": "-3"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
-  backoffLimit: 2
+  backoffLimit: {{ if .Values.openbao.authReconcile.forceRecoveryRoot }}0{{ else }}2{{ end }}
   activeDeadlineSeconds: {{ .Values.openbao.authReconcile.activeDeadlineSeconds }}
   template:
     metadata:
@@ -21,7 +21,7 @@ spec:
         app.kubernetes.io/component: secrets-auth-metadata
     spec:
       serviceAccountName: openbao-auth-reconciler
-      restartPolicy: OnFailure
+      restartPolicy: {{ if .Values.openbao.authReconcile.forceRecoveryRoot }}Never{{ else }}OnFailure{{ end }}
       {{- include "openbao.imagePullSecrets" . | nindent 6 }}
       securityContext: {{- toYaml .Values.openbao.jobPodSecurityContext | nindent 8 }}
       initContainers:
@@ -75,6 +75,21 @@ spec:
                 echo "result=error code=$1" >&2
                 exit 1
               }
+
+              {{- if .Values.openbao.authReconcile.forceRecoveryRoot }}
+              # Materialize the immutable package policy bytes into emptyDir.
+              # Never consume same-name ConfigMaps from the older live release.
+              platform_policy_sha256={{ printf "%s\n" (include "openbao.policy.platform" .) | sha256sum | quote }}
+              auth_reconcile_policy_sha256={{ printf "%s\n" (include "openbao.policy.authReconcile" .) | sha256sum | quote }}
+              cat > /openbao-platform/platform.hcl <<'FALCONE_PLATFORM_POLICY_SNAPSHOT'{{ include "openbao.policy.platform" . | nindent 14 }}
+              FALCONE_PLATFORM_POLICY_SNAPSHOT
+              cat > /openbao-auth-reconcile/auth-reconcile.hcl <<'FALCONE_AUTH_RECONCILE_POLICY_SNAPSHOT'{{ include "openbao.policy.authReconcile" . | nindent 14 }}
+              FALCONE_AUTH_RECONCILE_POLICY_SNAPSHOT
+              [ "$(sha256sum /openbao-platform/platform.hcl | awk '{print $1}')" = "$platform_policy_sha256" ] \
+                || fail PLATFORM_POLICY_SNAPSHOT_DRIFT
+              [ "$(sha256sum /openbao-auth-reconcile/auth-reconcile.hcl | awk '{print $1}')" = "$auth_reconcile_policy_sha256" ] \
+                || fail RECONCILER_POLICY_SNAPSHOT_DRIFT
+              {{- end }}
               field() {
                 bao read -field="$1" "$2" 2>/dev/null || true
               }
@@ -278,10 +293,14 @@ spec:
             {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
             - name: auth-reconcile-policy
               mountPath: /openbao-auth-reconcile
+            {{- if not .Values.openbao.authReconcile.forceRecoveryRoot }}
               readOnly: true
+            {{- end }}
             - name: platform-policy
               mountPath: /openbao-platform
+            {{- if not .Values.openbao.authReconcile.forceRecoveryRoot }}
               readOnly: true
+            {{- end }}
             - name: recovery
               mountPath: /openbao-recovery
               readOnly: true
@@ -295,11 +314,19 @@ spec:
             medium: Memory
         {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
         - name: auth-reconcile-policy
+          {{- if .Values.openbao.authReconcile.forceRecoveryRoot }}
+          emptyDir: {}
+          {{- else }}
           configMap:
             name: openbao-policy-auth-reconcile
+          {{- end }}
         - name: platform-policy
+          {{- if .Values.openbao.authReconcile.forceRecoveryRoot }}
+          emptyDir: {}
+          {{- else }}
           configMap:
             name: openbao-policy-platform
+          {{- end }}
         - name: recovery
           secret:
             secretName: {{ .Values.openbao.recovery.secretName }}
