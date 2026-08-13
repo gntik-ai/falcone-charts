@@ -2230,6 +2230,7 @@
         "tokenExpirationSeconds",
         "activeDeadlineSeconds",
         "allowRecoveryRoot",
+        "forceRecoveryRoot",
         "evidenceMode"
       ],
       "properties": {
@@ -2240,6 +2241,7 @@
         "tokenExpirationSeconds": {"type": "integer", "minimum": 600, "maximum": 3600},
         "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 900},
         "allowRecoveryRoot": {"type": "boolean", "default": false},
+        "forceRecoveryRoot": {"type": "boolean", "default": false},
         "evidenceMode": {"type": "string", "const": "metadata-only"}
       }
     },

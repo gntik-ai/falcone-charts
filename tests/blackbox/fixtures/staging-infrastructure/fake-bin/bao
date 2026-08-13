@@ -29,6 +29,10 @@ case "$*" in
 esac
 
 case "$*" in
+  policy\ write\ platform*|policy\ write\ auth-reconcile*)
+    printf '%s\n' "$*" >>"$state_dir/policy-writes"
+    exit 0
+    ;;
   write*"auth/kubernetes/login"*)
     printf '{"auth":{"client_token":"bbx-ephemeral"}}\n'
     exit 0
@@ -39,6 +43,9 @@ case "$*" in
     ;;
   write*"auth/kubernetes/role/eso-role"*)
     printf '%s' written >"$state_dir/role-written"
+    exit 0
+    ;;
+  write*"auth/kubernetes/role/openbao-init-role"*|write*"auth/kubernetes/role/openbao-auth-reconcile-role"*)
     exit 0
     ;;
   write*"auth/token/revoke-self"*)

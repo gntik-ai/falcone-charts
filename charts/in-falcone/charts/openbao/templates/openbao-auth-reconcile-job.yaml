@@ -1,3 +1,6 @@
+{{- if and .Values.openbao.authReconcile.forceRecoveryRoot (not .Values.openbao.authReconcile.allowRecoveryRoot) }}
+{{- fail "openbao.authReconcile.forceRecoveryRoot requires allowRecoveryRoot=true" }}
+{{- end }}
 {{- if .Values.openbao.authReconcile.enabled }}
 apiVersion: batch/v1
 kind: Job
@@ -66,6 +69,7 @@ spec:
               desired_token_strictly_bind_ip="false"
               changed=false
               auth_source=dedicated
+              force_recovery_root={{ .Values.openbao.authReconcile.forceRecoveryRoot | quote }}
 
               fail() {
                 echo "result=error code=$1" >&2
@@ -94,11 +98,7 @@ spec:
                 sleep 2
               done
 
-              login_json="$(bao write -format=json auth/kubernetes/login \
-                role=openbao-auth-reconcile-role \
-                jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" 2>/dev/null || true)"
-              BAO_TOKEN="$(printf '%s' "$login_json" | sed -n 's/.*"client_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-              if [ -z "$BAO_TOKEN" ]; then
+              if [ "$force_recovery_root" = "true" ]; then
                 {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
                 [ -s /openbao-recovery/root-token ] || fail AUTHENTICATION_UNAVAILABLE
                 BAO_TOKEN="$(cat /openbao-recovery/root-token)"
@@ -107,6 +107,21 @@ spec:
                 {{- else }}
                 fail AUTHENTICATION_UNAVAILABLE
                 {{- end }}
+              else
+                login_json="$(bao write -format=json auth/kubernetes/login \
+                  role=openbao-auth-reconcile-role \
+                  jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" 2>/dev/null || true)"
+                BAO_TOKEN="$(printf '%s' "$login_json" | sed -n 's/.*"client_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+                if [ -z "$BAO_TOKEN" ]; then
+                  {{- if .Values.openbao.authReconcile.allowRecoveryRoot }}
+                  [ -s /openbao-recovery/root-token ] || fail AUTHENTICATION_UNAVAILABLE
+                  BAO_TOKEN="$(cat /openbao-recovery/root-token)"
+                  auth_source=recovery_root
+                  echo "auth_source=recovery_root result=accepted"
+                  {{- else }}
+                  fail AUTHENTICATION_UNAVAILABLE
+                  {{- end }}
+                fi
               fi
               export BAO_TOKEN
 

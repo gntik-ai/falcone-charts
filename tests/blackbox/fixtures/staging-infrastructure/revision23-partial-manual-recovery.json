@@ -1,6 +1,6 @@
 {
-  "targetVersion": "0.4.16",
-  "targetChart": "in-falcone-0.4.16",
+  "targetVersion": "0.4.17",
+  "targetChart": "in-falcone-0.4.17",
   "packageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "renderedApisixPodSecurityContext": {
     "fsGroup": 1001,
@@ -137,8 +137,8 @@
   },
   "revision24GlobalWait": {
     "enabled": false,
-    "targetVersion": "0.4.16",
-    "targetChart": "in-falcone-0.4.16",
+    "targetVersion": "0.4.17",
+    "targetChart": "in-falcone-0.4.17",
     "packageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "release": {
       "name": "falcone",
@@ -1267,7 +1267,7 @@
     "enabled": false,
     "createMode": "success",
     "waitFailures": 0,
-    "preflightLog": "result=changed code=AUTH_METADATA_CONVERGED canary=passed",
+    "preflightLog": "auth_source=recovery_root result=accepted\nresult=changed code=AUTH_METADATA_CONVERGED canary=passed",
     "healthLog": "result=unchanged code=AUTH_METADATA_MATCHED canary=passed",
     "createdJobSuffixes": [
       "fresh1",

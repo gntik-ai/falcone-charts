@@ -9,8 +9,8 @@
     "chart": "in-falcone-0.4.1"
   },
   "repair": {
-    "chart": "in-falcone-0.4.16",
-    "packageDigest": "sha256:0416041604160416041604160416041604160416041604160416041604160416"
+    "chart": "in-falcone-0.4.17",
+    "packageDigest": "sha256:0417041704170417041704170417041704170417041704170417041704170417"
   },
   "evidence": {
     "reference": "bbx-parity-revision20",

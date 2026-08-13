@@ -142,7 +142,7 @@
 ## 6. Independently gated live proof
 
 - [ ] 6.1 Complete disposable clean-install and revision-20
-  upgrade/failure/forward-recovery proof against immutable chart 0.4.16; do not
+  upgrade/failure/forward-recovery proof against immutable chart 0.4.17; do not
   use Helm rollback.
 - [ ] 6.2 Obtain separate shared-staging authorization and Phase-B JIT destructive
   confirmation before any PVC mutation.
@@ -171,3 +171,31 @@
   live apply.
 - [x] 7.8 Run the checker-owned full black-box suite on the frozen 0.4.16 diff:
   13 files, 295 tests, 295 pass, 0 fail, with no runner-created workspace delta.
+
+## 8. Forced-root recovery correction in chart 0.4.17
+
+- [x] 8.1 Add bbx082-bbx085 for deterministic forced-root auth, routine
+  dedicated-only rendering, exact fresh 0.4.17 provenance/evidence, early 0.4.16
+  rejection, and exact retained 0.4.14/0.4.16 Job history.
+- [x] 8.2 Add schema/default `forceRecoveryRoot=false`, reject force without
+  allow, skip dedicated login only in forced mode, keep allowed fallback mode,
+  and leave canonical routine reconciliation without recovery mount or policy
+  writes.
+- [x] 8.3 Set both recovery flags in isolated r24 render and require structural
+  force/root-source/recovery-mount/policy-order evidence plus the exact source
+  marker and terminal success before any Store/ExternalSecret/Helm mutation.
+- [x] 8.4 Require the two retained failed 0.4.14 and 0.4.16 anchor Jobs with
+  exact identity/provenance/hook/status metadata; admit additional retries only
+  as unique-identity, exact-provenance/current-digest failed 0.4.17 Jobs while
+  leaving RV, timestamps, condition order and messages dynamic; never reuse a
+  retained Job.
+- [x] 8.5 Bump all active package/evidence/confirmation/provenance surfaces to
+  0.4.17 and update detailed release notes, runbooks and OpenSpec while retaining
+  0.4.16 attempted, 0.4.15 unapplied, 0.4.14 partial and r24/0.4.11 live history.
+- [x] 8.6 Run focal bbx082-bbx085 and bbx061-bbx081, shell syntax, strict Helm
+  lint/schema, routine/recovery renders, OpenSpec strict and diff hygiene.
+- [x] 8.7 Obtain independent reviewer approval of the frozen 0.4.17 diff before
+  any live apply.
+- [x] 8.8 Run the checker-owned full black-box suite once against the frozen
+  0.4.17 diff: 14 files, 329 tests, 329 pass, 0 fail, with no runner-created
+  workspace delta.
