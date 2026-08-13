@@ -95,9 +95,10 @@ contain `default` or any additional policy.
 #### Scenario: Auth reconciliation installs the platform policy before no-default canary validation
 
 - **WHEN** the explicitly authorized recovery-root auth Job repairs revision 24
-- **THEN** it SHALL mount `ConfigMap/openbao-policy-platform` read-only and write
-  that exact policy before changing or validating `eso-role` and before canary
-  login
+- **THEN** it SHALL materialize the byte-equal package platform-policy snapshot
+  in private `emptyDir`, verify its package-rendered SHA-256, and write that exact
+  policy before changing or validating `eso-role` and before canary login
+- **AND** it SHALL NOT mount the live canonical platform-policy ConfigMap
 - **AND** policy write failure SHALL emit `PLATFORM_POLICY_BOOTSTRAP_FAILED`,
   disclose no credential, and stop before store, ExternalSecret-owner, or Helm
   mutation
@@ -185,7 +186,7 @@ confirmation.
 #### Scenario: Apply fails after deletion
 
 - **WHEN** canonical local-path apply fails after the empty claim is deleted
-- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.18,
+- **THEN** the tool reports `FORWARD_RECOVERY_REQUIRED`, recovery reapplies 0.4.19,
   and neither path uses atomic upgrade or rollback to revision 20
 
 #### Scenario: Packaged forward recovery invokes its repair delegate without executable mode
@@ -218,7 +219,7 @@ confirmation.
   one new observability Pod are Pending with their full named-user
   `CreateContainerConfigError`, while three APISIX and one observability replicas
   from the prior ReplicaSets remain Ready
-- **THEN** Phase A targets immutable chart 0.4.18 and requires fresh backup and
+- **THEN** Phase A targets immutable chart 0.4.19 and requires fresh backup and
   parity evidence plus the exact source/target/package confirmation
 - **AND** it delegates to the existing two-pass Phase-A implementation without a
   fabricated Phase-A attestation, rollback, atomic upgrade or PVC deletion
@@ -238,8 +239,8 @@ confirmation.
 - **AND** that existing ConfigMap contains only `apisix.yaml` with the approved
   SHA-256, observability remains one Ready plus one exact Pending `nobody`
   named-user failure, and no other namespace has such a failure
-- **THEN** Phase A targets immutable chart 0.4.18, makes the APISIX identity and
-  mount declarative, and requires fresh 0.4.18-bound backup/parity evidence plus
+- **THEN** Phase A targets immutable chart 0.4.19, makes the APISIX identity and
+  mount declarative, and requires fresh 0.4.19-bound backup/parity evidence plus
   the exact one-use target/package confirmation
 - **AND** the rendered target SHALL contain APISIX pod and container UID/GID
   636:636, and each post-upgrade health gate SHALL observe that APISIX state plus
@@ -302,7 +303,7 @@ confirmation.
 
 - **WHEN** exact r24 recovery apply has validated the revision-20, revision-22,
   revision-23 and failed revision-24/chart-0.4.11 fingerprints plus fresh
-  0.4.18 package-bound evidence and target confirmation
+  0.4.19 package-bound evidence and target confirmation
 - **THEN** before mutating the ClusterSecretStore, any ExternalSecret owner
   metadata, or the Helm release, the CLI SHALL execute the official
   auth-reconcile Job rendered from that exact package with
@@ -313,7 +314,7 @@ confirmation.
   twelve lowercase hex characters following `sha256:` in the verified package
   digest; preserve all other metadata and every non-metadata field; and add
   annotations `in-falcone.io/recovery-package-digest=<full verified digest>`,
-  `in-falcone.io/recovery-target-chart=in-falcone-0.4.18`, and
+  `in-falcone.io/recovery-target-chart=in-falcone-0.4.19`, and
   `in-falcone.io/recovery-source-revision=24`
 - **AND** the CLI SHALL create, never apply, the attempt with
   `kubectl create -f <attempt> -o name`; it SHALL accept exactly one newly
@@ -381,12 +382,12 @@ confirmation.
   spec, annotation, UID, or cardinality drift before
   mutation
 - **AND** apply SHALL NOT patch the already-desired store; it SHALL create a new
-  digest-bound 0.4.18 auth Job before waiting for the store and fourteen
+  digest-bound 0.4.19 auth Job before waiting for the store and fourteen
   ExternalSecrets and before either Helm upgrade
 - **AND** the retained 0.4.14 Job
   `openbao-auth-reconcile-r24-859e037a14be-7v86n` SHALL never be waited, logged,
   deleted, patched, reapplied, or accepted as the current execution; retry SHALL
-  create a new 0.4.18 identity
+  create a new 0.4.19 identity
 
 #### Scenario: Revision-24 recovery admits only homogeneous ExternalSecret states for the exact self-token policy failure
 
@@ -398,7 +399,7 @@ confirmation.
   has exactly one condition with type `Ready`, status `False`, reason
   `SecretSyncedError`, and message
   `could not get secret data from provider`
-- **AND** both admitted sets SHALL run the fresh package-bound 0.4.18 auth Job
+- **AND** both admitted sets SHALL run the fresh package-bound 0.4.19 auth Job
   first, SHALL NOT patch the already-desired store, and SHALL then wait for that
   store and all fourteen ExternalSecrets before either Helm upgrade
 - **AND** ExternalSecret UIDs SHALL NOT be required or hardcoded
@@ -414,15 +415,15 @@ confirmation.
   patching the store or ExternalSecret ownership, or invoking Helm
 - **AND** it SHALL NOT read Kubernetes Secret resources or payloads
 
-#### Scenario: Revision-24 recovery targets only the corrected 0.4.18 package
+#### Scenario: Revision-24 recovery targets only the corrected 0.4.19 package
 
 - **WHEN** revision-24 Phase-A apply presents a confirmation targeting the
-  published failed chart 0.4.17 rather than chart 0.4.18
+  published pre-create-failed chart 0.4.18 rather than chart 0.4.19
 - **THEN** the early target gate SHALL emit `JIT_TARGET_CONFIRMATION_REQUIRED`
   before loading package-bound evidence or performing any mutation
 - **AND** accepted evidence, confirmation, generated auth Job provenance, Helm
   upgrades, Phase-A attestation, and forward recovery SHALL bind only immutable
-  chart 0.4.18 and its exact published digest
+  chart 0.4.19 and its exact published digest
 
 #### Scenario: Revision-24 recovery requires exact auth reconciliation evidence
 
@@ -434,6 +435,9 @@ confirmation.
   current package-bound execution becomes `Complete`, using exactly the fresh
   resource ref returned by that attempt's create for both wait and log; every
   retry SHALL validate only its newly created execution's log
+- **AND** that fresh log SHALL contain exactly one
+  `auth_source=recovery_root result=accepted` marker on every attempt; a retained
+  current Successful Job SHALL NOT substitute or relax this requirement
 - **AND** the successful attempt SHALL be retained at least until both Phase-A
   passes and final no-root health complete; no earlier successful or failed Job
   SHALL substitute for the current attempt
@@ -464,14 +468,17 @@ confirmation.
   retain root fallback only after dedicated login failure, without changing the
   canonical routine behavior
 
-#### Scenario: Revision-24 recovery binds forced-root evidence to a fresh 0.4.18 Job
+#### Scenario: Revision-24 recovery binds forced-root evidence to a fresh 0.4.19 Job
 
-- **WHEN** exact r24 recovery creates its fresh digest-bound 0.4.18 Job
+- **WHEN** exact r24 recovery creates its fresh digest-bound 0.4.19 Job
 - **THEN** the structural guard SHALL require the forced-root flag, recovery
   Secret mount, source marker and policy-before-terminal ordering before create
 - **AND** the CLI SHALL accept exactly one forced-root source marker and exactly
   one existing `AUTH_METADATA_CONVERGED|MATCHED` terminal success from the fresh
   returned Job ref
+- **AND** the source marker SHALL be exactly
+  `auth_source=recovery_root result=accepted` for every fresh Job, including a
+  retry after a retained current-package Successful Job
 - **AND** a missing or dedicated marker, render drift, timeout or terminal drift
   SHALL fail before store readiness/ownership or Helm mutation and retain the
   attempt as evidence
@@ -482,26 +489,33 @@ confirmation.
   provider-error precursor is present
 - **THEN** preflight SHALL list public Jobs and require these two exact predecessor anchors whose
   names begin `openbao-auth-reconcile-r24-`: the retained 0.4.14 and 0.4.16 Jobs with
-  their exact names, UIDs, package-digest/target/source and Helm hook annotations
+  their exact names, UIDs, and exactly six package-digest/target/source plus Helm
+  hook annotations
 - **AND** each SHALL have `failed=1` and exactly two uniquely typed conditions,
   `FailureTarget` and `Failed`, both status `True` and reason
-  `BackoffLimitExceeded`, without fixing condition order, messages,
+  `BackoffLimitExceeded`, with `succeeded` absent or zero and without fixing
+  condition order, messages,
   resourceVersion or timestamps
-- **AND** every additional prefix-matching Job SHALL be a failed attempt for the
+- **AND** every additional prefix-matching Job SHALL be an attempt for the
   current package digest and target, with the exact digest-derived generated-name
-  prefix and valid suffix, a unique UUID UID, exact package/target/source and
-  Helm hook annotations, `failed=1`, and the same exact two-condition state;
+  prefix and valid suffix, a unique UUID UID, and exactly seven annotations: the
+  six package/target/source plus Helm hooks and attested chart version 0.4.19
+- **AND** every current attempt SHALL have exactly one allowed terminal: either
+  `failed=1`, succeeded absent or zero, and only `Failed` plus `FailureTarget`
+  `True/BackoffLimitExceeded`; or `succeeded=1`, failed absent or zero, and only
+  `Complete` plus `SuccessCriteriaMet` `True/CompletionsReached` as emitted by
+  Kubernetes v1.36;
   names and UIDs SHALL be unique across the entire admitted history
 - **AND** a missing anchor or any name, UID, annotation or status drift SHALL emit
   `REVISION24_AUTH_RECONCILE_HISTORY_DRIFT` before mutation
 - **AND** the separate current history requirement SHALL also require the exact
   0.4.17 anchor; recovery SHALL never wait, log, delete, patch, apply or reuse
-  any retained Job and SHALL create a fresh 0.4.18 identity on every retry
+  any retained Job and SHALL create a fresh 0.4.19 identity on every retry
 
 #### Scenario: Forced revision-24 reconciliation uses package-bound policy snapshots
 
 - **WHEN** exact revision-24 recovery renders the forced auth Job from the
-  digest-verified 0.4.18 package while chart 0.4.11 remains live
+  digest-verified 0.4.19 package while chart 0.4.11 remains live
 - **THEN** canonical platform and auth-reconcile ConfigMaps and the forced Job
   snapshots SHALL derive from one HCL source per policy and contain byte-equal
   package-rendered content
@@ -545,19 +559,22 @@ confirmation.
 #### Scenario: Revision-24 recovery admits only the exact retained 0.4.14, 0.4.16, and 0.4.17 failure chain
 
 - **WHEN** the exact Store lookup-self 403 and homogeneous fourteen-ExternalSecret
-  precursor is present for target package 0.4.18
+  precursor is present for target package 0.4.19
 - **THEN** preflight SHALL require the exact 0.4.14 and 0.4.16 anchors already
   specified plus 0.4.17 Job
   `openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw`, UID
   `c8fd1c27-f68b-4d33-b10f-3b832c741cd3`, digest
   `sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328`,
-  target `in-falcone-0.4.17`, source 24, exact Helm hooks, `failed=1`, and exactly
+  target `in-falcone-0.4.17`, source 24, exactly six provenance/Helm hook
+  annotations, `failed=1`, `succeeded` absent or zero, and exactly
   `FailureTarget` plus `Failed`, both `True/BackoffLimitExceeded`
 - **AND** zero or more additional prefix Jobs SHALL be admitted only as unique,
-  fully attested failed attempts for the current 0.4.18 digest/target
+  fully attested Failed or Kubernetes v1.36 Successful terminal attempts for the
+  current 0.4.19 digest/target, with exactly seven annotations versus the
+  anchors' exact six
 - **AND** missing/drifting anchors or current attempts SHALL fail before mutation;
-  target 0.4.17 SHALL fail the early JIT target confirmation, and recovery SHALL
-  create a fresh digest-bound 0.4.18 identity without reusing retained evidence
+  target 0.4.18 or older SHALL fail the early JIT target confirmation, and recovery SHALL
+  create a fresh digest-bound 0.4.19 identity without reusing retained evidence
 
 #### Scenario: External ESO network reachability remains an operator prerequisite
 
@@ -595,8 +612,8 @@ confirmation.
   the vector PVC retains its exact UID/Pending/no-volume/no-PV state, all
   non-vector workloads are converged, APISIX is 3/3 at UID/GID 636,
   Prometheus is 1/1 at UID/GID 65534 and no named-user error remains
-- **THEN** recovery SHALL target immutable chart 0.4.18 with fresh
-  package-bound backup/parity evidence and exact r24→0.4.18 confirmation
+- **THEN** recovery SHALL target immutable chart 0.4.19 with fresh
+  package-bound backup/parity evidence and exact r24→0.4.19 confirmation
 - **AND** it SHALL complete the auth-first gate, the UID/resourceVersion-guarded
   idempotent store handoff, and the ten-minute-per-resource Ready gates for those
   exact fourteen identities in that order before either Helm upgrade
@@ -623,6 +640,122 @@ confirmation.
 - **AND** any history, failure description, auth result/log, store,
   ExternalSecret, PVC, workload, identity or error-cardinality drift SHALL fail
   before the next mutation
+
+### Requirement: Revision-24 package validation SHALL bind the semantic canary before mutation
+
+The 0.4.19 public repair CLI SHALL validate the exact real package render before
+creating its auth-reconcile Job. It SHALL bind the canary by semantic identity,
+not by the position of a generic login substring, and SHALL preserve all
+0.4.18 structural, policy, credential, ownership, readiness, storage and
+fail-forward gates. A newly published 0.4.19 digest, fresh package-bound evidence
+and a new one-use JIT SHALL be required; the consumed 0.4.18 JIT SHALL authorize
+nothing.
+
+#### Scenario: Revision-24 package guard binds exactly one semantic canary assignment
+
+- **WHEN** the exact real 0.4.19 Helm render contains the earlier dedicated
+  `login_json` branch and the later canary login
+- **THEN** the guard SHALL require exactly one command substitution assigned to
+  `canary_json` that contains `bao write -format=json auth/kubernetes/login`,
+  exact `role="$role"`, and a JWT read from `/canary/token`
+- **AND** it SHALL use that sole match object's captured start index for order
+  validation and SHALL NOT use `str.index`, `str.rindex`, or a generic login
+  substring to identify the canary
+- **AND** the earlier dedicated login SHALL remain valid routine behavior and
+  SHALL NOT satisfy or invalidate the semantic canary match
+
+#### Scenario: Revision-24 package guard rejects canary identity drift before mutation
+
+- **WHEN** the rendered canary assignment is absent or duplicated, is assigned
+  to a name other than `canary_json`, changes the login command or role, reads a
+  JWT from anything other than `/canary/token`, or only partially matches those
+  facts
+- **THEN** the CLI SHALL emit `REVISION24_AUTH_RECONCILE_RENDER_DRIFT` before
+  `kubectl create`, ClusterSecretStore or ExternalSecret-owner mutation, or Helm
+- **AND** it SHALL read no Secret resource or payload and disclose no credential
+
+#### Scenario: Revision-24 package guard enforces the complete forced-recovery order
+
+- **WHEN** the exact forced-recovery Job is structurally validated
+- **THEN** the captured anchors SHALL occur strictly in this order: both package
+  snapshots and their hash evidence, accepted recovery-root source, platform
+  policy write, auth-reconcile policy write, all role reconciliation, semantic
+  canary, `auth/token/lookup-self`, `auth/token/revoke-self`, and terminal result
+- **AND** the guard SHALL continue to require exactly one Job/reconciler
+  container, byte-equal HCL and SHA-256 values, private `emptyDir` policy
+  volumes, no canonical policy ConfigMap mount, the recovery mount, exact policy
+  capabilities and markers, `restartPolicy: Never`, and `backoffLimit: 0`
+- **AND** any identity, cardinality, structure or order drift SHALL fail before
+  create without weakening fresh-install or routine dedicated-only behavior
+
+#### Scenario: Revision-24 public CLI validates the exact real packaged render
+
+- **WHEN** release validation packages chart 0.4.19 and invokes the distributed
+  public CLI with real Helm template output and substituted external effects
+- **THEN** the exact render containing both login branches SHALL pass the guard
+  and reach exactly one fresh digest-bound .19 `kubectl create` only after all
+  read-only package/live/history gates
+- **AND** negative assignment, role, JWT, duplicate, ordering and other
+  structural drifts SHALL each stop before every cluster mutation
+- **AND** a reduced or synthetic fixture that omits the dedicated branch SHALL
+  NOT be sufficient release evidence by itself
+
+#### Scenario: Revision-24 pre-create failure distinguishes authorization consumption from cluster mutation
+
+- **WHEN** the fresh digest-bound 0.4.19 JIT has been accepted but package render
+  or semantic/structural guard validation fails before `kubectl create`
+- **THEN** the CLI SHALL report `authorization_consumed=true` and SHALL NOT report
+  `mutation_started=true` or `FORWARD_RECOVERY_REQUIRED`
+- **AND** it SHALL set `mutation_started=true` immediately before attempting
+  `kubectl create`, so create response loss, create failure and every later
+  failure conservatively retain the fail-forward instruction
+- **AND** it SHALL NOT set the mutation marker only after create succeeds
+
+#### Scenario: Revision-24 recovery preserves only historical anchors and current 0.4.19 retries
+
+- **WHEN** exact r24 recovery validates prefix-matching auth-reconcile Job history
+- **THEN** it SHALL require only the exact retained .14/.16/.17 anchors plus zero
+  or more unique fully attested Failed or Kubernetes v1.36 Successful attempts
+  for the current 0.4.19 package digest and target
+- **AND** anchors SHALL have exactly six annotations and current attempts exactly
+  seven, with exact name/UID uniqueness, provenance and one allowed terminal;
+  any drift SHALL fail closed before fresh create
+- **AND** the fence SHALL run after exact Store and fourteen-ExternalSecret
+  precursor validation for every Store state admitted by exact r24 recovery,
+  including Store `Ready`/`complete` after a Successful current Job followed by
+  downstream failure; no admitted Store state SHALL bypass the history read or
+  allow create before it
+- **AND** because 0.4.18 failed before create, any .18 Job name, generated prefix,
+  target annotation or purported anchor SHALL emit
+  `REVISION24_AUTH_RECONCILE_HISTORY_DRIFT` before mutation
+- **AND** .18 SHALL NOT be waited, logged, deleted, patched, applied, reused, or
+  accepted as a Job/Helm rollback target
+
+#### Scenario: Chart 0.4.19 preserves fresh-install and routine dedicated-only behavior
+
+- **WHEN** chart 0.4.19 is installed into a clean namespace or rendered for a
+  routine supported upgrade outside the isolated r24 forced-recovery path
+- **THEN** fresh install SHALL retain full bootstrap ordering and routine upgrade
+  SHALL authenticate only with its dedicated Kubernetes role
+- **AND** defaults SHALL keep both recovery flags false, and routine rendering
+  SHALL contain no recovery Secret mount, package snapshot volume or policy write
+- **AND** values/schema, ServiceAccounts/RBAC, images, probes, network policy,
+  storage semantics and application/public contracts SHALL remain compatible
+  with 0.4.18
+
+#### Scenario: Chart 0.4.19 preserves isolation and the forward-only rollback boundary
+
+- **WHEN** P7/P12 capability health and P13 adjacent-tenant/workload isolation
+  are verified after disposable 0.4.19 install or recovery
+- **THEN** credentials SHALL remain exact-workload scoped, no Secret payload or
+  foreign tenant/workspace metadata SHALL be exposed, and administrator-owned
+  ESO resources SHALL remain external
+- **AND** pre-create failure SHALL require no cluster restoration, while every
+  possible post-create mutation SHALL be recovered only by forward-applying the
+  exact .19 package
+- **AND** Helm rollback to .11 through .18 SHALL remain forbidden, and Phase-B
+  PVC deletion SHALL remain irreversible without a separately approved
+  backup/restore and isolation-parity design
 
 ### Requirement: Phase-A completion SHALL prove final no-root health
 

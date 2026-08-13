@@ -32,9 +32,9 @@ const externalSecretsFixture = resolve(fixtureRoot, 'external-secrets-ready.json
 const revision20Manifest = resolve(fixtureRoot, 'revision-20-ownership-manifest.json')
 const backupTemplate = resolve(fixtureRoot, 'backup-attestation.template.json')
 const parityTemplate = resolve(fixtureRoot, 'parity-attestation.template.json')
-const repairVersion = '0.4.18'
+const repairVersion = '0.4.19'
 const repairChart = `in-falcone-${repairVersion}`
-const repairDigest = 'sha256:0418041804180418041804180418041804180418041804180418041804180418'
+const repairDigest = 'sha256:0419041904190419041904190419041904190419041904190419041904190419'
 const r22Confirmation = `default/in-falcone-staging/falcone@22/in-falcone-0.4.8->${repairChart}/${repairDigest}`
 
 const preservationValues = new Map([
@@ -174,8 +174,8 @@ function assertExplicitPreservation(invocation, label) {
   const targetCalls = invocation.helmCalls.filter((call) => /^(?:template|diff upgrade|upgrade)(?:\s|$)/.test(call))
   assert.ok(targetCalls.length > 0, `${label} did not render or apply the recovery chart`)
   for (const call of targetCalls) {
-    assert.match(call, /(?:^|\s)--version 0\.4\.18(?:\s|$)/,
-      `${label} did not select the 0.4.18 recovery chart in:\n${call}`)
+    assert.match(call, /(?:^|\s)--version 0\.4\.19(?:\s|$)/,
+      `${label} did not select the 0.4.19 recovery chart in:\n${call}`)
     for (const [key, value] of preservationValues) {
       assert.match(call, new RegExp(`(?:^|\\s)${key.replaceAll('.', '\\.') }=${value}(?:\\s|$)`),
         `${label} omitted explicit live value ${key}=${value} from:\n${call}`)

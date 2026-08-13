@@ -1,5 +1,5 @@
 /**
- * Public black-box contracts for the 0.4.18 revision-24 ExternalSecret
+ * Public black-box contracts for the 0.4.19 revision-24 ExternalSecret
  * precursor. The tests invoke only Helm metadata and the distributed recovery
  * CLI against process-isolated public-tool fixtures.
  */
@@ -58,7 +58,7 @@ function createdAuthJobs(result) {
   })
 }
 
-function assertFresh018Job(job, context) {
+function assertFresh019Job(job, context) {
   assert.ok(job, `${context} did not create a fresh recovery Job`)
   assert.match(job.ref, new RegExp(
     `^${revision24ExternalSecretPrecursorContract.jobPrefix.replaceAll('.', '\\.')}[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`,
@@ -67,7 +67,7 @@ function assertFresh018Job(job, context) {
     job.generateName,
     revision24ExternalSecretPrecursorContract.jobPrefix.replace(/^job\.batch\//, ''),
   )
-  assert.equal(job.chart, 'in-falcone-0.4.18')
+  assert.equal(job.chart, 'in-falcone-0.4.19')
   assert.equal(job.digest, revision24ExternalSecretPrecursorContract.packageDigest)
   assert.equal(job.sourceRevision, revision24ExternalSecretPrecursorContract.sourceRevision)
   assert.equal(job.allowRecoveryRoot, 'true')
@@ -101,10 +101,10 @@ function assertExact018Recovery(result, context) {
   assert.doesNotMatch(result.trace, /kubectl .*\bpatch clustersecretstore/)
   const jobs = createdAuthJobs(result)
   assert.equal(jobs.length, 1, `${context} must create exactly one fresh auth Job`)
-  assertFresh018Job(jobs[0], context)
+  assertFresh019Job(jobs[0], context)
   const upgrades = traceLines(result).filter((line) => line.startsWith('helm upgrade '))
   assert.equal(upgrades.length, 2, `${context} must complete both recovery upgrades`)
-  assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.18(?:\s|$)/.test(line)))
+  assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.19(?:\s|$)/.test(line)))
   assert.doesNotMatch(
     result.trace,
     new RegExp(
@@ -122,7 +122,7 @@ const readyCondition = () => ({
 })
 
 // bbx-repair-staging-079 | fn-revision24-externalsecret-homogeneous-precursor | OpenSpec #### Scenario: Revision-24 recovery admits only homogeneous ExternalSecret states for the exact self-token policy failure
-test('r24/0.4.18 admits both complete homogeneous ExternalSecret precursor states', async (t) => {
+test('r24/0.4.19 admits both complete homogeneous ExternalSecret precursor states', async (t) => {
   const target = publicTarget()
   for (const [name, externalSecretState] of [
     ['stale Ready=True window', 'ready'],
@@ -137,11 +137,11 @@ test('r24/0.4.18 admits both complete homogeneous ExternalSecret precursor state
       assertExact018Recovery(result, name)
     })
   }
-  assert.equal(publicChartVersion(), '0.4.18', 'the corrected recovery package must be 0.4.18')
+  assert.equal(publicChartVersion(), '0.4.19', 'the corrected recovery package must be 0.4.19')
 })
 
 // bbx-repair-staging-080 | fn-revision24-externalsecret-precursor-drift | OpenSpec #### Scenario: Revision-24 recovery rejects ExternalSecret precursor drift before mutation
-test('r24/0.4.18 rejects every ExternalSecret precursor drift before mutation', async (t) => {
+test('r24/0.4.19 rejects every ExternalSecret precursor drift before mutation', async (t) => {
   const target = publicTarget()
   const first = revision24ExternalSecretPrecursorContract.externalSecretNames[0]
   const second = revision24ExternalSecretPrecursorContract.externalSecretNames[1]
@@ -228,7 +228,7 @@ test('r24/0.4.18 rejects every ExternalSecret precursor drift before mutation', 
   })
 })
 
-// bbx-repair-staging-081 | fn-revision24-externalsecret-recovery-target | OpenSpec #### Scenario: Revision-24 recovery targets only the corrected 0.4.18 package
+// bbx-repair-staging-081 | fn-revision24-externalsecret-recovery-target | OpenSpec #### Scenario: Revision-24 recovery targets only the corrected 0.4.19 package
 test('r24 rejects all superseded published packages before mutation', async (t) => {
   for (const [name, targetVersion, packageDigest] of [
     [
@@ -245,6 +245,11 @@ test('r24 rejects all superseded published packages before mutation', async (t) 
       'published and attempted 0.4.17',
       revision24ExternalSecretPrecursorContract.publishedFailed017Version,
       revision24ExternalSecretPrecursorContract.publishedFailed017Digest,
+    ],
+    [
+      'published with JIT consumed but no Job created 0.4.18',
+      revision24ExternalSecretPrecursorContract.publishedPreCreate018Version,
+      revision24ExternalSecretPrecursorContract.publishedPreCreate018Digest,
     ],
   ]) {
     await t.test(name, () => {

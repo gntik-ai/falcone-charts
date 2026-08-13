@@ -142,7 +142,7 @@
 ## 6. Independently gated live proof
 
 - [ ] 6.1 Complete disposable clean-install and revision-20
-  upgrade/failure/forward-recovery proof against immutable chart 0.4.18; do not
+  upgrade/failure/forward-recovery proof against immutable chart 0.4.19; do not
   use Helm rollback.
 - [ ] 6.2 Obtain separate shared-staging authorization and Phase-B JIT destructive
   confirmation before any PVC mutation.
@@ -229,3 +229,68 @@
 - [x] 9.8 Obtain independent reviewer approval of the frozen 0.4.18 diff before
   publication or live apply. The independent reviewer returned APPROVE with no
   blocking or non-blocking findings.
+
+## 10. Exact semantic canary guard correction in chart 0.4.19
+
+- [x] 10.1 Add failing public black-box coverage mapped exactly to `Revision-24
+  package guard binds exactly one semantic canary assignment`; package the real
+  chart, run the distributed CLI guard over real Helm output containing both the
+  dedicated `login_json` and canary branches, and prove exactly one .19 create
+  follows all read-only gates.
+- [x] 10.2 Replace the generic canary substring/index with one unique semantic
+  match binding `canary_json`, `bao write -format=json auth/kubernetes/login`,
+  `role="$role"`, and JWT read from `/canary/token`; use only the captured match
+  start for order and never generic `str.index` or `str.rindex`.
+- [x] 10.3 Add negative black-box cases mapped exactly to `Revision-24 package
+  guard rejects canary identity drift before mutation` for assignment target,
+  command, role, JWT source, zero/duplicate cardinality, and prove stable render
+  drift with no create/store/owner/Helm mutation.
+- [x] 10.4 Preserve and test the exact order mapped to `Revision-24 package guard
+  enforces the complete forced-recovery order`: snapshots -> root source ->
+  platform policy -> auth policy -> roles -> semantic canary -> lookup-self ->
+  revoke-self -> terminal, together with every .18 snapshot/hash/volume/mount/
+  policy/marker/one-Job-container/`Never`/backoff-zero structural gate.
+- [x] 10.5 Map `Revision-24 pre-create failure distinguishes authorization
+  consumption from cluster mutation`; record consumed JIT separately, keep
+  `mutation_started=false` through render/guard, set it immediately before
+  `kubectl create`, and preserve fail-forward reporting for create ambiguity and
+  every later failure.
+- [x] 10.6 Retarget package, evidence, confirmations, provenance, Phase-A,
+  forward recovery, fixtures, release CI and public documentation to immutable
+  0.4.19 with a fresh digest and JIT; preserve exact .14/.16/.17 anchors plus
+  0..N fully attested current-.19 terminal attempts, and reject every unexpected
+  .18 Job. Historical anchors retain six exact annotations; current Failed or
+  Kubernetes-v1.36-Successful attempts require seven exact annotations, unique
+  name/UID and the exact permitted terminal shape. Every fresh Job must still
+  emit exactly `auth_source=recovery_root result=accepted`; retained Successful
+  history never relaxes that log gate. Run the history fence for every Store
+  state admitted by exact r24 after Store and fourteen-ExternalSecret precursor
+  validation, including `Ready`/`complete` after downstream failure; no admitted
+  Store state bypasses it before create.
+- [x] 10.7 Prove `Chart 0.4.19 preserves fresh-install and routine dedicated-only
+  behavior` across clean install and upgrade renders without new values/schema,
+  runtime policy, ServiceAccount, image, storage, network, probe or credential
+  changes.
+- [x] 10.8 Update release notes and the staging repair/storage procedures to the
+  14-part documentation standard, including .18 pre-create history, new JIT,
+  authorization-versus-mutation evidence, compatibility and no-rollback limits.
+- [x] 10.9 Run shell syntax, strict chart lint/schema, clean-install/routine/
+  forced renders, exact real packaged public CLI black-box and negative drift
+  suites, complete historical black-box regression, package version/digest
+  checks, secret-leak checks, `openspec validate
+  repair-staging-infrastructure-20260809 --strict`, and `git diff --check`.
+  Maker evidence on 2026-08-13: shell/lint/renders/package/OpenSpec/diff passed;
+  checker-owned historical fixtures were retargeted; the real-package bbx091-098
+  block passed 24/24; the history/retry bbx096 RED advanced from 12/18, then
+  exposed a complete-Store history bypass, and finally passed 19/19 after exact
+  six-versus-seven annotation and Failed/Successful terminal gates, faithful
+  round-trip fixtures, and an unconditional admitted-r24 history read. The one
+  authoritative checker-owned full black-box run on the final frozen diff ran
+  unfiltered and without retry on 2026-08-13: 16 files, 390 tests, 390 pass,
+  0 fail, 0 skipped/cancelled/todo, exit 0. The runner left branch, HEAD and
+  the 30-modified-plus-2-untracked path set byte-identical. Shell syntax,
+  strict chart lint, OpenSpec strict and diff hygiene also passed.
+- [ ] 10.10 Obtain independent system review of the frozen 0.4.19 diff before
+  publication; then perform disposable install/upgrade/failure/forward-recovery,
+  P7/P12 health, P13 isolation and cleanup proof before requesting a new shared-
+  staging JIT. Do not use production or shared staging as the first test.

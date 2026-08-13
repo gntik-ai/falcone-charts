@@ -1,4 +1,4 @@
-# Migration: Revision 20/r24 to chart 0.4.18
+# Migration: Revision 20/r24 to chart 0.4.19
 
 Before mutation, repair validates the non-secret legacy C-25 webhook custody
 contract stored in Helm revision 20 and passes explicit legacy overrides to
@@ -13,7 +13,7 @@ global-wait timeout described below. Arbitrary failed Helm revisions are rejecte
 
 - Exact context `default`, namespace `in-falcone-staging`, release `falcone`,
   revision `20`, and starting chart `in-falcone-0.4.1`.
-- A published chart 0.4.18 package digest, not a source-only estimate. Chart
+- A published chart 0.4.19 package digest, not a source-only estimate. Chart
   0.4.5 remains the historical artifact blocked by nested dependency-version
   parsing. Chart 0.4.6 remains the historical artifact whose live apply reached
   Helm's existing-object ownership gate. Neither artifact is overwritten or
@@ -48,11 +48,17 @@ global-wait timeout described below. Arbitrary failed Helm revisions are rejecte
   Chart 0.4.17 remains immutable, published, and attempted: its forced-root Job
   mounted policy ConfigMaps from live 0.4.11, so its successful policy writes
   did not contain the package self-token paths and lookup-self remained 403.
+  Chart 0.4.18 remains immutable and published: its exact real packaged Job was
+  structurally valid, but the public CLI's generic login marker selected the
+  earlier dedicated branch and emitted
+  `REVISION24_AUTH_RECONCILE_RENDER_DRIFT` before `kubectl create`. No .18 Job,
+  store/owner/Helm mutation, or new Helm revision resulted. It is not a Job or
+  rollback anchor, and its consumed JIT cannot authorize 0.4.19.
 - Separate, fresh `Revision20BackupEvidence` and `Revision20ParityEvidence`
   documents. Both bind the exact source target and repair package; parity names
   the exact backup reference it verified. Their observation windows must still
   be valid when apply begins.
-- Apply pulls the published 0.4.18 OCI artifact, verifies the registry-reported
+- Apply pulls the published 0.4.19 OCI artifact, verifies the registry-reported
   digest against the attestations, and uses the staging profile extracted from
   that same artifact; a local checkout is not the production apply source.
 - Secret-suppressed semantic diff shows no create/update/removal among the
@@ -66,15 +72,15 @@ global-wait timeout described below. Arbitrary failed Helm revisions are rejecte
 
 Run `revision-20-repair.sh --phase-a` first; it is read-only by default. Apply
 requires both structured evidence files and an exact confirmation containing
-20, source chart 0.4.1, target chart 0.4.18 and package digest. It retains the
+20, source chart 0.4.1, target chart 0.4.19 and package digest. It retains the
 immutable hcloud-volumes claim contract, applies repairs, verifies exact owner
 metadata/images/store/fourteen unique Ready ExternalSecrets/auth/FerretDB/
 endpoints, disables recovery-root, and repeats the complete gate. The final auth
 result must be unchanged with the canary passed, and token lookup must expose
 exactly `functions,gateway,iam,platform` without `default`.
 The early confirmation check requires the exact live revision/chart to point to
-`in-falcone-0.4.18` and a 64-hex SHA-256 digest before loading attestations. A
-0.4.17 target fails `JIT_TARGET_CONFIRMATION_REQUIRED` before mutation.
+`in-falcone-0.4.19` and a 64-hex SHA-256 digest before loading attestations. A
+0.4.18 or older target fails `JIT_TARGET_CONFIRMATION_REQUIRED` before mutation.
 
 Preflight also requires exactly the fourteen Falcone `ExternalSecret`
 declarations and compares their canonical live/rendered specs without reading
@@ -116,9 +122,9 @@ identity and Prometheus container UID/GID 65534:65534; drift stops the sequence
 before the next pass and requires forward recovery.
 
 Revision-23 forward recovery delegates directly to this Phase-A procedure. The
-apply confirmation binds `23`, source chart 0.4.9, target chart 0.4.18 and the
+apply confirmation binds `23`, source chart 0.4.9, target chart 0.4.19 and the
 published package digest. Fresh backup and parity attestations must also target
-0.4.18. Because revision 23 is itself a failed Phase-A attempt, no successful
+0.4.19. Because revision 23 is itself a failed Phase-A attempt, no successful
 Phase-A attestation is invented or required. The procedure still performs the
 same two non-atomic Helm upgrades, never rolls back and never deletes a PVC.
 
@@ -143,7 +149,7 @@ required but captured dynamically. No other live or history drift is accepted.
 
 After all read-only and package-bound gates but before mutating the store, any
 ExternalSecret owner metadata, or Helm, exact r24 apply renders and executes the
-official auth-reconcile Job from the digest-verified 0.4.18 package with
+official auth-reconcile Job from the digest-verified 0.4.19 package with
 `allowRecoveryRoot=true`, `forceRecoveryRoot=true`, and
 `spec.activeDeadlineSeconds=300`, `restartPolicy=Never` and `backoffLimit=0`.
 The forced form skips dedicated login, loads the mounted recovery token without
@@ -160,9 +166,40 @@ that official object, each attempt changes only its metadata: it removes
 `openbao-auth-reconcile-r24-<digest12>-` using the first twelve lowercase package
 digest hex characters, and adds
 `in-falcone.io/recovery-package-digest=<full sha256 digest>`,
-`in-falcone.io/recovery-target-chart=in-falcone-0.4.18`, and
+`in-falcone.io/recovery-target-chart=in-falcone-0.4.19`, and
 `in-falcone.io/recovery-source-revision=24`. Namespace, annotations already in
-the official object, labels, spec and pod template do not change.
+the official object, labels, spec and pod template do not change. Consequently,
+each current 0.4.19 attempt has exactly seven annotations: three Helm hooks,
+three recovery provenance values, and the official quoted
+`falcone.gntik.ai/attested-chart-version=0.4.19`.
+
+The package guard SHALL identify exactly one semantic canary command substitution
+whose assignment target is `canary_json`, command is
+`bao write -format=json auth/kubernetes/login`, role is exactly `"$role"`, and
+JWT is read from `/canary/token`. It SHALL use that sole match's captured start
+index, never a generic `str.index`/`str.rindex` login search, and SHALL prove
+`snapshots -> recovery-root source -> platform policy -> auth-reconcile policy
+-> roles -> semantic canary -> lookup-self -> revoke-self -> terminal`.
+Missing, duplicate, identity/source, or order drift emits
+`REVISION24_AUTH_RECONCILE_RENDER_DRIFT` before create. The .18 structural gates
+for one Job/container, exact HCL bytes/hashes, private `emptyDir`, no canonical
+ConfigMap mount, recovery mount, policy content, markers, `Never`, and backoff
+zero remain exact.
+
+Before implementation may be published, the distributed public CLI SHALL pass
+against an exact real 0.4.19 chart archive and real Helm render containing both
+the earlier dedicated `login_json` branch and later canary assignment. Reduced
+fixtures supplement but do not replace that proof. Negative package cases alter
+canary assignment, role, JWT source, cardinality and every order boundary, plus
+representative structural fields, and SHALL show no Kubernetes create, store or
+owner mutation, or Helm upgrade.
+
+The CLI records `authorization_consumed=true` after accepting the fresh one-use
+0.4.19 JIT but leaves `mutation_started=false` throughout render and the package
+guard. Immediately before the following create command it records
+`mutation_started=true`, conservatively covering an API-server accept followed
+by client response loss. Pre-create failure therefore does not claim cluster
+mutation; create ambiguity and later failure remain fail-forward.
 
 The CLI runs `kubectl create -f <attempt> -o name` and accepts exactly one newly
 returned ref matching
@@ -170,7 +207,8 @@ returned ref matching
 with a DNS-valid generated name. It passes that exact ref, without reconstructing
 or rediscovering it, to the five-minute `Complete` wait and the subsequent log
 read. It accepts exactly one `auth_source=recovery_root result=accepted` marker
-plus exactly one terminal line: either
+from that freshly created Job on every attempt, even if retained history already
+contains a Successful current-package Job, plus exactly one terminal line: either
 `result=changed code=AUTH_METADATA_CONVERGED canary=passed` or
 `result=unchanged code=AUTH_METADATA_MATCHED canary=passed`. The converged
 `eso-role` uses `token_no_default_policy=true`; canary lookup exposes exactly
@@ -191,15 +229,28 @@ That includes the exact retained 0.4.14 Job
 `openbao-auth-reconcile-r24-859e037a14be-7v86n` and 0.4.16 Job
 `openbao-auth-reconcile-r24-10828ffdf9f1-f65tk`, plus 0.4.17 Job
 `openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw`. Before create, the public Job
-list must contain those three prefix-matching anchors with their exact
-UIDs, package/target/source and hook annotations, failed count, and exactly two
-uniquely typed `FailureTarget` and `Failed` conditions, both
-`True/BackoffLimitExceeded`, in either order. Resource versions and timestamps
-remain dynamic. Additional prefix Jobs are admitted only as prior attempts for
-the current 0.4.18 package digest/target, with an exact digest-prefixed generated name,
-valid suffix, unique UUID UID, exact provenance/hooks, failed count and the same
-two-condition state. Names and UIDs are unique across the history; any other
-drift fails before mutation.
+list must contain those three prefix-matching anchors with their exact UIDs and
+exactly six package/target/source plus Helm hook annotations, `failed=1`,
+`succeeded` absent or zero, and exactly two uniquely typed `FailureTarget` and
+`Failed` conditions, both `True/BackoffLimitExceeded`, in either order. Resource
+versions and timestamps remain dynamic. Additional prefix Jobs are admitted only
+as prior attempts for the current 0.4.19 package digest/target, with an exact
+digest-prefixed generated name, valid suffix, unique UUID UID, and exactly seven
+annotations: the same six provenance/hooks plus attested chart version 0.4.19.
+Each current Job must be terminal in exactly one allowed state: Failed with
+`failed=1`, `succeeded` absent or zero and only `Failed`+`FailureTarget`, both
+`True/BackoffLimitExceeded`; or Kubernetes v1.36 Successful with `succeeded=1`,
+`failed` absent or zero and only `Complete`+`SuccessCriteriaMet`, both
+`True/CompletionsReached`. Names and UIDs are unique across the history; any
+other drift fails before mutation. Because 0.4.18 failed before create, every .18
+prefix Job or target annotation is unexpected history drift; it is never
+admitted, waited, logged, deleted, patched, applied, or reused.
+
+This retained-history fence is mandatory after Store and fourteen-ExternalSecret
+precursor validation for every Store state admitted by exact r24 recovery. It
+therefore also runs when a prior Successful current-package Job made the Store
+`Ready`/`complete` before a downstream failure; no admitted Store state skips
+the history read or reaches fresh create first.
 
 The distributed forward-recovery entrypoint invokes its package-local repair
 delegate through `bash`, independent of archive executable mode. The isolated
@@ -254,12 +305,12 @@ All mutation paths are fail-forward. There is no atomic apply or rollback path.
 A failed mutation prints `FORWARD_RECOVERY_REQUIRED`. The recovery tool defaults
 to read-only, revalidates the three structured attestations, actual current
 revision/chart/package confirmation, semantic external-owner diff and exact owner
-metadata, and reapplies chart 0.4.18. It never deletes storage. Charts 0.4.11
-through 0.4.17 are not rollback
+metadata, and reapplies chart 0.4.19. It never deletes storage. Charts 0.4.11
+through 0.4.18 are not rollback
 targets; Helm rollback,
 `--atomic`, and restoration to revision 20 remain forbidden. Once data exists,
 claim deletion is forbidden until a separately approved backup/restore and P13
 parity proof. Release notes and operator recovery/storage procedures must identify
-0.4.18, package-bound policy snapshots, the forced-root auth-first gate, exact
+0.4.19, package-bound policy snapshots, the forced-root auth-first gate, exact
 credential-silent retained log proof, external ESO
 network prerequisite, two-pass wait behavior, and this forward-only boundary.
