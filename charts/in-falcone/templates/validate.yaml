@@ -436,6 +436,9 @@
 {{- if lt (int ($authReconcile.roleTTLSeconds | default 0)) 60 -}}
   {{- fail "openbao.openbao.authReconcile.roleTTLSeconds must be at least 60" -}}
 {{- end -}}
+{{- if and ($authReconcile.forceRecoveryRoot | default false) (not ($authReconcile.allowRecoveryRoot | default false)) -}}
+  {{- fail "openbao.openbao.authReconcile.forceRecoveryRoot requires allowRecoveryRoot=true" -}}
+{{- end -}}
 {{- if ne (.Values.eso.eso.serviceAccountName | default "eso-openbao-auth") (.Values.openbao.eso.serviceAccountName | default "eso-openbao-auth") -}}
   {{- fail "eso.eso.serviceAccountName and openbao.eso.serviceAccountName must match" -}}
 {{- end -}}

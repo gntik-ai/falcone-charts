@@ -84,6 +84,9 @@ openbao:
     # Revision-20 recovery may enable this for one explicitly confirmed repair
     # release; the canonical follow-up release disables it again.
     allowRecoveryRoot: false
+    # Only the isolated, package-bound revision-24 recovery Job may force the
+    # retained recovery credential instead of trying the dedicated identity.
+    forceRecoveryRoot: false
     evidenceMode: metadata-only
   recovery:
     secretName: openbao-recovery

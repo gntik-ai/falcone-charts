@@ -4892,6 +4892,7 @@ openbao:
       tokenExpirationSeconds: 600
       activeDeadlineSeconds: 300
       allowRecoveryRoot: false
+      forceRecoveryRoot: false
       evidenceMode: metadata-only
 
 # ---------------------------------------------------------------------------
