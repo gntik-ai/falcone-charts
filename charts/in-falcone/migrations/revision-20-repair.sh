@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.15"
+EXPECTED_REPAIR_VERSION="0.4.16"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -820,13 +820,14 @@ if [[ -n "${FALCONE_STAGING_REAL_HELM:-}" && "${FALCONE_STAGING_SCENARIO:-}" == 
   legacy_phase_b_seam=true
 fi
 
-# Give an inexact Phase-A target a useful JIT error before loading evidence.
+# Give an inexact Phase-A target a useful JIT error before loading evidence. The
+# immutable target chart is part of this early boundary; a confirmation for a
+# published predecessor must not be misreported as stale evidence.
+confirmation_prefix="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${actual_revision}/${actual_chart}->${EXPECTED_REPAIR_CHART}/"
+confirmation_digest="${confirm_target#"$confirmation_prefix"}"
 if [[ "$apply" == true && "$mode" == phase-a \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}"* \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@21/"* \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@22/"* \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@23/"* \
-   && "$confirm_target" != "${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@24/"* ]]; then
+   && ( "$confirm_target" != "${confirmation_prefix}"* \
+     || ! "$confirmation_digest" =~ ^sha256:[0-9a-f]{64}$ ) ]]; then
   if [[ ( "$actual_revision" == 21 || "$actual_revision" == 22 || "$actual_revision" == 23 || "$actual_revision" == 24 ) && "$actual_status" == failed ]]; then
     die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${actual_revision}/${actual_chart}->${EXPECTED_REPAIR_CHART}/PACKAGE_DIGEST"
   fi
@@ -1180,6 +1181,20 @@ PY
     and (if $state == "required" then
       all(.items[]; any(.status.conditions[]?; .type == "Ready" and .status == "False"
         and (.message // "" | contains("could not get secret data from provider"))))
+    elif $state == "auth-policy-required" then
+      (
+        all(.items[];
+          (.status.conditions | length) == 1
+          and .status.conditions[0].type == "Ready"
+          and .status.conditions[0].status == "True")
+        or
+        all(.items[];
+          (.status.conditions | length) == 1
+          and .status.conditions[0].type == "Ready"
+          and .status.conditions[0].status == "False"
+          and .status.conditions[0].reason == "SecretSyncedError"
+          and .status.conditions[0].message == "could not get secret data from provider")
+      )
     else
       all(.items[]; any(.status.conditions[]?; .type == "Ready" and .status == "True"))
     end)' >/dev/null || die "LEGACY_CLUSTERSECRETSTORE_EXTERNALSECRET_DRIFT"
@@ -1203,9 +1218,9 @@ PY
 
 run_revision24_pre_handoff_auth_reconcile() {
   [[ "$actual_revision" == 24 ]] || return 0
-  # The auth-first pre-handoff Job is enabled by the corrected 0.4.15 recovery
-  # package. Immutable 0.4.12 through 0.4.14 never completed live recovery.
-  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.15" ]] || return 0
+  # The auth-first pre-handoff Job is enabled by the corrected 0.4.16 recovery
+  # package. Immutable 0.4.12 through 0.4.15 never completed live recovery.
+  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.16" ]] || return 0
 
   auth_job_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision24-auth-reconcile.XXXXXX")"
   helm template "$EXPECTED_RELEASE" "$chart_source" \
@@ -1248,7 +1263,7 @@ if (
     or metadata.get("name") != "openbao-auth-reconcile"
     or metadata.get("namespace") != "secret-store"
     or not re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
-    or target_chart != "in-falcone-0.4.15"
+    or target_chart != "in-falcone-0.4.16"
     or source_revision != "24"
 ):
     raise SystemExit(1)

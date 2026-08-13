@@ -142,7 +142,32 @@
 ## 6. Independently gated live proof
 
 - [ ] 6.1 Complete disposable clean-install and revision-20
-  upgrade/failure/forward-recovery proof against immutable chart 0.4.15; do not
+  upgrade/failure/forward-recovery proof against immutable chart 0.4.16; do not
   use Helm rollback.
 - [ ] 6.2 Obtain separate shared-staging authorization and Phase-B JIT destructive
   confirmation before any PVC mutation.
+
+## 7. ExternalSecret precursor correction in chart 0.4.16
+
+- [x] 7.1 Add black-box contracts bbx079-bbx081 for both exact homogeneous
+  ExternalSecret sets, twelve drift cases, and rejection of the published but
+  unapplied 0.4.15 target before mutation.
+- [x] 7.2 Under only the exact `auth-policy-required` store fingerprint, admit
+  either fourteen single-condition Ready=True objects or fourteen exact
+  Ready=False/SecretSyncedError/provider-message objects; reject mixtures,
+  extra/absent conditions, identity/namespace/cardinality drift and do not
+  hardcode ExternalSecret UIDs.
+- [x] 7.3 Bind package, evidence, confirmation, auth Job provenance, Phase-A and
+  forward recovery to immutable 0.4.16; preserve 0.4.15 as published but
+  unapplied, 0.4.14 as the partial auth-Job attempt, and r24/0.4.11 as live.
+- [x] 7.4 Update release notes, runbooks, proposal, design, migration and the
+  deployment-and-operations delta with homogeneous precursor, pre-mutation
+  rejection and no-rollback semantics.
+- [x] 7.5 Run focal bbx079-bbx081 (17 tests, 17 pass), shell syntax, strict Helm
+  lint, upgrade/auth renders, OpenSpec strict validation and diff hygiene.
+- [x] 7.6 Complete the checker-owned historical bbx061-bbx078 target migration
+  and final rerun against 0.4.16 while preserving the immutable history.
+- [x] 7.7 Obtain independent reviewer approval of the 0.4.16 diff before any
+  live apply.
+- [x] 7.8 Run the checker-owned full black-box suite on the frozen 0.4.16 diff:
+  13 files, 295 tests, 295 pass, 0 fail, with no runner-created workspace delta.

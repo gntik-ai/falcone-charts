@@ -8,7 +8,7 @@ helm_state="${FALCONE_STAGING_HELM_STATE_FILE:-${FALCONE_STAGING_STATE_FILE:?}.h
 upgrade_count=0
 [ ! -f "$helm_state" ] || upgrade_count="$(cat "$helm_state")"
 real_helm="${FALCONE_STAGING_HELM_DELEGATE:-${FALCONE_STAGING_REAL_HELM:-}}"
-repair_version="${FALCONE_STAGING_REPAIR_VERSION:-0.4.15}"
+repair_version="${FALCONE_STAGING_REPAIR_VERSION:-0.4.16}"
 repair_chart="in-falcone-${repair_version}"
 
 legacy_values='{"global":{"webhookSigningKey":{"create":false,"secretName":"falcone-webhook-signing-key-c25-legacy","secretKey":"key","adoption":{"mode":"legacy","requestId":"c25-staging-adopt-20260723-01"},"rotation":{"action":"none","requestId":"","sourceSecretName":"","sourceSecretKey":"","rotationId":"","recoveryWindowSeconds":604800}}},"documentdb":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"kafka":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"observability":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"postgresql":{"persistence":{"storageClass":"local-path","size":"10Gi"}},"seaweedfs":{"filer":{"data":{"storageClass":"hcloud-volumes","size":"10Gi"}},"master":{"data":{"storageClass":"hcloud-volumes","size":"10Gi"}}}}'
@@ -34,7 +34,7 @@ case "$scenario" in
     release_chart="in-falcone-0.4.9"
     release_status="failed"
     ;;
-  phase-a-complete|phase-a-attestation-*|forward-*)
+  phase-a-complete|phase-a-attestation-*|phase-b-structured-*|forward-*)
     release_revision=25
     release_chart="$repair_chart"
     ;;
@@ -273,7 +273,7 @@ case "${1:-}" in
     upgrade_count=$((upgrade_count + 1))
     printf '%s' "$upgrade_count" >"$helm_state"
     case "$scenario" in
-      phase-b-post-delete-helm-failure|forward-helm-failure|phase-a-helm-failure)
+      phase-b-post-delete-helm-failure|forward-helm-failure|phase-a-helm-failure|phase-b-structured-post-delete-helm-failure|forward-structured-helm-failure|phase-a-structured-helm-failure)
         printf 'synthetic repaired-chart apply failure\n' >&2
         exit 42
         ;;
