@@ -1543,7 +1543,8 @@
                   "required": [
                     "realm",
                     "displayName",
-                    "enabled"
+                    "enabled",
+                    "login"
                   ],
                   "properties": {
                     "realm": {

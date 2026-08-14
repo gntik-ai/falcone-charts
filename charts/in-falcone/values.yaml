@@ -441,6 +441,10 @@ bootstrap:
           in-falcone.realm-type: platform
           in-falcone.console-client: in-falcone-console
           in-falcone.gateway-client: in-falcone-gateway
+        # Chart-facing authoring block. Keycloak 26 RealmRepresentation does not accept a nested
+        # `login` object: the bootstrap payload renderer lifts these five booleans to the provider
+        # representation's top level and emits a bounded partial payload for upgrade reconciliation.
+        # Do not duplicate these keys directly under `realm`; ambiguous representations fail render.
         login:
           loginWithEmailAllowed: true
           registrationAllowed: true

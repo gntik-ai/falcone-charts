@@ -7,6 +7,12 @@
 {{- $webhookDatabasePrincipals := $webhookDatabase.principals -}}
 {{- $adoption := $webhookKey.adoption -}}
 {{- $rotation := $webhookKey.rotation -}}
+{{- $keycloakRealm := .Values.bootstrap.oneShot.keycloak.realm | default (dict) -}}
+{{- range $loginField := list "loginWithEmailAllowed" "registrationAllowed" "rememberMe" "verifyEmail" "resetPasswordAllowed" -}}
+  {{- if hasKey $keycloakRealm $loginField -}}
+    {{- fail (printf "bootstrap.oneShot.keycloak.realm.%s duplicates the supported bootstrap.oneShot.keycloak.realm.login.%s path; remove the top-level value" $loginField $loginField) -}}
+  {{- end -}}
+{{- end -}}
 {{- $reservedWebhookKey := "WEBHOOK_SIGNING_KEY" -}}
 {{- $reservedWebhookDatabaseNames := list
       "WEBHOOK_SCHEMA_DATABASE_URL"
