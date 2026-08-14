@@ -1,4 +1,5 @@
 {{- $workloadKind := .Values.wrapper.workload.kind | default "Deployment" -}}
+{{- $temporalAdminToolsImage := default (dict "repository" "docker.io/temporalio/admin-tools" "tag" "1.31.1" "pullPolicy" "IfNotPresent") .Values.global.temporalAdminToolsImage -}}
 {{- $podSecurityContext := mergeOverwrite (deepCopy (default (dict) .Values.global.podSecurity)) (default (dict) .Values.podSecurityContext) -}}
 {{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
   {{- $_ := unset $podSecurityContext "runAsUser" -}}
@@ -168,8 +169,48 @@ spec:
       securityContext:
         {{- toYaml $podSecurityContext | nindent 8 }}
       {{- end }}
-      {{- if or $isControlPlane (and .Values.persistence.enabled .Values.volumePermissions.enabled) (gt (len .Values.initContainers) 0) }}
+      {{- if or $isControlPlane (eq (.Values.wrapper.componentId | default "") "workflow-worker") (and .Values.persistence.enabled .Values.volumePermissions.enabled) (gt (len .Values.initContainers) 0) }}
       initContainers:
+        {{- if eq (.Values.wrapper.componentId | default "") "workflow-worker" }}
+        - name: wait-for-temporal-bootstrap
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" $temporalAdminToolsImage "name" "temporal bootstrap readiness gate" "Release" .Release) | quote }}
+          imagePullPolicy: {{ $temporalAdminToolsImage.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              i=0
+              while [ "$i" -lt 60 ]; do
+                temporal operator cluster health --address "${TEMPORAL_ADDRESS}" --namespace temporal-system >/dev/null 2>&1 && break
+                i=$((i + 1)); sleep 5
+              done
+              if [ "$i" -ge 60 ]; then
+                echo "Temporal frontend ${TEMPORAL_ADDRESS} unavailable for namespace ${TEMPORAL_NAMESPACE} after ${i}/60 attempts (bounded); correct or resolve and retry to fail forward safely" >&2; exit 1
+              fi
+              if ! temporal operator namespace describe --address "${TEMPORAL_ADDRESS}" --namespace "${TEMPORAL_NAMESPACE}" >/dev/null 2>&1; then
+                echo "Temporal namespace ${TEMPORAL_NAMESPACE} verification failed after attempts 1/1 (bounded); correct or resolve and retry to fail forward safely" >&2; exit 1
+              fi
+              attrs="$(temporal operator search-attribute list --address "${TEMPORAL_ADDRESS}" --namespace "${TEMPORAL_NAMESPACE}" 2>/dev/null)" || { echo "Temporal search-attribute list/readback failed for ${TEMPORAL_NAMESPACE} after attempts 1/1 (bounded); correct or resolve and retry to fail forward safely" >&2; exit 1; }
+              for attr in tenantId workspaceId flowId flowVersion triggerType; do
+                printf '%s\n' "$attrs" | awk -v n="$attr" '$1 == n && $2 == "Keyword" { found=1 } END { exit(found ? 0 : 1) }' || { echo "Temporal search attribute ${attr} Keyword missing in ${TEMPORAL_NAMESPACE} after attempts 1/1 (bounded); correct or resolve and retry to fail forward safely" >&2; exit 1; }
+              done
+              echo "Temporal namespace ${TEMPORAL_NAMESPACE} and five Keyword search attributes are ready"
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: "{{ include "in-falcone.temporal.roleName" (dict "root" . "role" "frontend") }}:7233"
+            - name: TEMPORAL_NAMESPACE
+              value: falcone-flows
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            {{- if not (.Values.global.podSecurity.openshiftRestricted | default false) }}
+            runAsUser: 1000
+            runAsGroup: 1000
+            {{- end }}
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+        {{- end }}
         {{- if $isControlPlane }}
         # Fresh installs render the authority bootstrap as a normal Job because
         # bundled PostgreSQL does not exist during pre-install hooks. This

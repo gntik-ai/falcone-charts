@@ -5,6 +5,10 @@ global:
   createNamespace: true
   imageRegistry: ""
   imagePullSecrets: []
+  temporalAdminToolsImage:
+    repository: docker.io/temporalio/admin-tools
+    tag: "1.31.1"
+    pullPolicy: IfNotPresent
   airgap:
     enabled: false
   privateRegistry:
@@ -3444,7 +3448,7 @@ controlPlane:
     - name: DEPLOYMENT_PROFILE
       value: dev
     - name: TEMPORAL_ADDRESS
-      value: "{{ .Release.Name }}-temporal-frontend:7233"
+      value: '{{ include "in-falcone.temporal.roleName" (dict "root" . "role" "frontend") }}:7233'
     - name: TEMPORAL_NAMESPACE
       value: falcone-flows
     - name: MCP_ENABLED
@@ -3673,7 +3677,7 @@ controlPlaneExecutor:
     - name: KAFKA_BROKERS
       value: "{{ .Release.Name }}-kafka:9092"
     - name: TEMPORAL_ADDRESS
-      value: "{{ .Release.Name }}-temporal-frontend:7233"
+      value: '{{ include "in-falcone.temporal.roleName" (dict "root" . "role" "frontend") }}:7233'
     - name: TEMPORAL_NAMESPACE
       value: falcone-flows
     - name: TEMPORAL_TASK_QUEUE
@@ -3931,7 +3935,7 @@ workflowWorker:
     app.kubernetes.io/component: flows-worker
   env:
     - name: TEMPORAL_ADDRESS
-      value: "{{ .Release.Name }}-temporal-frontend:7233"
+      value: '{{ include "in-falcone.temporal.roleName" (dict "root" . "role" "frontend") }}:7233'
     - name: TEMPORAL_NAMESPACE
       value: falcone-flows
     - name: TEMPORAL_TASK_QUEUE
@@ -4944,8 +4948,8 @@ temporal:
       tag: "17.2.0"
       pullPolicy: IfNotPresent
 
-  # admin-tools image used by the post-install/post-upgrade bootstrap Job
-  # (registers the default namespace + custom search attributes via the temporal CLI).
+  # Legacy admin-tools compatibility input. The ordinary revision-scoped Job
+  # and mandatory workflow-worker startup gate use global.temporalAdminToolsImage.
   adminTools:
     image:
       repository: docker.io/temporalio/admin-tools
@@ -4988,10 +4992,13 @@ temporal:
 
   # Cluster bootstrap inputs (ADR-11 shared-namespace tenancy model).
   bootstrap:
+    # All application consumers currently target falcone-flows. A different value never
+    # formed a working cross-layer configuration, so validation now rejects it before render
+    # instead of allowing the producer and consumers to diverge silently.
     namespace: falcone-flows
     retentionDays: 7
     # All five custom search attributes are Keyword (ADR-11). Order is significant
-    # only for readability; the bootstrap Job registers each one.
+    # only for readability; validation accepts any permutation of this exact unique set.
     searchAttributes:
       - name: tenantId
         type: Keyword
@@ -5038,9 +5045,10 @@ temporal:
         cpu: 250m
         memory: 256Mi
 
-  # Pod-level security context. fsGroup is intentionally UNSET here (Temporal pods are
-  # stateless — persistence lives in PostgreSQL) so OpenShift's restricted-v2 SCC can
-  # inject the namespace-assigned GID. runAsNonRoot + seccompProfile are asserted.
+  # Pod-level security context. Vanilla defaults use the Temporal image's positive
+  # 1000:1000 identity and fsGroup 1000; operators may provide other positive numeric
+  # identities on vanilla Kubernetes. OpenShift's restricted-v2 overlay removes these
+  # fixed IDs so SCC can inject the namespace-assigned values. runAsNonRoot + seccompProfile are asserted.
   # runAsUser/runAsGroup are pinned to the Temporal image's baked-in UID/GID (1000) so a
   # restricted PodSecurity admission (and kind's runAsNonRoot verification) can confirm
   # the container is non-root — the image declares a NON-numeric user (`temporal`), which
@@ -5050,6 +5058,7 @@ temporal:
     runAsNonRoot: true
     runAsUser: 1000
     runAsGroup: 1000
+    fsGroup: 1000
     seccompProfile:
       type: RuntimeDefault
 
@@ -5057,6 +5066,8 @@ temporal:
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: false
+    runAsUser: 1000
+    runAsGroup: 1000
     runAsNonRoot: true
     capabilities:
       drop:

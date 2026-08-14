@@ -256,7 +256,11 @@ imagePullSecrets:
        global.imageRegistry (Harbor) + airgap installs work for Temporal too. */ -}}
 {{- define "in-falcone.temporal.image" -}}
 {{- $repo := include "in-falcone.temporal.normalizeRepository" (dict "Values" .root.Values "repository" .image.repository) -}}
+{{- if .image.digest -}}
+{{- printf "%s@%s" $repo .image.digest -}}
+{{- else -}}
 {{- printf "%s:%s" $repo .image.tag -}}
+{{- end -}}
 {{- end -}}
 
 {{- /* imagePullSecrets normalized exactly like the workload/bootstrap templates. */ -}}

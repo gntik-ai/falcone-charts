@@ -61,8 +61,9 @@ jobs:
       - name: Install process sandbox
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo apt-get install --yes --no-install-recommends bubblewrap iproute2
           bwrap --version
+          ip -Version
       - name: Verify vendored dependencies
         run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority
@@ -87,19 +88,44 @@ jobs:
             "$render_dir/in-falcone.yaml"
           kubeconform -strict -summary -ignore-missing-schemas \
             "$render_dir/falcone-knative.yaml"
+      - name: Prime offline black-box evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/falcone-blackbox-evidence"
+          oci_cache="$evidence_dir/temporal-oci"
+          schema_cache="$evidence_dir/kubeconform"
+          mkdir -p "$oci_cache" "$schema_cache"
+
+          node tests/blackbox/fixtures/temporal-bootstrap/prefetch-offline-evidence.mjs \
+            --oci-cache "$oci_cache"
+
+          helm template falcone charts/in-falcone \
+            --namespace falcone-ci \
+            | kubeconform -strict -ignore-missing-schemas -summary -cache "$schema_cache"
+          helm template falcone charts/in-falcone \
+            --namespace falcone-ci \
+            -f charts/in-falcone/values/platform-openshift.yaml \
+            | kubeconform -strict -ignore-missing-schemas -summary -cache "$schema_cache"
+
+          printf 'TEMPORAL_OCI_CACHE_DIR=%s\n' "$oci_cache" >>"$GITHUB_ENV"
+          printf 'KUBECONFORM_SCHEMA_CACHE_DIR=%s\n' "$schema_cache" >>"$GITHUB_ENV"
       - name: Run offline managed-Knative black-box contracts
         shell: bash
         run: |
           set -euo pipefail
           # The suite uses an offline kubeconfig and process-isolated fake kubectl,
-          # Helm and curl clients. A fresh network namespace makes an accidental
-          # public-registry or Kubernetes API request fail rather than escape CI.
+          # Helm and curl clients. A fresh network namespace with only loopback
+          # enabled lets local fake APIs run while public-registry or Kubernetes
+          # API requests fail rather than escape CI.
           sudo env \
             PATH="$PATH" \
             HOME="$HOME" \
             RUNNER_TEMP="$RUNNER_TEMP" \
             GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
-            unshare --net -- bash tests/blackbox/run.sh
+            TEMPORAL_OCI_CACHE_DIR="$TEMPORAL_OCI_CACHE_DIR" \
+            KUBECONFORM_SCHEMA_CACHE_DIR="$KUBECONFORM_SCHEMA_CACHE_DIR" \
+            unshare --net -- bash -c 'ip link set lo up; exec bash tests/blackbox/run.sh'
       - name: Verify managed bundle provenance lock
         run: python3 charts/falcone-knative/tools/validate_bundle.py
       - name: Package and verify chart provenance inputs
