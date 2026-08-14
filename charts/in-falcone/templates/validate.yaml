@@ -8,6 +8,62 @@
 {{- $adoption := $webhookKey.adoption -}}
 {{- $rotation := $webhookKey.rotation -}}
 {{- $keycloakRealm := .Values.bootstrap.oneShot.keycloak.realm | default (dict) -}}
+{{- $temporalBootstrap := .Values.temporal.bootstrap -}}
+{{- if hasKey .Values.workflowWorker "temporalBootstrapImage" -}}
+  {{- fail "workflowWorker.temporalBootstrapImage is retired and cannot override global.temporalAdminToolsImage; remove this stale path and copy repository, tag, digest, and pullPolicy to global.temporalAdminToolsImage" -}}
+{{- end -}}
+{{- $legacyAdminToolsDefault := dict "repository" "docker.io/temporalio/admin-tools" "tag" "1.31.1" "pullPolicy" "IfNotPresent" -}}
+{{- $legacyAdminTools := .Values.temporal.adminTools.image | default (dict) -}}
+{{- $globalAdminTools := .Values.global.temporalAdminToolsImage -}}
+{{- $legacyDigest := $legacyAdminTools.digest | default "" -}}
+{{- $globalDigest := $globalAdminTools.digest | default "" -}}
+{{- $legacySameGlobal := and (eq ($legacyAdminTools.repository | default "") ($globalAdminTools.repository | default "")) (eq ($legacyAdminTools.tag | default "") ($globalAdminTools.tag | default "")) (eq ($legacyAdminTools.pullPolicy | default "IfNotPresent") ($globalAdminTools.pullPolicy | default "IfNotPresent")) (eq $legacyDigest $globalDigest) -}}
+{{- $legacyIsDefault := and (eq ($legacyAdminTools.repository | default "") $legacyAdminToolsDefault.repository) (eq ($legacyAdminTools.tag | default "") $legacyAdminToolsDefault.tag) (eq ($legacyAdminTools.pullPolicy | default "IfNotPresent") $legacyAdminToolsDefault.pullPolicy) (eq $legacyDigest "") -}}
+{{- if and (not $legacyIsDefault) (not $legacySameGlobal) -}}
+  {{- fail "temporal.adminTools.image legacy input diverges from global.temporalAdminToolsImage; copy repository, tag, digest, and pullPolicy to the global authority" -}}
+{{- end -}}
+{{- $temporalExpectedAttributes := list
+      (dict "name" "tenantId" "type" "Keyword")
+      (dict "name" "workspaceId" "type" "Keyword")
+      (dict "name" "flowId" "type" "Keyword")
+      (dict "name" "flowVersion" "type" "Keyword")
+      (dict "name" "triggerType" "type" "Keyword") -}}
+{{- if ne ($temporalBootstrap.namespace | default "") "falcone-flows" -}}
+  {{- fail "temporal.bootstrap.namespace must remain falcone-flows because workflowWorker readiness is bound to that namespace" -}}
+{{- end -}}
+{{- $temporalActualAttributes := $temporalBootstrap.searchAttributes | default (list) -}}
+{{- if ne (.Values.workflowWorker.wrapper.componentId | default "") "workflow-worker" -}}
+  {{- fail "workflowWorker.wrapper.componentId must remain workflow-worker because the mandatory Temporal readiness gate is bound to that component" -}}
+{{- end -}}
+{{- range $init := (.Values.workflowWorker.initContainers | default (list)) -}}
+  {{- $effectiveInitName := tpl ($init.name | default "") . -}}
+  {{- if eq $effectiveInitName "wait-for-temporal-bootstrap" -}}
+    {{- fail "workflowWorker.initContainers cannot use reserved mandatory gate name wait-for-temporal-bootstrap" -}}
+  {{- end -}}
+{{- end -}}
+{{- if ne (len $temporalActualAttributes) 5 -}}
+  {{- fail "temporal.bootstrap.searchAttributes must contain exactly five entries" -}}
+{{- end -}}
+{{- range $expected := $temporalExpectedAttributes -}}
+  {{- $matches := 0 -}}
+  {{- range $actual := $temporalActualAttributes -}}
+    {{- if and (eq ($actual.name | default "") $expected.name) (eq ($actual.type | default "") "Keyword") -}}
+      {{- $matches = add $matches 1 -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if ne $matches 1 -}}
+    {{- fail (printf "temporal.bootstrap.searchAttributes must contain exactly one Keyword entry named %s" $expected.name) -}}
+  {{- end -}}
+{{- end -}}
+{{- range $actual := $temporalActualAttributes -}}
+  {{- $known := false -}}
+  {{- range $expected := $temporalExpectedAttributes -}}
+    {{- if and (eq ($actual.name | default "") $expected.name) (eq ($actual.type | default "") "Keyword") }}{{- $known = true }}{{- end -}}
+  {{- end -}}
+  {{- if not $known -}}
+    {{- fail (printf "temporal.bootstrap.searchAttributes contains unsupported entry %s/%s" ($actual.name | default "") ($actual.type | default "")) -}}
+  {{- end -}}
+{{- end -}}
 {{- range $loginField := list "loginWithEmailAllowed" "registrationAllowed" "rememberMe" "verifyEmail" "resetPasswordAllowed" -}}
   {{- if hasKey $keycloakRealm $loginField -}}
     {{- fail (printf "bootstrap.oneShot.keycloak.realm.%s duplicates the supported bootstrap.oneShot.keycloak.realm.login.%s path; remove the top-level value" $loginField $loginField) -}}

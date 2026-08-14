@@ -1,26 +1,40 @@
 {{- $root := . -}}
 {{- $t := .Values.temporal -}}
 {{- $b := $t.bootstrap -}}
+{{- $adminToolsImage := default (dict "repository" "docker.io/temporalio/admin-tools" "tag" "1.31.1" "pullPolicy" "IfNotPresent") $root.Values.global.temporalAdminToolsImage -}}
+{{- $phase := ternary "-upgrade" "" .Release.IsUpgrade -}}
+{{- $jobSuffix := printf "-r%v%s-temporal-bootstrap" .Release.Revision $phase -}}
+{{- $jobPrefix := include "in-falcone.temporal.fullname" $root | trunc (int (sub 63 (len $jobSuffix))) | trimSuffix "-" -}}
+{{- $bootstrapPodSecurity := deepCopy (default (dict) $t.podSecurityContext) -}}
+{{- $bootstrapContainerSecurity := deepCopy (default (dict) $t.securityContext) -}}
+{{- $_ := unset $bootstrapContainerSecurity "fsGroup" -}}
+{{- if ($root.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $bootstrapPodSecurity "runAsUser" -}}
+  {{- $_ := unset $bootstrapPodSecurity "runAsGroup" -}}
+  {{- $_ := unset $bootstrapPodSecurity "fsGroup" -}}
+  {{- $_ := unset $bootstrapContainerSecurity "runAsUser" -}}
+  {{- $_ := unset $bootstrapContainerSecurity "runAsGroup" -}}
+  {{- $_ := unset $bootstrapContainerSecurity "fsGroup" -}}
+{{- end -}}
 {{- $frontendAddr := printf "%s:%v" (include "in-falcone.temporal.roleName" (dict "root" $root "role" "frontend")) $t.frontend.grpcPort -}}
 {{- /*
-  Bootstrap Job (ADR-11). Runs the admin-tools `temporal` CLI as a Helm
-  post-install,post-upgrade hook AFTER the server is ready. It:
+  Bootstrap Job (ADR-11). Runs the admin-tools `temporal` CLI as an ordinary,
+  revision-scoped resource during Helm install/upgrade. It:
     1. Waits for the frontend gRPC port (7233) to be reachable.
     2. Registers the default Temporal namespace ({{ $b.namespace }}).
     3. Registers the five custom search attributes (all Keyword): tenantId,
        workspaceId, flowId, flowVersion, triggerType.
-  hook-delete-policy keeps the namespace clean between upgrades.
 */ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "in-falcone.temporal.fullname" $root }}-bootstrap
+  name: {{ printf "%s%s" $jobPrefix $jobSuffix }}
+  annotations:
+    falcone.io/helm-release-revision: {{ .Release.Revision | quote }}
   labels:
     {{- include "in-falcone.temporal.roleLabels" (dict "root" $root "role" "bootstrap") | nindent 4 }}
-  annotations:
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "10"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    falcone.io/helm-release-revision: {{ .Release.Revision | quote }}
+    falcone.io/helm-lifecycle: {{ ternary "upgrade" "install" .Release.IsUpgrade | quote }}
 spec:
   backoffLimit: {{ $t.jobs.backoffLimit }}
   activeDeadlineSeconds: {{ $t.jobs.activeDeadlineSeconds }}
@@ -34,14 +48,14 @@ spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
       {{- include "in-falcone.temporal.imagePullSecrets" $root | nindent 6 }}
-      {{- with $t.podSecurityContext }}
+      {{- with $bootstrapPodSecurity }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: temporal-bootstrap
-          image: {{ include "in-falcone.temporal.image" (dict "root" $root "image" $t.adminTools.image) | quote }}
-          imagePullPolicy: {{ $t.adminTools.image.pullPolicy | default "IfNotPresent" }}
+          image: {{ include "in-falcone.temporal.image" (dict "root" $root "image" $adminToolsImage) | quote }}
+          imagePullPolicy: {{ $adminToolsImage.pullPolicy | default "IfNotPresent" }}
           command:
             - /bin/sh
             - -ec
@@ -54,21 +68,33 @@ spec:
               # 1. Wait for the Temporal frontend gRPC port to be reachable (probe the
               #    always-present temporal-system namespace, never the flows namespace).
               i=0
+              healthy=0
               while [ "$i" -lt 60 ]; do
                 if temporal operator cluster health \
                     --address "${FLOW_FRONTEND_ADDR}" --namespace temporal-system >/dev/null 2>&1; then
-                  echo "temporal frontend is healthy"; break
+                  healthy=1; echo "temporal frontend is healthy"; break
                 fi
                 i=$((i + 1))
                 echo "waiting for temporal frontend ${FLOW_FRONTEND_ADDR} (${i}/60)"; sleep 5
               done
+              if [ "$healthy" -ne 1 ]; then
+                echo "temporal frontend ${FLOW_FRONTEND_ADDR} unavailable for namespace ${FLOW_NAMESPACE} after ${i}/60 bounded attempts; correct or resolve the frontend readiness condition, then retry to fail forward safely" >&2
+                exit 1
+              fi
 
-              # 2. Register the default namespace (idempotent — ignore AlreadyExists).
-              temporal operator namespace describe \
-                --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" >/dev/null 2>&1 || \
-              temporal operator namespace create \
-                --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" \
-                --retention "${FLOW_RETENTION}"
+              # 2. Register the namespace. A create error is only a tolerated
+              # AlreadyExists race after a successful namespace read-back.
+              if ! temporal operator namespace describe \
+                  --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" >/dev/null 2>&1; then
+                temporal operator namespace create \
+                  --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" \
+                  --retention "${FLOW_RETENTION}" >/dev/null 2>&1 || true
+                if ! temporal operator namespace describe \
+                    --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" >/dev/null 2>&1; then
+                echo "failed to verify Temporal namespace ${FLOW_NAMESPACE} after create/race (attempts 1/1, bounded namespace verification); correct or resolve and retry to fail forward safely" >&2
+                  exit 1
+                fi
+              fi
 
               # 3. Register the five custom search attributes (all Keyword). Idempotent +
               #    retried: a freshly-created namespace can briefly reject SA registration
@@ -78,20 +104,46 @@ spec:
               register_sa() {
                 _name="$1"; _type="$2"; _r=0
                 while [ "$_r" -lt 30 ]; do
+                  if ! _existing="$(temporal operator search-attribute list \
+                    --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" 2>/dev/null)"; then
+                    echo "Temporal search-attribute list/readback failed for ${FLOW_NAMESPACE} after attempts ${_r}/30 (bounded); correct or resolve and retry to fail forward safely" >&2
+                    return 1
+                  fi
+                  if printf '%s\n' "$_existing" | awk -v wanted="${_name}" '$1 == wanted { found=1 } END { exit(found ? 0 : 1) }'; then
+                    if ! printf '%s\n' "$_existing" | awk -v wanted="${_name}" -v wanted_type="${_type}" '$1 == wanted && $2 == wanted_type { found=1 } END { exit(found ? 0 : 1) }'; then
+                      echo "incompatible Temporal search attribute ${_name} type in ${FLOW_NAMESPACE} after bounded readback (30 attempts); correct or resolve and retry to fail forward safely" >&2
+                      return 1
+                    fi
+                    echo "search attribute ${_name} registered"; return 0
+                  fi
                   temporal operator search-attribute create \
                     --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" \
                     --name "$_name" --type "$_type" >/dev/null 2>&1 || true
                   if temporal operator search-attribute list \
                       --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" 2>/dev/null \
-                      | grep -qE "(^|[[:space:]])${_name}([[:space:]])"; then
+                      | awk -v wanted="${_name}" -v wanted_type="${_type}" '$1 == wanted && $2 == wanted_type { found=1 } END { exit(found ? 0 : 1) }'; then
                     echo "search attribute ${_name} registered"; return 0
                   fi
                   _r=$((_r + 1)); echo "retrying search attribute ${_name} (${_r}/30)"; sleep 3
                 done
-                echo "failed to register search attribute ${_name}" >&2; return 1
+                echo "failed to register search attribute ${_name} in ${FLOW_NAMESPACE} after attempts 30/30 (bounded); correct or resolve and retry to fail forward safely" >&2; return 1
               }
               {{- range $b.searchAttributes }}
               register_sa {{ .name | quote }} {{ .type | quote }}
+              {{- end }}
+
+              # Final atomic read-back prevents reporting success if state is
+              # lost or drifts after an individual attribute verification.
+              final_attributes="$(temporal operator search-attribute list \
+                --address "${FLOW_FRONTEND_ADDR}" --namespace "${FLOW_NAMESPACE}" 2>/dev/null)" || {
+                echo "failed final Temporal search-attribute list/readback for ${FLOW_NAMESPACE} after attempts 1/1 bounded verification; correct or resolve and retry to fail forward safely" >&2
+                exit 1
+              }
+              {{- range $b.searchAttributes }}
+              if ! printf '%s\n' "$final_attributes" | awk -v wanted={{ .name | quote }} -v wanted_type={{ .type | quote }} '$1 == wanted && $2 == wanted_type { found=1 } END { exit(found ? 0 : 1) }'; then
+                echo "final Temporal search attribute {{ .name }} {{ .type }} verification failed in ${FLOW_NAMESPACE} after attempts 1/1 bounded final readback; correct or resolve and retry to fail forward safely" >&2
+                exit 1
+              fi
               {{- end }}
 
               echo "temporal bootstrap complete"
@@ -106,7 +158,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with $t.securityContext }}
+          {{- with $bootstrapContainerSecurity }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

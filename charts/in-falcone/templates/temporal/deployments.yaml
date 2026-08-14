@@ -1,5 +1,16 @@
 {{- $root := . -}}
 {{- $t := .Values.temporal -}}
+{{- $temporalPodSecurity := deepCopy (default (dict) $t.podSecurityContext) -}}
+{{- $temporalContainerSecurity := deepCopy (default (dict) $t.securityContext) -}}
+{{- $_ := unset $temporalContainerSecurity "fsGroup" -}}
+{{- if $.Values.global.podSecurity.openshiftRestricted }}
+  {{- $_ := unset $temporalPodSecurity "runAsUser" }}
+  {{- $_ := unset $temporalPodSecurity "runAsGroup" }}
+  {{- $_ := unset $temporalPodSecurity "fsGroup" }}
+  {{- $_ := unset $temporalContainerSecurity "runAsUser" }}
+  {{- $_ := unset $temporalContainerSecurity "runAsGroup" }}
+  {{- $_ := unset $temporalContainerSecurity "fsGroup" }}
+{{- end }}
 {{- /*
   One Deployment per Temporal server role. The temporalio/server image selects which
   role(s) it runs via the SERVICES env var, so each Deployment runs exactly one role
@@ -35,7 +46,7 @@ spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
       {{- include "in-falcone.temporal.imagePullSecrets" $root | nindent 6 }}
-      {{- with $t.podSecurityContext }}
+      {{- with $temporalPodSecurity }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -63,7 +74,7 @@ spec:
                 i=$((i + 1)); echo "waiting for frontend to serve (${i}/90)"; sleep 5
               done
               echo "frontend did not become healthy in time" >&2; exit 1
-          {{- with $t.securityContext }}
+          {{- with $temporalContainerSecurity }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -141,7 +152,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with $t.securityContext }}
+          {{- with $temporalContainerSecurity }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

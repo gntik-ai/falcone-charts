@@ -1,6 +1,13 @@
 {{- $root := . -}}
 {{- $t := .Values.temporal -}}
 {{- $ui := $t.ui -}}
+{{- $webPodSecurity := deepCopy (default (dict) $t.podSecurityContext) -}}
+{{- $webContainerSecurity := deepCopy (default (dict) $t.securityContext) -}}
+{{- $_ := unset $webContainerSecurity "fsGroup" }}
+{{- if $root.Values.global.podSecurity.openshiftRestricted }}
+  {{- $_ := unset $webPodSecurity "runAsUser" }}{{- $_ := unset $webPodSecurity "runAsGroup" }}{{- $_ := unset $webPodSecurity "fsGroup" }}
+  {{- $_ := unset $webContainerSecurity "runAsUser" }}{{- $_ := unset $webContainerSecurity "runAsGroup" }}{{- $_ := unset $webContainerSecurity "fsGroup" }}
+{{- end }}
 {{- /*
   Temporal Web UI. INTERNAL-ONLY (ADR-11): deployed for operator access via
   `kubectl port-forward` exclusively. NO Ingress / Route / APISIX route is rendered
@@ -25,7 +32,7 @@ spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
       {{- include "in-falcone.temporal.imagePullSecrets" $root | nindent 6 }}
-      {{- with $t.podSecurityContext }}
+      {{- with $webPodSecurity }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -49,7 +56,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with $t.securityContext }}
+          {{- with $webContainerSecurity }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

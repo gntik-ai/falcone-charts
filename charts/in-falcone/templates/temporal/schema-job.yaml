@@ -1,6 +1,10 @@
 {{- $root := . -}}
 {{- $t := .Values.temporal -}}
 {{- $p := $t.persistence -}}
+{{- $podSecurity := deepCopy (default (dict) $t.podSecurityContext) -}}
+{{- $containerSecurity := deepCopy (default (dict) $t.securityContext) -}}
+{{- $_ := unset $containerSecurity "fsGroup" -}}
+{{- if $root.Values.global.podSecurity.openshiftRestricted }}{{- $_ := unset $podSecurity "runAsUser" }}{{- $_ := unset $podSecurity "runAsGroup" }}{{- $_ := unset $podSecurity "fsGroup" }}{{- $_ := unset $containerSecurity "runAsUser" }}{{- $_ := unset $containerSecurity "runAsGroup" }}{{- end }}
 {{- /*
   Schema setup/upgrade Job. On fresh install this is a normal Job because PostgreSQL is created by
   the same release; its connectivity loop waits until the DB bootstrap creates the role/databases.
@@ -32,7 +36,7 @@ spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
       {{- include "in-falcone.temporal.imagePullSecrets" $root | nindent 6 }}
-      {{- with $t.podSecurityContext }}
+      {{- with $podSecurity }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -40,6 +44,8 @@ spec:
         - name: temporal-sql-tool
           image: {{ include "in-falcone.temporal.image" (dict "root" $root "image" $t.schemaTool.image) | quote }}
           imagePullPolicy: {{ $t.schemaTool.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            {{- toYaml $containerSecurity | nindent 12 }}
           command:
             - /bin/sh
             - -ec
@@ -124,9 +130,5 @@ spec:
               value: {{ $p.visibilityDatabase | quote }}
           {{- with $t.jobs.resources }}
           resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with $t.securityContext }}
-          securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

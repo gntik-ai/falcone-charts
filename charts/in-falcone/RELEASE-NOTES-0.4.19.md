@@ -1,5 +1,32 @@
 # in-falcone 0.4.19
 
+## Temporal startup and admin-tools image
+
+This release adds the pinned admin-tools image to the mandatory workflow-worker
+startup gate and shares it with the revision-scoped Temporal bootstrap Job via
+`global.temporalAdminToolsImage`. The gate is a required init container and
+waits for the frontend, namespace, and five Keyword attributes before the
+worker starts. This is an intentional startup/readiness image and gate change;
+the application workload images, public APIs, and credential boundaries remain
+unchanged. See the [Temporal bootstrap readiness runbook](docs/temporal-bootstrap-readiness.md).
+
+## Temporal bootstrap readiness
+
+The Temporal namespace bootstrap is now an ordinary, revision-scoped Job. It
+has no Helm lifecycle hooks, and its DNS-safe name includes the Helm revision
+and upgrade lifecycle so a completed Job is never patched on a later release.
+The Job waits for the frontend with a bounded health loop and exits before any
+namespace or search-attribute mutation when the frontend remains unavailable.
+Correct the frontend condition and retry forward; the diagnostic names only
+the bounded target and action. Namespace and five Keyword search attributes
+remain additive and idempotent, with no deletion, Kubernetes API credential,
+Secret, or RBAC contract. Check the revision Job and all five attributes after
+install or upgrade. A rollback does not reverse Temporal state: verify the
+namespace is usable first, otherwise correct forward.
+The supported namespace remains `falcone-flows`; divergent producer authoring now fails before
+render instead of silently disagreeing with consumers. The exact five unique `Keyword`
+attributes remain order-independent.
+
 Chart 0.4.19 is the immutable correction for the revision-24 packaged
 auth-reconcile guard and the default Node workload identity contract. It is for P18 release engineers, P3 operators, P4
 auditors, P7 workspace capability owners, P12 service workloads, P13 isolation
