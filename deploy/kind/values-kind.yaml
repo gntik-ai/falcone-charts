@@ -33,16 +33,14 @@ bootstrap:
   oneShot:
     keycloak:
       realm:
-        # CHART FIX: the default values nest these flags under `login`, which is
-        # not a field of Keycloak's RealmRepresentation -> KC 26 rejects the
-        # whole payload (400 "unable to read contents from stream"). Delete the
-        # nested map (null) and set the real top-level fields instead.
-        login: null
-        loginWithEmailAllowed: true
-        registrationAllowed: true
-        rememberMe: true
-        verifyEmail: true
-        resetPasswordAllowed: true
+        # Chart-facing authoring stays nested. The bootstrap renderer lifts these
+        # values into Keycloak 26's top-level RealmRepresentation payload.
+        login:
+          loginWithEmailAllowed: true
+          registrationAllowed: true
+          rememberMe: true
+          verifyEmail: true
+          resetPasswordAllowed: true
   reconcile:
     apisix:
       # CHART MISMATCH: APISIX runs with APISIX_STAND_ALONE=true (no Admin API on
