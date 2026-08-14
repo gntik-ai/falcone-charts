@@ -1035,10 +1035,24 @@
       "$ref": "#/definitions/component"
     },
     "controlPlaneExecutor": {
-      "$ref": "#/definitions/component"
+      "allOf": [
+        {
+          "$ref": "#/definitions/component"
+        },
+        {
+          "$ref": "#/definitions/nodeWorkloadSecurityContext"
+        }
+      ]
     },
     "workflowWorker": {
-      "$ref": "#/definitions/component"
+      "allOf": [
+        {
+          "$ref": "#/definitions/component"
+        },
+        {
+          "$ref": "#/definitions/nodeWorkloadSecurityContext"
+        }
+      ]
     },
     "webConsole": {
       "$ref": "#/definitions/component",
@@ -2402,6 +2416,32 @@
         },
         "annotations": {
           "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "nodeWorkloadSecurityContext": {
+      "type": "object",
+      "properties": {
+        "securityContext": {
+          "type": "object",
+          "properties": {
+            "runAsUser": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "runAsGroup": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true

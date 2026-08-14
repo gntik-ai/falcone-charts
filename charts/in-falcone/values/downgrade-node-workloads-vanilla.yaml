@@ -1,0 +1,8 @@
+controlPlaneExecutor:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+workflowWorker:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
