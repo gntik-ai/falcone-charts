@@ -1,11 +1,26 @@
 # in-falcone 0.4.19
 
 Chart 0.4.19 is the immutable correction for the revision-24 packaged
-auth-reconcile guard. It is for P18 release engineers, P3 operators, P4
+auth-reconcile guard and the default Node workload identity contract. It is for P18 release engineers, P3 operators, P4
 auditors, P7 workspace capability owners, P12 service workloads, P13 isolation
 reviewers, and P17 documentation-only responders. It changes no application
-image, values/schema, ServiceAccount/RBAC, probe, network, storage/PVC, public
+image, ServiceAccount/RBAC, probe, network, storage/PVC, public
 API, credential scope, or tenant/workspace boundary relative to 0.4.18.
+
+The default `controlPlaneExecutor` and `workflowWorker` containers now declare
+`runAsUser: 1000` and `runAsGroup: 1000`, matching the shipped Node images'
+`USER node` identity. Custom replacement images must provide a verified
+positive numeric UID/GID override; zero, negative, fractional, and named
+values are rejected by the umbrella schema. When
+`global.podSecurity.openshiftRestricted=true`, the component wrapper removes
+these fixed identities so restricted-v2 SCC remains authoritative.
+
+After an upgrade, verify both affected Deployments are Available with two
+replicas, their vanilla containers render 1000:1000, and no affected Pod
+reports `CreateContainerConfigError`. A vanilla rollback must retain explicit
+positive numeric overrides for both workloads; an OpenShift rollback must
+retain the restricted overlay and omit fixed identities. Treat either an
+unavailable Deployment or any `CreateContainerConfigError` as fail-closed.
 
 ## Why a new package is required
 

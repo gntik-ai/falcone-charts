@@ -3747,6 +3747,8 @@ controlPlaneExecutor:
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
+    runAsUser: 1000
+    runAsGroup: 1000
     runAsNonRoot: true
     capabilities:
       drop:
@@ -3988,6 +3990,8 @@ workflowWorker:
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
+    runAsUser: 1000
+    runAsGroup: 1000
     runAsNonRoot: true
     capabilities:
       drop:
