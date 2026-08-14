@@ -22,6 +22,40 @@ positive numeric overrides for both workloads; an OpenShift rollback must
 retain the restricted overlay and omit fixed identities. Treat either an
 unavailable Deployment or any `CreateContainerConfigError` as fail-closed.
 
+## Keycloak 26 realm login representation
+
+A clean installation previously rendered the chart-facing
+`bootstrap.oneShot.keycloak.realm.login` object unchanged inside `realm.json`.
+Keycloak 26 models `loginWithEmailAllowed`, `registrationAllowed`, `rememberMe`,
+`verifyEmail`, and `resetPasswordAllowed` directly on `RealmRepresentation`, so
+the Admin REST create request returned HTTP 400 before the platform realm,
+clients, roles, or superadmin could be created.
+
+Chart 0.4.19 keeps the supported nested values interface, but lifts exactly those
+five booleans to the provider payload's top level and omits the chart-only
+`login` wrapper. It also emits a minimal, credential-free `login.json` partial
+representation. Every post-install or post-upgrade bootstrap reconciles that
+payload with an idempotent realm PUT, reads the realm back, and compares all five
+values before later reconciliation, final auth verification, or the success
+marker. An existing realm is never deleted or recreated.
+
+Direct top-level duplicates of the nested login values now fail during Helm
+rendering, including equal duplicates, so the chart never silently chooses
+between two authoring paths. Invalid types and unknown nested keys remain JSON
+Schema errors. Failed create, update, or read-back convergence emits only the
+bounded phase and HTTP status; it does not print the Keycloak response body,
+bearer token, password, API key, or Kubernetes Secret value.
+
+A failed clean install has no successful bootstrap marker, and the bootstrap
+lock is released by its exit trap. Correct the chart/configuration and retry
+forward: the next hook safely re-enters the create-only phase while retaining
+the existing PostgreSQL database and fixed-name credential Secrets. Do not
+delete the realm/database or rotate credentials as compensation. For an already
+healthy realm, upgrade reconciliation is non-destructive and remains active even
+when the one-shot marker matches. See
+`docs/keycloak-realm-bootstrap.md` for render, Job, marker, login, and cleanup
+checks.
+
 ## Why a new package is required
 
 The exact real 0.4.18 package rendered a valid forced-recovery Job, but its

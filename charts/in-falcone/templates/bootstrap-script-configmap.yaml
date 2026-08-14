@@ -120,9 +120,12 @@ data:
     ensure_keycloak_realm() {
       local token="$1"
       local status
-      status="$(curl -sS -o /tmp/keycloak-realm-check -w '%{http_code}' \
+      if ! status="$(curl -sS -o /tmp/keycloak-realm-check -w '%{http_code}' \
         -H "Authorization: Bearer $token" \
-        "$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID")"
+        "$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID")"; then
+        echo "[bootstrap] Keycloak realm check request failed for realm $KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
+        exit 1
+      fi
 
       if [ "$status" = "200" ]; then
         log "Keycloak realm $KEYCLOAK_REALM_ID already exists"
@@ -130,25 +133,87 @@ data:
       fi
 
       if [ "$status" != "404" ]; then
-        cat /tmp/keycloak-realm-check >&2 || true
-        echo "[bootstrap] unexpected status while checking realm: $status" >&2
+        echo "[bootstrap] unexpected status while checking realm: $status; target realm=$KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
         exit 1
       fi
 
-      status="$(curl -sS -o /tmp/keycloak-realm-create -w '%{http_code}' \
+      if ! status="$(curl -sS -o /tmp/keycloak-realm-create -w '%{http_code}' \
         -X POST \
         -H "Authorization: Bearer $token" \
         -H 'Content-Type: application/json' \
         --data @"$PAYLOAD_DIR/realm.json" \
-        "$KEYCLOAK_BASE_URL/admin/realms")"
+        "$KEYCLOAK_BASE_URL/admin/realms")"; then
+        echo "[bootstrap] Keycloak realm create request failed for realm $KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
+        exit 1
+      fi
 
       if [ "$status" != "201" ] && [ "$status" != "409" ]; then
-        cat /tmp/keycloak-realm-create >&2 || true
-        echo "[bootstrap] failed to create Keycloak realm; status=$status" >&2
+        echo "[bootstrap] failed to create Keycloak realm; status=$status; target realm=$KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
         exit 1
       fi
 
       log "ensured Keycloak realm $KEYCLOAK_REALM_DISPLAY_NAME"
+    }
+
+    # Keycloak 26 models these five switches directly on RealmRepresentation. The chart keeps the
+    # friendlier nested values API, while login.json is a minimal provider-compatible partial
+    # representation. Reconcile it on every run so an existing realm converges even when the
+    # create-only marker already matches. Never print the response body: a realm representation can
+    # contain administrator-managed metadata that is outside this bounded contract.
+    ensure_keycloak_login_settings() {
+      local token="$1"
+      local status
+      local update_response=/tmp/keycloak-login-update
+      local readback_response=/tmp/keycloak-login-readback
+
+      if [ ! -f "$PAYLOAD_DIR/login.json" ]; then
+        log "no Keycloak login-settings payload; leaving the realm settings unchanged"
+        return 0
+      fi
+
+      if ! status="$(curl -sS -o "$update_response" -w '%{http_code}' \
+        -X PUT \
+        -H "Authorization: Bearer $token" \
+        -H 'Content-Type: application/json' \
+        --data @"$PAYLOAD_DIR/login.json" \
+        "$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID" 2>/dev/null)"; then
+        rm -f "$update_response" "$readback_response"
+        echo "[bootstrap] Keycloak realm login update request failed for realm $KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
+        exit 1
+      fi
+
+      if [ "$status" != "200" ] && [ "$status" != "204" ]; then
+        rm -f "$update_response" "$readback_response"
+        echo "[bootstrap] failed to reconcile Keycloak realm login settings; status=$status; target realm=$KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
+        exit 1
+      fi
+
+      if ! status="$(curl -sS -o "$readback_response" -w '%{http_code}' \
+        -H "Authorization: Bearer $token" \
+        "$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID" 2>/dev/null)"; then
+        rm -f "$update_response" "$readback_response"
+        echo "[bootstrap] Keycloak realm login read-back request failed for realm $KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
+        exit 1
+      fi
+      if [ "$status" != "200" ]; then
+        rm -f "$update_response" "$readback_response"
+        echo "[bootstrap] failed to read back Keycloak realm login settings; status=$status; target realm=$KEYCLOAK_REALM_ID; correct or resolve the condition, then retry to fail forward safely" >&2
+        exit 1
+      fi
+
+      if ! jq -e --slurpfile desired "$PAYLOAD_DIR/login.json" '
+        . as $actual
+        | ($desired[0]) as $wanted
+        | ["loginWithEmailAllowed", "registrationAllowed", "rememberMe", "verifyEmail", "resetPasswordAllowed"]
+          | all(.[]; $actual[.] == $wanted[.])
+      ' "$readback_response" >/dev/null 2>&1; then
+        rm -f "$update_response" "$readback_response"
+        echo "[bootstrap] Keycloak realm login settings did not converge for realm $KEYCLOAK_REALM_ID; correct or resolve the drift, then retry to fail forward safely" >&2
+        exit 1
+      fi
+
+      rm -f "$update_response" "$readback_response"
+      log "reconciled Keycloak realm login settings"
     }
 
     # Relax the realm's Keycloak 26 declarative user profile so email/firstName/lastName are
@@ -511,6 +576,10 @@ data:
     }
 
     run_upgrade_reconciliation() {
+      local token
+      token="$(require_keycloak_token)"
+      ensure_keycloak_login_settings "$token"
+      unset token
 {{- if eq (toString (dig "config" "inline" "APISIX_STAND_ALONE" "false" .Values.apisix)) "true" }}
       # APISIX runs in standalone mode (APISIX_STAND_ALONE=true, the chart default): routes are
       # served from the mounted standalone config (apisix.yaml), and the admin API targeted below

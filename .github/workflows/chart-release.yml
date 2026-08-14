@@ -58,6 +58,11 @@ jobs:
           mkdir -p "$bin_dir"
           tar -xzf "$archive" -C "$bin_dir" kubeconform
           echo "$bin_dir" >>"$GITHUB_PATH"
+      - name: Install process sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          bwrap --version
       - name: Verify vendored dependencies
         run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority

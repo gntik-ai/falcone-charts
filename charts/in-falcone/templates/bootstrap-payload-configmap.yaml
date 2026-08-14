@@ -1,12 +1,12 @@
-{{- /* Brute-force detection (#668): `realm.bruteForce` is authored as a nested sub-block (so it can
-       carry comments + a single source of truth), but Keycloak's RealmRepresentation expects the
-       fields at the TOP level. Build the realm-create payload by lifting the bruteForce fields onto
-       the realm dict and dropping the nested key, then render. Also emit a standalone partial realm
-       rep `brute-force.json` for the idempotent ensure step (which retrofits an already-created
-       realm). */ -}}
-{{- $realm := omit .Values.bootstrap.oneShot.keycloak.realm "bruteForce" -}}
+{{- /* `realm.bruteForce` and `realm.login` are authored as nested chart configuration blocks, but
+       Keycloak 26 RealmRepresentation expects both groups of fields at the TOP level. Build the
+       create payload by lifting those provider fields and omitting the chart-only wrappers. Also
+       emit bounded partial representations for idempotent reconciliation of existing realms. */ -}}
+{{- $realm := omit .Values.bootstrap.oneShot.keycloak.realm "bruteForce" "login" -}}
 {{- $bruteForce := .Values.bootstrap.oneShot.keycloak.realm.bruteForce | default dict -}}
-{{- $realmPayload := merge (deepCopy $realm) $bruteForce -}}
+{{- $login := .Values.bootstrap.oneShot.keycloak.realm.login | default dict -}}
+{{- $realmPayload := merge (deepCopy $realm) (deepCopy $bruteForce) -}}
+{{- $realmPayload = merge $realmPayload (deepCopy $login) -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -29,6 +29,10 @@ data:
 {{- if $bruteForce }}
   brute-force.json: |
 {{ toPrettyJson (merge (dict "realm" $realm.realm) $bruteForce) | nindent 4 }}
+{{- end }}
+{{- if $login }}
+  login.json: |
+{{ toPrettyJson (merge (dict "realm" $realm.realm) (deepCopy $login)) | nindent 4 }}
 {{- end }}
 {{- if .Values.bootstrap.oneShot.keycloak.userProfile }}
   user-profile.json: |
