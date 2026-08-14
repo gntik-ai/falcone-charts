@@ -64,23 +64,110 @@ function parseRenderedDocuments(output) {
     .filter(Boolean);
 }
 
+function materializeKubeconformSchemaLocation(cache) {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'falcone-kubeconform-schemas-bbx-'),
+  );
+  let schemas = 0;
+  for (const entry of fs.readdirSync(cache, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const source = path.join(cache, entry.name);
+    let schema;
+    assert.doesNotThrow(() => {
+      schema = JSON.parse(fs.readFileSync(source, 'utf8'));
+    }, `kubeconform cache entry ${entry.name} must be valid JSON`);
+    const gvks = schema?.['x-kubernetes-group-version-kind'];
+    assert.ok(
+      Array.isArray(gvks) && gvks.length > 0,
+      `kubeconform cache entry ${entry.name} must declare a public Kubernetes GVK`,
+    );
+    for (const gvk of gvks) {
+      assert.match(gvk.kind ?? '', /^[A-Za-z][A-Za-z0-9]*$/);
+      assert.match(gvk.version ?? '', /^v[0-9][A-Za-z0-9]*$/);
+      assert.match(gvk.group ?? '', /^(?:[a-z0-9.-]+)?$/);
+      const group = gvk.group ? `${gvk.group.split('.')[0]}-` : '';
+      const target = path.join(
+        directory,
+        `${gvk.kind.toLowerCase()}-${group}${gvk.version}.json`,
+      );
+      if (fs.existsSync(target)) {
+        assert.equal(
+          sha256File(target),
+          sha256File(source),
+          `cached schemas disagree for ${gvk.group}/${gvk.version}, Kind=${gvk.kind}`,
+        );
+        continue;
+      }
+      try {
+        fs.linkSync(source, target);
+      } catch {
+        fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+      }
+      schemas += 1;
+    }
+  }
+  assert.ok(schemas > 0, 'KUBECONFORM_SCHEMA_CACHE_DIR must contain strict Kubernetes schemas');
+  return directory;
+}
+
 function assertKubeconformStrict(render) {
   assert.equal(render.status, 0, render.stderr);
-  const validation = spawnSync(
-    'kubeconform',
-    ['-strict', '-ignore-missing-schemas', '-summary'],
-    {
-      cwd: repoRoot,
-      input: render.stdout,
-      encoding: 'utf8',
-      maxBuffer: 32 * 1024 * 1024,
-    },
-  );
+  const args = ['-strict', '-ignore-missing-schemas'];
+  const configuredCache = process.env.KUBECONFORM_SCHEMA_CACHE_DIR;
+  let localSchemaDirectory;
+  if (configuredCache !== undefined) {
+    assert.ok(configuredCache.length > 0, 'KUBECONFORM_SCHEMA_CACHE_DIR must not be empty');
+    assert.ok(
+      path.isAbsolute(configuredCache),
+      'KUBECONFORM_SCHEMA_CACHE_DIR must be an absolute path',
+    );
+    const cache = fs.realpathSync(configuredCache);
+    assert.equal(
+      cache,
+      path.resolve(configuredCache),
+      'KUBECONFORM_SCHEMA_CACHE_DIR must resolve to its canonical path',
+    );
+    assert.ok(fs.statSync(cache).isDirectory(), 'KUBECONFORM_SCHEMA_CACHE_DIR must be a directory');
+    args.push('-cache', cache);
+    localSchemaDirectory = materializeKubeconformSchemaLocation(cache);
+    args.push(
+      '-schema-location',
+      `${localSchemaDirectory}/{{.ResourceKind}}{{.KindSuffix}}.json`,
+    );
+  }
+  args.push('-summary');
+  let validation;
+  try {
+    validation = spawnSync(
+      'kubeconform',
+      args,
+      {
+        cwd: repoRoot,
+        input: render.stdout,
+        encoding: 'utf8',
+        maxBuffer: 32 * 1024 * 1024,
+      },
+    );
+  } finally {
+    if (localSchemaDirectory !== undefined) {
+      assert.ok(
+        localSchemaDirectory.startsWith(
+          `${os.tmpdir()}${path.sep}falcone-kubeconform-schemas-bbx-`,
+        ),
+      );
+      fs.rmSync(localSchemaDirectory, { recursive: true, force: true });
+    }
+  }
   assert.equal(
     validation.status,
     0,
     `kubeconform strict rejected the public Helm render:\n${validation.stdout}${validation.stderr}`,
   );
+  const summary = validation.stdout.match(
+    /Summary:\s+\d+ resources found[\s\S]*?Valid:\s+(\d+), Invalid:\s+0, Errors:\s+0, Skipped:\s+(\d+)/,
+  );
+  assert.ok(summary, `kubeconform must report a strict validation summary:\n${validation.stdout}`);
+  assert.ok(Number(summary[1]) > 0, 'kubeconform must strictly validate known public resources');
 }
 
 function renderChartAtRevision(revision) {
@@ -355,14 +442,62 @@ function listTarEntries(target) {
     .filter(Boolean);
 }
 
-function dockerHubLayer(repository, digest, cacheDir) {
+function verifiedOciLayer(target, digest, size, label) {
+  assert.ok(fs.existsSync(target), `${label} is missing at ${target}`);
+  const stat = fs.statSync(target);
+  assert.ok(stat.isFile(), `${label} must be a regular file`);
+  assert.equal(stat.size, size, `${label} size does not match its manifest descriptor`);
+  assert.equal(sha256File(target), digest, `${label} digest does not match its manifest descriptor`);
+}
+
+function configuredOciCacheDirectory() {
+  const configured = process.env.TEMPORAL_OCI_CACHE_DIR;
+  if (configured === undefined) return undefined;
+  assert.ok(configured.length > 0, 'TEMPORAL_OCI_CACHE_DIR must not be empty');
+  assert.ok(path.isAbsolute(configured), 'TEMPORAL_OCI_CACHE_DIR must be an absolute path');
+  const cache = fs.realpathSync(configured);
+  assert.equal(
+    cache,
+    path.resolve(configured),
+    'TEMPORAL_OCI_CACHE_DIR must resolve to its canonical path',
+  );
+  assert.ok(fs.statSync(cache).isDirectory(), 'TEMPORAL_OCI_CACHE_DIR must be a directory');
+  return cache;
+}
+
+function dockerHubLayer(repository, digest, size, cacheDir) {
   assert.match(repository, /^[a-z0-9][a-z0-9._/-]+$/);
   assert.match(digest, /^sha256:[0-9a-f]{64}$/);
+  assert.ok(Number.isSafeInteger(size) && size > 0);
   assert.ok(cacheDir.startsWith(`${os.tmpdir()}${path.sep}falcone-temporal-oci-bbx-`));
   fs.mkdirSync(cacheDir, { recursive: true });
   const cached = path.join(cacheDir, `${digest.slice('sha256:'.length)}.tar.gz`);
-  if (fs.existsSync(cached) && sha256File(cached) === digest) return cached;
-  if (fs.existsSync(cached)) fs.unlinkSync(cached);
+  if (fs.existsSync(cached)) {
+    verifiedOciLayer(cached, digest, size, 'per-run OCI layer');
+    return cached;
+  }
+
+  const offlineCache = configuredOciCacheDirectory();
+  if (offlineCache !== undefined) {
+    const source = path.join(offlineCache, `${digest.slice('sha256:'.length)}.tar.gz`);
+    assert.ok(
+      fs.existsSync(source),
+      `offline OCI evidence ${digest} is missing; run prefetch-offline-evidence.mjs before disabling network`,
+    );
+    assert.equal(
+      fs.realpathSync(source),
+      source,
+      `offline OCI evidence ${digest} must be a real cache file, not a symlink`,
+    );
+    verifiedOciLayer(source, digest, size, `offline OCI evidence ${digest}`);
+    try {
+      fs.linkSync(source, cached);
+    } catch {
+      fs.copyFileSync(source, cached, fs.constants.COPYFILE_EXCL);
+    }
+    verifiedOciLayer(cached, digest, size, `per-run copy of OCI evidence ${digest}`);
+    return cached;
+  }
 
   const tokenResult = spawnSync(
     'curl',
@@ -389,8 +524,9 @@ function dockerHubLayer(repository, digest, cacheDir) {
     { encoding: 'utf8', maxBuffer: 1024 * 1024 },
   );
   assert.equal(fetchResult.status, 0, fetchResult.stderr);
-  assert.equal(sha256File(download), digest, `${repository} returned a non-matching OCI blob`);
+  verifiedOciLayer(download, digest, size, `${repository} downloaded OCI layer`);
   fs.renameSync(download, cached);
+  verifiedOciLayer(cached, digest, size, `${repository} cached OCI layer`);
   return cached;
 }
 
@@ -1644,7 +1780,7 @@ test('bbx-temporal-bootstrap-037: raw OCI layers reconstruct each final named us
       );
       let identityState = {};
       for (const layer of manifest.layers) {
-        const layerPath = dockerHubLayer(image.repository, layer.digest, cacheDir);
+        const layerPath = dockerHubLayer(image.repository, layer.digest, layer.size, cacheDir);
         assert.equal(sha256File(layerPath), layer.digest);
         assert.equal(fs.statSync(layerPath).size, layer.size);
         identityState = layerIdentityState(identityState, layerPath);
