@@ -9,7 +9,7 @@ EXPECTED_NAMESPACE="in-falcone-staging"
 EXPECTED_RELEASE="falcone"
 EXPECTED_SOURCE_REVISION="20"
 EXPECTED_SOURCE_CHART="in-falcone-0.4.1"
-EXPECTED_REPAIR_VERSION="0.4.18"
+EXPECTED_REPAIR_VERSION="0.4.19"
 EXPECTED_REPAIR_CHART="in-falcone-${EXPECTED_REPAIR_VERSION}"
 EXPECTED_PVC="falcone-postgresql-vector-data"
 EXPECTED_VECTOR_STATEFULSET="falcone-postgresql-vector"
@@ -29,6 +29,7 @@ backup_attestation=""
 parity_attestation=""
 phase_a_attestation=""
 package_digest=""
+authorization_consumed=false
 mutation_started=false
 render_file=""
 diff_file=""
@@ -71,9 +72,11 @@ cleanup() {
   if [[ -n "$chart_package_dir" && "$chart_package_dir" == "${TMPDIR:-/tmp}/falcone-repair-package."* ]]; then
     rm -rf "$chart_package_dir"
   fi
-  if ((rc != 0)) && [[ "$mutation_started" == true ]]; then
-    printf 'mutation_started=true\n' >&2
-    printf 'FORWARD_RECOVERY_REQUIRED\n' >&2
+  if ((rc != 0)) && [[ "$authorization_consumed" == true ]]; then
+    printf 'mutation_started=%s\n' "$mutation_started" >&2
+    if [[ "$mutation_started" == true ]]; then
+      printf 'FORWARD_RECOVERY_REQUIRED\n' >&2
+    fi
   fi
   exit "$rc"
 }
@@ -1199,8 +1202,9 @@ PY
       all(.items[]; any(.status.conditions[]?; .type == "Ready" and .status == "True"))
     end)' >/dev/null || die "LEGACY_CLUSTERSECRETSTORE_EXTERNALSECRET_DRIFT"
 
-  if [[ "$legacy_store_state" == "auth-policy-required" ]]; then
-    local retained_auth_jobs retained_digest12
+  # Every admitted exact-r24 Store/ExternalSecret precursor must cross the
+  # retained-Job history fence; Store readiness never bypasses retry evidence.
+  local retained_auth_jobs retained_digest12
     retained_digest12="${package_digest#sha256:}"
     retained_digest12="${retained_digest12:0:12}"
     retained_auth_jobs="$(kubectl -n secret-store get jobs.batch -o json)" || \
@@ -1208,8 +1212,9 @@ PY
     printf '%s' "$retained_auth_jobs" | jq -e \
       --arg package_digest "$package_digest" \
       --arg target_chart "$EXPECTED_REPAIR_CHART" \
+      --arg target_version "$EXPECTED_REPAIR_VERSION" \
       --arg digest12 "$retained_digest12" '
-      def exact_annotations($digest; $target):
+      def exact_anchor_annotations($digest; $target):
         {
           "helm.sh/hook": "post-install,post-upgrade",
           "helm.sh/hook-weight": "-3",
@@ -1218,19 +1223,44 @@ PY
           "in-falcone.io/recovery-target-chart": $target,
           "in-falcone.io/recovery-source-revision": "24"
         };
+      def exact_current_annotations($digest; $target; $version):
+        exact_anchor_annotations($digest; $target) + {
+          "falcone.gntik.ai/attested-chart-version": $version
+        };
       def exact_failed_job($name; $uid; $digest; $target):
         .apiVersion == "batch/v1"
         and .kind == "Job"
         and .metadata.name == $name
         and .metadata.namespace == "secret-store"
         and .metadata.uid == $uid
-        and .metadata.annotations == exact_annotations($digest; $target)
+        and .metadata.annotations == exact_anchor_annotations($digest; $target)
         and .status.failed == 1
+        and (.status.succeeded // 0) == 0
         and (.status.conditions | length) == 2
         and ([.status.conditions[].type] | sort) == ["Failed", "FailureTarget"]
         and all(.status.conditions[];
           .status == "True" and .reason == "BackoffLimitExceeded");
-      def exact_current_failed_job($digest; $target; $short_digest):
+      def exact_current_failed_state:
+        (
+          .status.failed == 1
+          and (.status.succeeded // 0) == 0
+          and (.status.conditions | length) == 2
+          and ([.status.conditions[].type] | sort) == ["Failed", "FailureTarget"]
+          and all(.status.conditions[];
+            .status == "True" and .reason == "BackoffLimitExceeded")
+        );
+      def exact_current_successful_state:
+        (
+          .status.succeeded == 1
+          and (.status.failed // 0) == 0
+          and (.status.conditions | length) == 2
+          and ([.status.conditions[].type] | sort) == ["Complete", "SuccessCriteriaMet"]
+          and all(.status.conditions[];
+            .status == "True" and .reason == "CompletionsReached")
+        );
+      def exact_current_terminal_state:
+        exact_current_failed_state or exact_current_successful_state;
+      def exact_current_job($digest; $target; $version; $short_digest):
         ("openbao-auth-reconcile-r24-" + $short_digest + "-") as $prefix
         | .apiVersion == "batch/v1"
         and .kind == "Job"
@@ -1240,50 +1270,48 @@ PY
         and .metadata.namespace == "secret-store"
         and (.metadata.uid | type == "string"
           and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
-        and .metadata.annotations == exact_annotations($digest; $target)
-        and .status.failed == 1
-        and (.status.conditions | length) == 2
-        and ([.status.conditions[].type] | sort) == ["Failed", "FailureTarget"]
-        and all(.status.conditions[];
-          .status == "True" and .reason == "BackoffLimitExceeded");
+        and .metadata.annotations == exact_current_annotations($digest; $target; $version)
+        and exact_current_terminal_state;
       [.items[] | select(.metadata.name | startswith("openbao-auth-reconcile-r24-"))] as $jobs
-      | ($jobs | length) >= 3
-      and ([$jobs[].metadata.name] | unique | length) == ($jobs | length)
-      and ([$jobs[].metadata.uid] | unique | length) == ($jobs | length)
-      and any($jobs[]; exact_failed_job(
-        "openbao-auth-reconcile-r24-859e037a14be-7v86n";
-        "352c1698-ac65-4af2-a25a-00bd183e9a11";
-        "sha256:859e037a14be87dce1419737b2bda09e9a66125cd0384f51b842e5f65eafbe70";
-        "in-falcone-0.4.14"))
-      and any($jobs[]; exact_failed_job(
-        "openbao-auth-reconcile-r24-10828ffdf9f1-f65tk";
-        "979dac0c-507c-4b19-9f07-2c5e98a66acc";
-        "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e";
-        "in-falcone-0.4.16"))
-      and any($jobs[]; exact_failed_job(
-        "openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw";
-        "c8fd1c27-f68b-4d33-b10f-3b832c741cd3";
-        "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328";
-        "in-falcone-0.4.17"))
-      and all($jobs[];
-        exact_failed_job(
-          "openbao-auth-reconcile-r24-859e037a14be-7v86n";
-          "352c1698-ac65-4af2-a25a-00bd183e9a11";
-          "sha256:859e037a14be87dce1419737b2bda09e9a66125cd0384f51b842e5f65eafbe70";
-          "in-falcone-0.4.14")
-        or exact_failed_job(
-          "openbao-auth-reconcile-r24-10828ffdf9f1-f65tk";
-          "979dac0c-507c-4b19-9f07-2c5e98a66acc";
-          "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e";
-          "in-falcone-0.4.16")
-        or exact_failed_job(
-          "openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw";
-          "c8fd1c27-f68b-4d33-b10f-3b832c741cd3";
-          "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328";
-          "in-falcone-0.4.17")
-        or exact_current_failed_job($package_digest; $target_chart; $digest12))' >/dev/null || \
-      die "REVISION24_AUTH_RECONCILE_HISTORY_DRIFT"
-  fi
+      | (
+          ($jobs | length) >= 3
+          and ([$jobs[].metadata.name] | unique | length) == ($jobs | length)
+          and ([$jobs[].metadata.uid] | unique | length) == ($jobs | length)
+          and any($jobs[]; exact_failed_job(
+            "openbao-auth-reconcile-r24-859e037a14be-7v86n";
+            "352c1698-ac65-4af2-a25a-00bd183e9a11";
+            "sha256:859e037a14be87dce1419737b2bda09e9a66125cd0384f51b842e5f65eafbe70";
+            "in-falcone-0.4.14"))
+          and any($jobs[]; exact_failed_job(
+            "openbao-auth-reconcile-r24-10828ffdf9f1-f65tk";
+            "979dac0c-507c-4b19-9f07-2c5e98a66acc";
+            "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e";
+            "in-falcone-0.4.16"))
+          and any($jobs[]; exact_failed_job(
+            "openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw";
+            "c8fd1c27-f68b-4d33-b10f-3b832c741cd3";
+            "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328";
+            "in-falcone-0.4.17"))
+          and all($jobs[];
+            exact_failed_job(
+              "openbao-auth-reconcile-r24-859e037a14be-7v86n";
+              "352c1698-ac65-4af2-a25a-00bd183e9a11";
+              "sha256:859e037a14be87dce1419737b2bda09e9a66125cd0384f51b842e5f65eafbe70";
+              "in-falcone-0.4.14")
+            or exact_failed_job(
+              "openbao-auth-reconcile-r24-10828ffdf9f1-f65tk";
+              "979dac0c-507c-4b19-9f07-2c5e98a66acc";
+              "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e";
+              "in-falcone-0.4.16")
+            or exact_failed_job(
+              "openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw";
+              "c8fd1c27-f68b-4d33-b10f-3b832c741cd3";
+              "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328";
+              "in-falcone-0.4.17")
+            or exact_current_job(
+              $package_digest; $target_chart; $target_version; $digest12))
+        ) as $valid
+      | $valid' >/dev/null || die "REVISION24_AUTH_RECONCILE_HISTORY_DRIFT"
 
   legacy_store_uid="$(printf '%s' "$store" | jq -r .metadata.uid)"
   legacy_store_resource_version="$(printf '%s' "$store" | jq -r .metadata.resourceVersion)"
@@ -1304,9 +1332,9 @@ PY
 
 run_revision24_pre_handoff_auth_reconcile() {
   [[ "$actual_revision" == 24 ]] || return 0
-  # The auth-first pre-handoff Job is enabled by the corrected 0.4.18 recovery
-  # package. Immutable 0.4.12 through 0.4.17 never completed live recovery.
-  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.18" ]] || return 0
+  # The auth-first pre-handoff Job is enabled by the corrected 0.4.19 recovery
+  # package. Immutable 0.4.12 through 0.4.18 never completed live recovery.
+  [[ "$EXPECTED_REPAIR_VERSION" == "0.4.19" ]] || return 0
 
   auth_job_file="$(mktemp "${TMPDIR:-/tmp}/falcone-revision24-auth-reconcile.XXXXXX")"
   helm template "$EXPECTED_RELEASE" "$chart_source" \
@@ -1351,17 +1379,18 @@ if (
     or metadata.get("name") != "openbao-auth-reconcile"
     or metadata.get("namespace") != "secret-store"
     or not re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
-    or target_chart != "in-falcone-0.4.18"
+    or target_chart != "in-falcone-0.4.19"
     or source_revision != "24"
 ):
     raise SystemExit(1)
 
 pod_spec = job.get("spec", {}).get("template", {}).get("spec", {})
+all_containers = pod_spec.get("containers", [])
 containers = [
-    container for container in pod_spec.get("containers", [])
+    container for container in all_containers
     if container.get("name") == "auth-metadata-reconciler"
 ]
-if len(containers) != 1:
+if len(all_containers) != 1 or len(containers) != 1:
     raise SystemExit(1)
 container = containers[0]
 script = "\n".join(str(argument) for argument in container.get("args", []))
@@ -1371,23 +1400,40 @@ mounts = {
 }
 volumes = {volume.get("name"): volume for volume in pod_spec.get("volumes", [])}
 force_marker = 'force_recovery_root="true"'
-source_marker = 'auth_source=recovery_root result=accepted'
 platform_policy_write = 'bao policy write platform /openbao-platform/platform.hcl'
 reconciler_policy_write = 'bao policy write auth-reconcile /openbao-auth-reconcile/auth-reconcile.hcl'
-first_role_write = 'bao write auth/kubernetes/role/openbao-init-role'
-canary_marker = 'bao write -format=json auth/kubernetes/login'
-terminal_marker = 'result=unchanged code=AUTH_METADATA_MATCHED canary=passed'
+init_role_write = 'bao write auth/kubernetes/role/openbao-init-role'
+reconciler_role_write = 'bao write auth/kubernetes/role/openbao-auth-reconcile-role'
+eso_role_write = 'bao write "auth/kubernetes/role/$role"'
+lookup_self = 'bao read -format=json auth/token/lookup-self'
+revoke_self = 'bao write -force auth/token/revoke-self'
+
+
+def unique_literal_position(value):
+    matches = list(re.finditer(re.escape(value), script))
+    if len(matches) != 1:
+        raise SystemExit(1)
+    return matches[0].start()
+
+
+def unique_pattern(pattern):
+    matches = list(re.finditer(pattern, script, re.MULTILINE))
+    if len(matches) != 1:
+        raise SystemExit(1)
+    return matches[0]
 
 
 def package_snapshot(target_path, delimiter, hash_variable):
-    match = re.search(
+    matches = list(re.finditer(
         rf"cat > {re.escape(target_path)} <<'{delimiter}'\n(.*?)\n{delimiter}\n",
         script,
         re.DOTALL,
-    )
-    digest = re.search(rf'{hash_variable}="([0-9a-f]{{64}})"', script)
-    if match is None or digest is None:
+    ))
+    digests = list(re.finditer(rf'{hash_variable}="([0-9a-f]{{64}})"', script))
+    if len(matches) != 1 or len(digests) != 1:
         raise SystemExit(1)
+    match = matches[0]
+    digest = digests[0]
     content = match.group(1) + "\n"
     if hashlib.sha256(content.encode("utf-8")).hexdigest() != digest.group(1):
         raise SystemExit(1)
@@ -1404,6 +1450,62 @@ reconciler_snapshot, reconciler_snapshot_index = package_snapshot(
     "FALCONE_AUTH_RECONCILE_POLICY_SNAPSHOT",
     "auth_reconcile_policy_sha256",
 )
+platform_hash_index = unique_literal_position(
+    "sha256sum /openbao-platform/platform.hcl"
+)
+reconciler_hash_index = unique_literal_position(
+    "sha256sum /openbao-auth-reconcile/auth-reconcile.hcl"
+)
+forced_source_match = unique_pattern(
+    r'^[ \t]*if \[ "\$force_recovery_root" = "true" \]; then\n'
+    r'^[ \t]*\[ -s /openbao-recovery/root-token \] '
+    r'\|\| fail AUTHENTICATION_UNAVAILABLE\n'
+    r'^[ \t]*BAO_TOKEN="\$\(cat /openbao-recovery/root-token\)"\n'
+    r'^[ \t]*auth_source=recovery_root\n'
+    r'^[ \t]*(?P<source>echo "auth_source=recovery_root result=accepted")[ \t]*$'
+)
+source_index = forced_source_match.start("source")
+platform_policy_index = unique_literal_position(platform_policy_write)
+reconciler_policy_index = unique_literal_position(reconciler_policy_write)
+init_role_index = unique_literal_position(init_role_write)
+reconciler_role_index = unique_literal_position(reconciler_role_write)
+eso_role_index = unique_literal_position(eso_role_write)
+semantic_canary_matches = list(re.finditer(
+    r'^[ \t]*canary_json="\$\('
+    r'bao write -format=json auth/kubernetes/login[ \t]*\\\n'
+    r'[ \t]*role="\$role"[ \t]+jwt="\$\(cat /canary/token\)"'
+    r'[ \t]+2>/dev/null[ \t]+\|\|[ \t]+true\)"[ \t]*$',
+    script,
+    re.MULTILINE,
+))
+if len(semantic_canary_matches) != 1:
+    raise SystemExit(1)
+canary_index = semantic_canary_matches[0].start()
+lookup_index = unique_literal_position(lookup_self)
+revoke_index = unique_literal_position(revoke_self)
+terminal_match = unique_pattern(
+    r'^[ \t]*if \[ "\$changed" = "true" \]; then\n'
+    r'^[ \t]*echo "result=changed code=AUTH_METADATA_CONVERGED canary=passed"\n'
+    r'^[ \t]*else\n'
+    r'^[ \t]*echo "result=unchanged code=AUTH_METADATA_MATCHED canary=passed"\n'
+    r'^[ \t]*fi[ \t]*$'
+)
+ordered_positions = [
+    platform_snapshot_index,
+    reconciler_snapshot_index,
+    platform_hash_index,
+    reconciler_hash_index,
+    source_index,
+    platform_policy_index,
+    reconciler_policy_index,
+    init_role_index,
+    reconciler_role_index,
+    eso_role_index,
+    canary_index,
+    lookup_index,
+    revoke_index,
+    terminal_match.start(),
+]
 if (
     'path "auth/token/lookup-self" {\n  capabilities = ["read"]\n}' not in platform_snapshot
     or 'path "auth/token/revoke-self" {\n  capabilities = ["update"]\n}' not in platform_snapshot
@@ -1415,19 +1517,10 @@ if (
     job.get("spec", {}).get("backoffLimit") != 0
     or pod_spec.get("restartPolicy") != "Never"
     or force_marker not in script
-    or source_marker not in script
-    or platform_policy_write not in script
-    or reconciler_policy_write not in script
-    or first_role_write not in script
-    or canary_marker not in script
-    or terminal_marker not in script
-    or platform_snapshot_index > reconciler_snapshot_index
-    or reconciler_snapshot_index > script.index(source_marker)
-    or script.index(source_marker) > script.index(platform_policy_write)
-    or script.index(platform_policy_write) > script.index(reconciler_policy_write)
-    or script.index(reconciler_policy_write) > script.index(first_role_write)
-    or script.index(first_role_write) > script.index(canary_marker)
-    or script.index(canary_marker) > script.index(terminal_marker)
+    or any(
+        left >= right
+        for left, right in zip(ordered_positions, ordered_positions[1:])
+    )
     or ("recovery", "/openbao-recovery") not in mounts
     or ("platform-policy", "/openbao-platform") not in mounts
     or ("auth-reconcile-policy", "/openbao-auth-reconcile") not in mounts
@@ -1448,13 +1541,12 @@ digest12 = package_digest.removeprefix("sha256:")[:12]
 metadata.pop("name")
 metadata["generateName"] = f"openbao-auth-reconcile-r24-{digest12}-"
 annotations = metadata.setdefault("annotations", {})
+annotations["falcone.gntik.ai/attested-chart-version"] = DoubleQuoted(
+    target_chart.removeprefix("in-falcone-")
+)
 annotations["in-falcone.io/recovery-package-digest"] = package_digest
 annotations["in-falcone.io/recovery-target-chart"] = target_chart
 annotations["in-falcone.io/recovery-source-revision"] = source_revision
-if "falcone.gntik.ai/attested-chart-version" in annotations:
-    annotations["falcone.gntik.ai/attested-chart-version"] = DoubleQuoted(
-        str(annotations["falcone.gntik.ai/attested-chart-version"])
-    )
 
 with open(path, "w", encoding="utf-8") as stream:
     yaml.safe_dump_all([job], stream, explicit_start=True, sort_keys=False)
@@ -1464,6 +1556,7 @@ PY
   digest12="${package_digest#sha256:}"
   digest12="${digest12:0:12}"
   expected_job_prefix="job.batch/openbao-auth-reconcile-r24-${digest12}-"
+  mutation_started=true
   auth_job_ref="$(kubectl -n secret-store create -f "$auth_job_file" -o name)" || \
     die "REVISION24_AUTH_RECONCILE_CREATE_FAILED"
   auth_job_suffix="${auth_job_ref#"$expected_job_prefix"}"
@@ -1480,14 +1573,14 @@ PY
   auth_log="$(kubectl -n secret-store logs "$auth_job_ref")" || \
     die "REVISION24_AUTH_RECONCILE_LOG_UNAVAILABLE"
   auth_source_lines="$(printf '%s\n' "$auth_log" | grep '^auth_source=' || true)"
-  [[ "$auth_source_lines" == "auth_source=recovery_root result=accepted" ]] || \
-    die "REVISION24_AUTH_RECONCILE_EVIDENCE_DRIFT"
   terminal_lines="$(printf '%s\n' "$auth_log" | grep '^result=' || true)"
   case "$terminal_lines" in
     "result=changed code=AUTH_METADATA_CONVERGED canary=passed"|\
     "result=unchanged code=AUTH_METADATA_MATCHED canary=passed") ;;
     *) die "REVISION24_AUTH_RECONCILE_EVIDENCE_DRIFT" ;;
   esac
+  [[ "$auth_source_lines" == "auth_source=recovery_root result=accepted" ]] || \
+    die "REVISION24_AUTH_RECONCILE_EVIDENCE_DRIFT"
   printf 'revision24-auth-reconcile=validated chart=%s job=%s recovery-root=pre-handoff-only canary=passed\n' \
     "$EXPECTED_REPAIR_CHART" "$auth_job_ref"
 }
@@ -1806,9 +1899,13 @@ if [[ "$mode" == phase-a ]]; then
     expected_confirmation="${EXPECTED_CONTEXT}/${EXPECTED_NAMESPACE}/${EXPECTED_RELEASE}@${EXPECTED_SOURCE_REVISION}/${EXPECTED_SOURCE_CHART}->${EXPECTED_REPAIR_CHART}/${package_digest}"
   fi
   [[ "$confirm_target" == "$expected_confirmation" ]] || die "JIT_TARGET_CONFIRMATION_REQUIRED expected=${expected_confirmation}"
+  authorization_consumed=true
+  printf 'authorization_consumed=true\n'
   owner_before="$(owner_metadata)"
-  mutation_started=true
   run_revision24_pre_handoff_auth_reconcile
+  if [[ "$actual_revision" != 24 ]]; then
+    mutation_started=true
+  fi
   apply_legacy_clustersecretstore_handoff
   adopt_falcone_external_secrets true
   helm upgrade "$EXPECTED_RELEASE" "$chart_source" --version "$EXPECTED_REPAIR_VERSION" --namespace "$EXPECTED_NAMESPACE" --timeout 20m "${phase_a_args[@]}"
@@ -1879,6 +1976,8 @@ expected_pending_pods="$(printf '%s' "$pods_json" | jq --arg claim "$EXPECTED_PV
 [[ "$expected_pending_pods" -le 1 ]] || die "PVC_REFERENCED_BY_UNEXPECTED_POD count=${expected_pending_pods}"
 [[ "$confirm_pvc" == "${EXPECTED_PVC}/${actual_pvc_uid}" ]] || die "JIT_PVC_CONFIRMATION_REQUIRED expected=${EXPECTED_PVC}/${actual_pvc_uid}"
 
+authorization_consumed=true
+printf 'authorization_consumed=true\n'
 mutation_started=true
 kubectl -n "$EXPECTED_NAMESPACE" scale statefulset "$EXPECTED_VECTOR_STATEFULSET" --replicas=0
 if [[ "$expected_pending_pods" == 1 ]]; then

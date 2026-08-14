@@ -1,5 +1,5 @@
 /**
- * Public black-box contracts for the 0.4.18 revision-24 forced-root repair.
+ * Public black-box contracts for the 0.4.19 revision-24 forced-root repair.
  * The tests use only rendered Helm resources and the distributed recovery CLI.
  */
 import assert from 'node:assert/strict'
@@ -18,6 +18,7 @@ import {
   yamlDocuments,
 } from '../fixtures/blackbox.mjs'
 import {
+  makeRevision24Impossible018JobEvidence,
   makeRevision24FailedRetryJob,
   revision24ForcedRecoveryRootContract,
   runRevision24ForcedRecoveryRoot,
@@ -138,7 +139,7 @@ function createdAuthJobs(result) {
   })
 }
 
-function assertFresh018Job(job, context) {
+function assertFresh019Job(job, context) {
   assert.ok(job, `${context} did not create a fresh recovery Job`)
   assert.match(job.ref, new RegExp(
     `^${revision24ForcedRecoveryRootContract.jobPrefix.replaceAll('.', '\\.')}[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`,
@@ -147,7 +148,7 @@ function assertFresh018Job(job, context) {
     job.generateName,
     revision24ForcedRecoveryRootContract.jobPrefix.replace(/^job\.batch\//, ''),
   )
-  assert.equal(job.chart, 'in-falcone-0.4.18')
+  assert.equal(job.chart, 'in-falcone-0.4.19')
   assert.equal(job.digest, revision24ForcedRecoveryRootContract.packageDigest)
   assert.equal(job.sourceRevision, '24')
   assert.equal(job.allowRecoveryRoot, 'true')
@@ -194,7 +195,7 @@ test('isolated r24 recovery forces root even when the dedicated login would succ
   const podSpec = job.spec?.template?.spec
   const container = reconciler(job)
   const script = (container.args ?? []).join('\n')
-  assert.equal(publicChartVersion(), '0.4.18', 'the corrected public package must be 0.4.18')
+  assert.equal(publicChartVersion(), '0.4.19', 'the corrected public package must be 0.4.19')
   assert.match(script, /force_recovery_root=(?:"true"|true)/)
   assert.ok(
     podSpec?.volumes?.some((volume) => volume.secret?.secretName === 'openbao-recovery'),
@@ -256,14 +257,14 @@ test('routine auth reconciliation stays dedicated-only and normal upgrades never
   )
 })
 
-// bbx-repair-staging-084 | fn-revision24-forced-root-job-evidence | OpenSpec #### Scenario: Revision-24 recovery binds forced-root evidence to a fresh 0.4.18 Job
-test('r24 binds forced-root evidence to one fresh 0.4.18 Job and fails closed on bad evidence', async (t) => {
+// bbx-repair-staging-084 | fn-revision24-forced-root-job-evidence | OpenSpec #### Scenario: Revision-24 recovery binds forced-root evidence to a fresh 0.4.19 Job
+test('r24 binds forced-root evidence to one fresh 0.4.19 Job and fails closed on bad evidence', async (t) => {
   await t.test('exact marker and terminal success complete recovery', () => {
     const result = runRevision24ForcedRecoveryRoot()
     assert.equal(result.status, 0, `exact forced-root recovery failed:\n${combined(result)}\n${result.trace}`)
     const jobs = createdAuthJobs(result)
     assert.equal(jobs.length, 1)
-    assertFresh018Job(jobs[0], 'exact forced-root recovery')
+    assertFresh019Job(jobs[0], 'exact forced-root recovery')
     const renderCalls = traceLines(result).filter((line) =>
       /^helm template\b/.test(line) && /openbao-auth-reconcile-job\.yaml/.test(line)
     )
@@ -291,12 +292,12 @@ test('r24 binds forced-root evidence to one fresh 0.4.18 Job and fails closed on
 })
 
 // bbx-repair-staging-085 | fn-revision24-retained-auth-failure-chain | OpenSpec #### Scenario: Revision-24 recovery admits only the exact retained 0.4.14, 0.4.16, and 0.4.17 failure chain
-test('r24 preserves the retained failed Jobs and targets only 0.4.18', async (t) => {
+test('r24 preserves the retained failed Jobs and targets only 0.4.19', async (t) => {
   await t.test('exact retained 0.4.14, 0.4.16, and 0.4.17 failure chain creates a new identity', () => {
     const result = runRevision24ForcedRecoveryRoot()
     assert.equal(result.status, 0, `exact retained chain failed:\n${combined(result)}\n${result.trace}`)
     const [fresh] = createdAuthJobs(result)
-    assertFresh018Job(fresh, 'retained failure chain')
+    assertFresh019Job(fresh, 'retained failure chain')
     const lines = traceLines(result)
     const historyRead = lines.findIndex((line) =>
       line === 'kubectl -n secret-store get jobs.batch -o json'
@@ -325,10 +326,10 @@ test('r24 preserves the retained failed Jobs and targets only 0.4.18', async (t)
     assert.match(result.trace, /kubectl .*\bget externalsecrets(?:\.external-secrets\.io)?\b/)
     const upgrades = traceLines(result).filter((line) => line.startsWith('helm upgrade '))
     assert.equal(upgrades.length, 2)
-    assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.18(?:\s|$)/.test(line)))
+    assert.ok(upgrades.every((line) => /(?:^|\s)--version 0\.4\.19(?:\s|$)/.test(line)))
   })
 
-  await t.test('exact prior 0.4.18 failures remain evidence while a fresh identity runs', () => {
+  await t.test('exact prior 0.4.19 failures remain evidence while a fresh identity runs', () => {
     const priorJobs = [
       makeRevision24FailedRetryJob({
         suffix: 'prior1',
@@ -347,10 +348,10 @@ test('r24 preserves the retained failed Jobs and targets only 0.4.18', async (t)
     assert.equal(
       result.status,
       0,
-      `exact prior 0.4.18 failures were rejected:\n${combined(result)}\n${result.trace}`,
+      `exact prior 0.4.19 failures were rejected:\n${combined(result)}\n${result.trace}`,
     )
     const [fresh] = createdAuthJobs(result)
-    assertFresh018Job(fresh, 'retry-safe retained chain')
+    assertFresh019Job(fresh, 'retry-safe retained chain')
     for (const prior of priorJobs) {
       assert.notEqual(fresh.ref, prior.ref, `fresh recovery reused ${prior.ref}`)
       assert.doesNotMatch(
@@ -358,7 +359,7 @@ test('r24 preserves the retained failed Jobs and targets only 0.4.18', async (t)
         new RegExp(
           `kubectl .*\\b(?:wait|logs|delete|apply)\\b.*${prior.ref.replaceAll('.', '\\.')}\\b`,
         ),
-        `recovery reused or mutated prior 0.4.18 evidence ${prior.ref}`,
+        `recovery reused or mutated prior 0.4.19 evidence ${prior.ref}`,
       )
     }
   })
@@ -412,50 +413,53 @@ test('r24 preserves the retained failed Jobs and targets only 0.4.18', async (t)
     ['0.4.16 condition status', (fixture) => {
       fixture.authRecovery.staleJobs[1].object.status.conditions[1].status = 'False'
     }],
-    ['0.4.18 bad name suffix', (fixture) => {
+    ['impossible pre-create 0.4.18 Job', (fixture) => {
+      fixture.authRecovery.staleJobs.push(makeRevision24Impossible018JobEvidence())
+    }],
+    ['0.4.19 bad name suffix', (fixture) => {
       fixture.authRecovery.staleJobs.push(makeRevision24FailedRetryJob({suffix: 'bad_suffix'}))
     }],
-    ['0.4.18 missing UID', (fixture) => {
+    ['0.4.19 missing UID', (fixture) => {
       const retry = makeRevision24FailedRetryJob()
       delete retry.object.metadata.uid
       fixture.authRecovery.staleJobs.push(retry)
     }],
-    ['0.4.18 invalid UID', (fixture) => {
+    ['0.4.19 invalid UID', (fixture) => {
       fixture.authRecovery.staleJobs.push(makeRevision24FailedRetryJob({uid: 'not-a-uuid'}))
     }],
-    ['0.4.18 duplicate UID', (fixture) => {
+    ['0.4.19 duplicate UID', (fixture) => {
       fixture.authRecovery.staleJobs.push(makeRevision24FailedRetryJob({
         uid: fixture.authRecovery.staleJobs[1].object.metadata.uid,
       }))
     }],
-    ['0.4.18 package digest', (fixture) => {
+    ['0.4.19 package digest', (fixture) => {
       const retry = makeRevision24FailedRetryJob()
       retry.object.metadata.annotations['in-falcone.io/recovery-package-digest'] =
         `sha256:${'dead'.repeat(16)}`
       fixture.authRecovery.staleJobs.push(retry)
     }],
-    ['0.4.18 target chart', (fixture) => {
+    ['0.4.19 target chart', (fixture) => {
       const retry = makeRevision24FailedRetryJob()
       retry.object.metadata.annotations['in-falcone.io/recovery-target-chart'] =
         'in-falcone-0.4.17'
       fixture.authRecovery.staleJobs.push(retry)
     }],
-    ['0.4.18 missing hook annotation', (fixture) => {
+    ['0.4.19 missing hook annotation', (fixture) => {
       const retry = makeRevision24FailedRetryJob()
       delete retry.object.metadata.annotations['helm.sh/hook-weight']
       fixture.authRecovery.staleJobs.push(retry)
     }],
-    ['0.4.18 failed count', (fixture) => {
+    ['0.4.19 failed count', (fixture) => {
       const retry = makeRevision24FailedRetryJob()
       retry.object.status.failed = 2
       fixture.authRecovery.staleJobs.push(retry)
     }],
-    ['0.4.18 terminal conditions', (fixture) => {
+    ['0.4.19 terminal conditions', (fixture) => {
       const retry = makeRevision24FailedRetryJob()
       retry.object.status.conditions[0].type = 'FailurePending'
       fixture.authRecovery.staleJobs.push(retry)
     }],
-    ['0.4.18 duplicate name', (fixture) => {
+    ['0.4.19 duplicate name', (fixture) => {
       fixture.authRecovery.staleJobs.push(
         makeRevision24FailedRetryJob({
           suffix: 'duplicate1',
@@ -498,5 +502,25 @@ test('r24 preserves the retained failed Jobs and targets only 0.4.18', async (t)
     assert.match(combined(result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
     assert.doesNotMatch(result.trace, /kubectl .*\bcreate\b.*openbao-auth-reconcile/)
     assertSecretSafe(result, 'published failed 0.4.17 target')
+  })
+
+  await t.test('published pre-create 0.4.18 is rejected without inventing a Job anchor', () => {
+    const result = runRevision24ForcedRecoveryRoot({
+      targetVersion: revision24ForcedRecoveryRootContract.publishedPreCreate018Version,
+      packageDigest: revision24ForcedRecoveryRootContract.publishedPreCreate018Digest,
+    })
+    assert.notEqual(result.status, 0, '0.4.18 unexpectedly remained an accepted target')
+    assert.equal(result.mutations, '', `0.4.18 target mutated:\n${result.mutations}`)
+    assert.match(combined(result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
+    assert.doesNotMatch(result.trace, /kubectl .*\bcreate\b.*openbao-auth-reconcile/)
+    assert.equal(
+      revision24ForcedRecoveryRootContract.retainedJobs.some((job) =>
+        job.metadata?.annotations?.['in-falcone.io/recovery-target-chart'] ===
+          'in-falcone-0.4.18'
+      ),
+      false,
+      'pre-create 0.4.18 must never become a retained Job anchor',
+    )
+    assertSecretSafe(result, 'published pre-create 0.4.18 target')
   })
 })

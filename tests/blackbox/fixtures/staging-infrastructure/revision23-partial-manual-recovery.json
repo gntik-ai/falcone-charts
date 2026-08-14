@@ -1,6 +1,6 @@
 {
-  "targetVersion": "0.4.18",
-  "targetChart": "in-falcone-0.4.18",
+  "targetVersion": "0.4.19",
+  "targetChart": "in-falcone-0.4.19",
   "packageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "renderedApisixPodSecurityContext": {
     "fsGroup": 1001,
@@ -137,8 +137,8 @@
   },
   "revision24GlobalWait": {
     "enabled": false,
-    "targetVersion": "0.4.18",
-    "targetChart": "in-falcone-0.4.18",
+    "targetVersion": "0.4.19",
+    "targetChart": "in-falcone-0.4.19",
     "packageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "release": {
       "name": "falcone",
@@ -1276,8 +1276,112 @@
     ],
     "staleJobs": [
       {
-        "ref": "job.batch/openbao-auth-reconcile-r24-041404140414-old01",
-        "status": "Failed"
+        "ref": "job.batch/openbao-auth-reconcile-r24-859e037a14be-7v86n",
+        "status": "Failed",
+        "object": {
+          "apiVersion": "batch/v1",
+          "kind": "Job",
+          "metadata": {
+            "name": "openbao-auth-reconcile-r24-859e037a14be-7v86n",
+            "namespace": "secret-store",
+            "uid": "352c1698-ac65-4af2-a25a-00bd183e9a11",
+            "annotations": {
+              "in-falcone.io/recovery-package-digest": "sha256:859e037a14be87dce1419737b2bda09e9a66125cd0384f51b842e5f65eafbe70",
+              "in-falcone.io/recovery-target-chart": "in-falcone-0.4.14",
+              "in-falcone.io/recovery-source-revision": "24",
+              "helm.sh/hook": "post-install,post-upgrade",
+              "helm.sh/hook-weight": "-3",
+              "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+            }
+          },
+          "status": {
+            "failed": 1,
+            "conditions": [
+              {
+                "type": "FailureTarget",
+                "status": "True",
+                "reason": "BackoffLimitExceeded"
+              },
+              {
+                "type": "Failed",
+                "status": "True",
+                "reason": "BackoffLimitExceeded"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "ref": "job.batch/openbao-auth-reconcile-r24-10828ffdf9f1-f65tk",
+        "status": "Failed",
+        "object": {
+          "apiVersion": "batch/v1",
+          "kind": "Job",
+          "metadata": {
+            "name": "openbao-auth-reconcile-r24-10828ffdf9f1-f65tk",
+            "namespace": "secret-store",
+            "uid": "979dac0c-507c-4b19-9f07-2c5e98a66acc",
+            "annotations": {
+              "in-falcone.io/recovery-package-digest": "sha256:10828ffdf9f134501f32af35d96e61c3db33f6071bb0bc015fc2ceac0c3b025e",
+              "in-falcone.io/recovery-target-chart": "in-falcone-0.4.16",
+              "in-falcone.io/recovery-source-revision": "24",
+              "helm.sh/hook": "post-install,post-upgrade",
+              "helm.sh/hook-weight": "-3",
+              "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+            }
+          },
+          "status": {
+            "failed": 1,
+            "conditions": [
+              {
+                "type": "FailureTarget",
+                "status": "True",
+                "reason": "BackoffLimitExceeded"
+              },
+              {
+                "type": "Failed",
+                "status": "True",
+                "reason": "BackoffLimitExceeded"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "ref": "job.batch/openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw",
+        "status": "Failed",
+        "object": {
+          "apiVersion": "batch/v1",
+          "kind": "Job",
+          "metadata": {
+            "name": "openbao-auth-reconcile-r24-4cd761dd8b0a-qjnfw",
+            "namespace": "secret-store",
+            "uid": "c8fd1c27-f68b-4d33-b10f-3b832c741cd3",
+            "annotations": {
+              "in-falcone.io/recovery-package-digest": "sha256:4cd761dd8b0a855cdae29a8f808382333918beb9ab7d0b485dffaaf81a677328",
+              "in-falcone.io/recovery-target-chart": "in-falcone-0.4.17",
+              "in-falcone.io/recovery-source-revision": "24",
+              "helm.sh/hook": "post-install,post-upgrade",
+              "helm.sh/hook-weight": "-3",
+              "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+            }
+          },
+          "status": {
+            "failed": 1,
+            "conditions": [
+              {
+                "type": "FailureTarget",
+                "status": "True",
+                "reason": "BackoffLimitExceeded"
+              },
+              {
+                "type": "Failed",
+                "status": "True",
+                "reason": "BackoffLimitExceeded"
+              }
+            ]
+          }
+        }
       }
     ]
   },

@@ -1,5 +1,5 @@
 /**
- * Public black-box contracts for the 0.4.18 revision-24 package-bound policy repair.
+ * Public black-box contracts for the 0.4.19 revision-24 package-bound policy repair.
  * The tests inspect only Helm-rendered resources and execute the distributed recovery CLI.
  */
 import assert from 'node:assert/strict'
@@ -25,7 +25,8 @@ import {
   yamlDocuments,
 } from '../fixtures/blackbox.mjs'
 import {
-  makeRevision24Failed018RetryJob,
+  makeRevision24Impossible018JobEvidence,
+  makeRevision24Failed019RetryJob,
   revision24DigestBoundPolicyContract,
   runRevision24DigestBoundPolicyRecovery,
 } from '../fixtures/staging-infrastructure/revision23-partial-manual-recovery-tools.mjs'
@@ -177,8 +178,8 @@ function createdAuthJobs(result) {
   })
 }
 
-function assertFresh018Job(job, context) {
-  assert.ok(job, `${context} did not create a fresh 0.4.18 Job`)
+function assertFresh019Job(job, context) {
+  assert.ok(job, `${context} did not create a fresh 0.4.19 Job`)
   assert.match(job.ref, new RegExp(
     `^${revision24DigestBoundPolicyContract.jobPrefix.replaceAll('.', '\\.')}[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`,
   ))
@@ -186,7 +187,7 @@ function assertFresh018Job(job, context) {
     job.generateName,
     revision24DigestBoundPolicyContract.jobPrefix.replace(/^job\.batch\//, ''),
   )
-  assert.equal(job.chart, 'in-falcone-0.4.18')
+  assert.equal(job.chart, 'in-falcone-0.4.19')
   assert.equal(job.digest, revision24DigestBoundPolicyContract.packageDigest)
   assert.equal(job.sourceRevision, '24')
   assert.equal(job.allowRecoveryRoot, 'true')
@@ -278,13 +279,13 @@ test('routine upgrade remains dedicated-only without recovery credentials or pol
 })
 
 // bbx-repair-staging-090 | fn-revision24-digest-bound-policy-history | OpenSpec #### Scenario: Revision-24 recovery admits only the exact retained 0.4.14, 0.4.16, and 0.4.17 failure chain
-test('r24 requires exact .14/.16/.17 anchors, permits exact .18 failures, and targets only .18', async (t) => {
-  await t.test('exact anchors with no prior .18 attempt create one fresh digest-bound Job', () => {
+test('r24 requires exact .14/.16/.17 anchors, permits exact .19 failures, and targets only .19', async (t) => {
+  await t.test('exact anchors with no prior .19 attempt create one fresh digest-bound Job', () => {
     const result = runRevision24DigestBoundPolicyRecovery()
-    assert.equal(result.status, 0, `exact 0.4.18 recovery failed:\n${combined(result)}\n${result.trace}`)
+    assert.equal(result.status, 0, `exact 0.4.19 recovery failed:\n${combined(result)}\n${result.trace}`)
     const jobs = createdAuthJobs(result)
     assert.equal(jobs.length, 1)
-    assertFresh018Job(jobs[0], 'exact retained chain')
+    assertFresh019Job(jobs[0], 'exact retained chain')
     const historyRead = traceLines(result).findIndex((line) =>
       line === 'kubectl -n secret-store get jobs.batch -o json'
     )
@@ -302,13 +303,13 @@ test('r24 requires exact .14/.16/.17 anchors, permits exact .18 failures, and ta
     }
   })
 
-  await t.test('zero to many exact failed .18 Jobs are retained and never reused', () => {
+  await t.test('zero to many exact failed .19 Jobs are retained and never reused', () => {
     const prior = [
-      makeRevision24Failed018RetryJob({
+      makeRevision24Failed019RetryJob({
         suffix: 'prior1',
         uid: '00000000-0000-4000-8000-000000000118',
       }),
-      makeRevision24Failed018RetryJob({
+      makeRevision24Failed019RetryJob({
         suffix: 'prior2',
         uid: '00000000-0000-4000-8000-000000000218',
       }),
@@ -316,9 +317,9 @@ test('r24 requires exact .14/.16/.17 anchors, permits exact .18 failures, and ta
     const result = runRevision24DigestBoundPolicyRecovery({
       mutatePrecursor: (fixture) => fixture.authRecovery.staleJobs.push(...structuredClone(prior)),
     })
-    assert.equal(result.status, 0, `exact 0.4.18 retry history failed:\n${combined(result)}\n${result.trace}`)
+    assert.equal(result.status, 0, `exact 0.4.19 retry history failed:\n${combined(result)}\n${result.trace}`)
     const [fresh] = createdAuthJobs(result)
-    assertFresh018Job(fresh, '0.4.18 retry')
+    assertFresh019Job(fresh, '0.4.19 retry')
     for (const retained of prior) {
       assert.notEqual(fresh.ref, retained.ref)
       assert.doesNotMatch(
@@ -342,20 +343,23 @@ test('r24 requires exact .14/.16/.17 anchors, permits exact .18 failures, and ta
     ['0.4.17 terminal condition', (fixture) => {
       fixture.authRecovery.staleJobs[2].object.status.conditions[0].reason = 'DeadlineExceeded'
     }],
-    ['0.4.18 name', (fixture) => {
-      fixture.authRecovery.staleJobs.push(makeRevision24Failed018RetryJob({ suffix: 'bad_suffix' }))
+    ['impossible pre-create 0.4.18 Job', (fixture) => {
+      fixture.authRecovery.staleJobs.push(makeRevision24Impossible018JobEvidence())
     }],
-    ['0.4.18 UID', (fixture) => {
-      fixture.authRecovery.staleJobs.push(makeRevision24Failed018RetryJob({ uid: 'not-a-uuid' }))
+    ['0.4.19 name', (fixture) => {
+      fixture.authRecovery.staleJobs.push(makeRevision24Failed019RetryJob({ suffix: 'bad_suffix' }))
     }],
-    ['0.4.18 digest', (fixture) => {
-      const retry = makeRevision24Failed018RetryJob()
+    ['0.4.19 UID', (fixture) => {
+      fixture.authRecovery.staleJobs.push(makeRevision24Failed019RetryJob({ uid: 'not-a-uuid' }))
+    }],
+    ['0.4.19 digest', (fixture) => {
+      const retry = makeRevision24Failed019RetryJob()
       retry.object.metadata.annotations['in-falcone.io/recovery-package-digest'] =
         `sha256:${'dead'.repeat(16)}`
       fixture.authRecovery.staleJobs.push(retry)
     }],
-    ['0.4.18 status', (fixture) => {
-      const retry = makeRevision24Failed018RetryJob()
+    ['0.4.19 status', (fixture) => {
+      const retry = makeRevision24Failed019RetryJob()
       retry.object.status.failed = 2
       fixture.authRecovery.staleJobs.push(retry)
     }],
@@ -378,5 +382,24 @@ test('r24 requires exact .14/.16/.17 anchors, permits exact .18 failures, and ta
     assert.doesNotMatch(result.trace, /kubectl .*\bcreate\b.*openbao-auth-reconcile/)
   })
 
-  assert.equal(publicChartVersion(), '0.4.18', 'the corrected public package target must be 0.4.18')
+  await t.test('published pre-create target 0.4.18 is rejected before mutation', () => {
+    const result = runRevision24DigestBoundPolicyRecovery({
+      targetVersion: revision24DigestBoundPolicyContract.publishedPreCreate018Version,
+      packageDigest: revision24DigestBoundPolicyContract.publishedPreCreate018Digest,
+    })
+    assert.notEqual(result.status, 0, '0.4.18 unexpectedly remained an accepted target')
+    assert.equal(result.mutations, '', `0.4.18 target mutated:\n${result.mutations}`)
+    assert.match(combined(result), /JIT_TARGET_CONFIRMATION_REQUIRED/)
+    assert.doesNotMatch(result.trace, /kubectl .*\bcreate\b.*openbao-auth-reconcile/)
+    assert.equal(
+      revision24DigestBoundPolicyContract.retainedJobs.some((job) =>
+        job.metadata?.annotations?.['in-falcone.io/recovery-target-chart'] ===
+          'in-falcone-0.4.18'
+      ),
+      false,
+      'pre-create 0.4.18 must never become a retained Job anchor',
+    )
+  })
+
+  assert.equal(publicChartVersion(), '0.4.19', 'the corrected public package target must be 0.4.19')
 })

@@ -1,7 +1,7 @@
-# Staging infrastructure repair (chart 0.4.18)
+# Staging infrastructure repair (chart 0.4.19)
 
 Verified source baseline: `gntik-ai/falcone-charts` commit
-`e05f9e8cea4c4cc80573bc7ef0693fb42d47cd07`, 2026-08-09. Upgrade anchor:
+`c7cd7bbde9b41f0c218f77c4c43c6923c9272739`, 2026-08-10. Upgrade anchor:
 Helm release `falcone`, revision 20, chart 0.4.1, Kubernetes context `default`,
 namespace `in-falcone-staging`. This page is for P18 release engineers, P3 SREs,
 P4/P10 read-only auditors, and P17 documentation-only responders. P8/P9/P12
@@ -10,7 +10,7 @@ acceptance gates.
 
 ## Status, outcome, and exclusions
 
-Chart 0.4.18 carries the prior repair chain and repins all six first-party images to
+Chart 0.4.19 carries the prior repair chain and repins all six first-party images to
 Falcone main `d9cd0f6b56a4f8241e39d5336f3a7505afcdb9cc`, published by successful
 `release-images` run `31337244501` as tag `0.6.6-main-d9cd0f6b`. Chart 0.4.6
 corrected the dependency-version boundary
@@ -84,8 +84,8 @@ already-desired self-token-policy failure.
 The authorized 0.4.16 attempt then created
 `openbao-auth-reconcile-r24-10828ffdf9f1-f65tk`, but a successful dedicated
 login prevented the recovery-root branch and platform policy write from running.
-That Job failed and Helm remained r24/0.4.11. Chart 0.4.18 preserves the
-0.4.14, 0.4.16 and 0.4.17 failed Jobs as exact public evidence, forces recovery-root
+That Job failed and Helm remained r24/0.4.11. Chart 0.4.17 preserves the
+0.4.14 and 0.4.16 failed Jobs as exact public evidence, forces recovery-root
 authentication only in the isolated r24 Job, and rejects any other retained-Job
 chain before mutation.
 The forced 0.4.17 Job
@@ -94,13 +94,23 @@ successful policy writes, but it mounted the canonical policy ConfigMaps from
 the still-live 0.4.11 release. Its ESO token therefore retained the old platform
 HCL and lookup-self still returned 403. Chart 0.4.18 corrects that package/live
 source mismatch; 0.4.17 is evidence, not a retry or rollback target.
+The exact real packaged 0.4.18 recovery then consumed its one-use JIT but failed
+the distributed CLI guard with `REVISION24_AUTH_RECONCILE_RENDER_DRIFT` before
+`kubectl create`. The rendered Job was valid; the guard selected the earlier
+dedicated `login_json` command because it searched for the first generic OpenBao
+login substring instead of the later `canary_json` assignment. No 0.4.18 Job,
+store patch, owner patch, Helm operation, or new release revision occurred.
+Chart 0.4.19 is a new immutable package that fixes that proof boundary. It
+requires a newly published digest, fresh evidence and a fresh one-use JIT; the
+consumed 0.4.18 authorization cannot be reused.
 For packaged r22/r23/r24 delegation the forward-recovery wrapper launches the
 package-local repair script through `bash`; operators do not need to change the
 0644 mode produced by chart extraction. The r24 auth-only render explicitly uses
 `helm template --is-upgrade ... --show-only` so the chart's upgrade-only
-adoption/recovery validation is enforced before the first mutation. A render
-failure remains `REVISION24_AUTH_RECONCILE_RENDER_FAILED`; do not chmod package
-contents, bypass validation, or fall back to charts 0.4.13 or 0.4.14.
+adoption/recovery validation is enforced before the first mutation. Helm render
+failure remains `REVISION24_AUTH_RECONCILE_RENDER_FAILED`; semantic or structural
+drift is `REVISION24_AUTH_RECONCILE_RENDER_DRIFT`. Do not chmod package contents,
+bypass validation, or fall back to charts 0.4.13 through 0.4.18.
 It consumes (but never adopts) an administrator-owned
 External Secrets Operator, converts OpenBao Kubernetes auth to its rotating
 pod-local reviewer identity, fixes FerretDB's non-root init identity and rollout,
@@ -286,7 +296,7 @@ cluster-scoped objects. It never reads a Helm release manifest or Secret data.
 Before apply, create two separate, current, metadata-only JSON attestations:
 
 - `Revision20BackupEvidence` identifies exact context/namespace/release,
-  revision 20, chart 0.4.1, target repair chart 0.4.18, published package digest,
+  revision 20, chart 0.4.1, target repair chart 0.4.19, published package digest,
   a non-secret backup reference, `verified: true`, `observedAt`, and
   `validUntil`;
 - `Revision20ParityEvidence` binds the same target and package digest to a
@@ -294,7 +304,7 @@ Before apply, create two separate, current, metadata-only JSON attestations:
 
 Opaque strings are not apply evidence. Expired, malformed, reused, differently
 targeted, or package-mismatched attestations fail before mutation.
-For a real apply the tool pulls chart 0.4.18 from
+For a real apply the tool pulls chart 0.4.19 from
 `oci://ghcr.io/gntik-ai/charts/in-falcone`, verifies the registry-reported digest
 against both attestations, and renders/applies that extracted artifact and its
 own staging profile. It does not apply an unbound checkout after merely comparing
@@ -308,14 +318,14 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --phase-a --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.18/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@20/in-falcone-0.4.1->in-falcone-0.4.19/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 For the admitted failed 0.4.8 attempt, the same two evidence documents must be
-retargeted to the published 0.4.18 digest and the one-use confirmation is instead:
+retargeted to the published 0.4.19 digest and the one-use confirmation is instead:
 
 ```text
-default/in-falcone-staging/falcone@22/in-falcone-0.4.8->in-falcone-0.4.18/sha256:PUBLISHED_PACKAGE_DIGEST
+default/in-falcone-staging/falcone@22/in-falcone-0.4.8->in-falcone-0.4.19/sha256:PUBLISHED_PACKAGE_DIGEST
 ```
 
 For revision 23, preflight additionally requires the exact public history chain:
@@ -342,7 +352,7 @@ single key and digest above are revalidated, and no other named-user error may
 exist in any namespace. Any different patch, mount, UID/GID, owner, count,
 status, ConfigMap content or global error fails before render or mutation.
 
-Revision-23 apply uses fresh backup/parity attestations bound to chart 0.4.18 and
+Revision-23 apply uses fresh backup/parity attestations bound to chart 0.4.19 and
 the published package digest, plus this exact one-use confirmation:
 
 ```bash
@@ -350,7 +360,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
   --apply \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
-  --confirm-target 'default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.18/sha256:PUBLISHED_PACKAGE_DIGEST'
+  --confirm-target 'default/in-falcone-staging/falcone@23/in-falcone-0.4.9->in-falcone-0.4.19/sha256:PUBLISHED_PACKAGE_DIGEST'
 ```
 
 Because revision 23 is itself a failed Phase-A attempt, forward recovery
@@ -383,14 +393,27 @@ metadata and requires the exact retained r24 auth anchors from 0.4.14, 0.4.16
 and 0.4.17.
 Their names, UIDs, package/target/source and hook annotations, `failed=1`, and
 exactly two uniquely typed `FailureTarget` and `Failed` conditions, both
-`True/BackoffLimitExceeded`, must match the release notes. Condition order and
-messages are not fixed.
+`True/BackoffLimitExceeded`, must match the release notes; `succeeded` is absent
+or zero. Each anchor has exactly six annotations: three provenance and three
+Helm hooks. Condition order and messages are not fixed.
 Resource versions and timestamps remain dynamic. A retry may add only a fully
-attested failed Job for the current 0.4.18 digest: the digest-prefixed generated
-name has a valid suffix, the UID is a unique UUID, the six provenance/hook
-annotations are exact, and failed count/conditions match the anchors. All names
-and UIDs are unique. Missing anchors or any other metadata/status history drift
-reports `REVISION24_AUTH_RECONCILE_HISTORY_DRIFT` before mutation.
+attested terminal Job for the current 0.4.19 digest: the digest-prefixed
+generated name has a valid suffix, the UID is a unique UUID, and exactly seven
+annotations are present—the six provenance/hooks plus the quoted
+`falcone.gntik.ai/attested-chart-version=0.4.19`. Its status is exactly one of:
+Failed with `failed=1`, `succeeded` absent or zero, and only
+`Failed`+`FailureTarget` `True/BackoffLimitExceeded`; or Kubernetes v1.36
+Successful with `succeeded=1`, `failed` absent or zero, and only
+`Complete`+`SuccessCriteriaMet` `True/CompletionsReached`. All names and UIDs are
+unique. Missing anchors or any other metadata/status history drift reports
+`REVISION24_AUTH_RECONCILE_HISTORY_DRIFT` before mutation. Because the
+0.4.18 failure was pre-create, any Job name, generated prefix, target annotation,
+or alleged anchor for 0.4.18 is unexpected history and fails the same gate.
+The history fence runs after Store and fourteen-ExternalSecret precursor
+validation on every admitted exact r24 retry, regardless of Store state. In
+particular, Store `Ready`/`complete` after a Successful auth Job and downstream
+failure still requires the history read and strict validation before a new
+create; no admitted Store state bypasses the fence.
 Any history, resource, owner, spec, UID, resourceVersion, count, condition or
 identity drift fails before mutation.
 
@@ -402,7 +425,23 @@ does not attempt the otherwise successful dedicated login. The forced Job does
 not mount either canonical policy ConfigMap. Instead, the same Helm helpers that
 render those ConfigMaps embed the exact platform and auth-reconcile HCL into the
 package Job; it writes those bytes into private `emptyDir` snapshots and verifies
-their rendered SHA-256 values before authentication. It loads the mounted recovery token directly,
+their rendered SHA-256 values before authentication. Before create, the 0.4.19
+guard requires exactly one semantic command substitution assigned to
+`canary_json` whose command is
+`bao write -format=json auth/kubernetes/login`, whose role is exactly
+`role="$role"`, and whose JWT is read only from `/canary/token`. The earlier
+dedicated `login_json` branch remains present but cannot satisfy this match. A
+missing, duplicated, renamed, differently roled or differently sourced canary
+fails `REVISION24_AUTH_RECONCILE_RENDER_DRIFT`.
+
+The same guard captures unique anchors and requires strict order: platform and
+auth-reconcile snapshot materialization, both SHA-256 checks, the accepted
+recovery-root source, platform policy, auth-reconcile policy, bootstrap role,
+reconciler role, ESO role, semantic canary, lookup-self, revoke-self, and the
+two-result terminal block. It continues to require one Job and one reconciler
+container, `restartPolicy: Never`, `backoffLimit: 0`, exact policy content,
+private `emptyDir` mounts, the recovery mount, and no canonical policy ConfigMap
+mount. It loads the mounted recovery token directly,
 emits the credential-silent marker
 `auth_source=recovery_root result=accepted`, writes the platform snapshot and
 then auth-reconcile snapshot, and only then changes or validates roles and the
@@ -417,13 +456,17 @@ terminal Pod/container log for diagnosis. It never replaces that evidence with
 an automatic restart or replacement attempt.
 The CLI converts only the Job's execution metadata to
 `generateName: openbao-auth-reconcile-r24-<digest12>-`. The attempt is annotated
-with the complete package digest, target chart and source revision. The CLI uses
+with the quoted attested chart version, complete package digest, target chart
+and source revision. The CLI uses
 `kubectl create -o name`, validates the single generated `job.batch/...` ref,
 waits on that exact ref for `Complete` for at most five minutes (the Job itself
 has a 300-second active deadline), reads only that ref's log, and accepts exactly
 one forced-root source marker plus one `changed/CONVERGED` or
 `unchanged/MATCHED` terminal line with `canary=passed`.
-It emits no credential and reads no Secret. Failure or log drift stops before
+The source marker must be exactly
+`auth_source=recovery_root result=accepted` in the freshly created Job's log on
+every attempt, even when history already contains a Successful current-package
+Job. It emits no credential and reads no Secret. Failure or log drift stops before
 store, ExternalSecret, or Helm mutation. Failed attempts remain available as
 evidence. A retry repeats package and live preflight, creates a new generated
 identity, and never reapplies, deletes, waits on, or reads a stale Job, including
@@ -438,11 +481,21 @@ JSON patch with UID and resourceVersion tests to remove only
 patches the already-desired precursor. It never reads a Secret or patches
 the administrator-owned ESO release. The store and all
 fourteen ExternalSecrets must become Ready before Helm starts. Revision-24 apply
-uses fresh 0.4.18-bound backup/parity evidence and:
+uses fresh 0.4.19-bound backup/parity evidence and:
 
 ```text
-default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.18/sha256:PUBLISHED_PACKAGE_DIGEST
+default/in-falcone-staging/falcone@24/in-falcone-0.4.11->in-falcone-0.4.19/sha256:PUBLISHED_PACKAGE_DIGEST
 ```
+
+Acceptance of that exact confirmation consumes the one-use authorization and
+prints `authorization_consumed=true`. Pull, render and guard remain read-only.
+For any rejection before create, expected failure evidence includes
+`mutation_started=false` and omits `FORWARD_RECOVERY_REQUIRED`; the live
+r24/0.4.11 state needs no restoration, but another attempt still needs a fresh
+JIT. Immediately before invoking `kubectl create`, the CLI records
+`mutation_started=true`. A create error or lost response is therefore treated
+as potentially accepted by the API server and emits `FORWARD_RECOVERY_REQUIRED`,
+as does every later failure.
 
 Before the first mutation the recovery tool parses the rendered APISIX
 Deployment and requires pod and container UID/GID 636:636 plus the exact mount.
@@ -468,7 +521,7 @@ fourteen unique named ExternalSecrets Ready, FerretDB 2/2, and at least two
 Ready endpoints. Phase A does not delete or change the PVC.
 
 Create a fresh `StagingPhaseAAttestation` from that final metadata-only result.
-It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.18,
+It binds the original 20/0.4.1 source, the actual current revision, chart 0.4.19,
 the same package digest, recovery-root disabled, auth unchanged/canary passed,
 store/ExternalSecret/FerretDB health, owner-inventory digest, image-set digest,
 and a short `observedAt`/`validUntil` window. Phase B rejects a missing, stale,
@@ -501,7 +554,7 @@ charts/in-falcone/migrations/revision-20-repair.sh \
   --backup-attestation /secure/path/revision20-backup.json \
   --parity-attestation /secure/path/revision20-parity.json \
   --phase-a-attestation /secure/path/phase-a.json \
-  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.18/sha256:PUBLISHED_PACKAGE_DIGEST' \
+  --confirm-target 'default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.19/sha256:PUBLISHED_PACKAGE_DIGEST' \
   --pvc-uid PVC-UID-FROM-PREFLIGHT \
   --confirm-pvc falcone-postgresql-vector-data/PVC-UID-FROM-PREFLIGHT
 ```
@@ -536,10 +589,13 @@ cookies, Secret data, request bodies, tenant identifiers, and unseal material.
 
 ## Failure, retry, rollback, and forward recovery
 
-Before Phase A, revision 20 is untouched. Every mutation path is forward-only:
-the tools do not use atomic upgrade or any rollback operation. A failed apply
-prints `FORWARD_RECOVERY_REQUIRED`; inspect metadata, correct the cause, and
-reapply the same package. For revision 24, do not delete or reuse a retained
+Before Phase A, revision 20 is untouched. The published 0.4.18 failure occurred
+before create, so it needs no cluster rollback and produced no Job or Helm
+revision. Once 0.4.19 may attempt create, every mutation path is forward-only:
+the tools do not use atomic upgrade or any rollback operation. A post-create
+failed apply prints `FORWARD_RECOVERY_REQUIRED`; inspect metadata, correct the
+cause, obtain fresh target-bound authorization as required, and reapply the same
+0.4.19 package. For revision 24, do not delete or reuse a retained
 `openbao-auth-reconcile-r24-*` Job: the retry creates a new digest-prefixed
 identity and binds its wait/log evidence only to the ref returned by that create.
 Revision 20 reintroduces owner overlap, static reviewer expiry, Ferret init
@@ -556,7 +612,7 @@ charts/in-falcone/migrations/revision-20-forward-recovery.sh \
 ```
 
 After review, its apply requires the actual
-`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.18/sha256:PUBLISHED_PACKAGE_DIGEST`
+`default/in-falcone-staging/falcone@CURRENT_REVISION/in-falcone-0.4.19/sha256:PUBLISHED_PACKAGE_DIGEST`
 confirmation. It revalidates the same three attestations, secret-suppressed
 semantic owner diff, and external owner metadata. It never deletes a PVC or
 returns to an old release; it reapplies canonical values and waits for exact
@@ -581,9 +637,14 @@ static rendering is not live proof.
 ## Compatibility and provenance
 
 The supported repair anchor is chart 0.4.1 revision 20, including the admitted
-failed 0.4.8/r22, 0.4.9/r23 and admitted 0.4.11/r24 chain, to chart 0.4.18,
+failed 0.4.8/r22, 0.4.9/r23 and admitted 0.4.11/r24 chain, to chart 0.4.19,
 `appVersion` 0.3.1. Chart 0.4.2 already supplied externally managed ESO packaging
 but not the reviewer, FerretDB, storage, or image repair. Exact package/OCI digest
 must be recorded after the merged source commit is built; source rendering alone
 cannot predict that published digest. Production, HA, OpenShift, and other source
 revisions do not inherit local-path and require their own proven storage choice.
+Relative to immutable 0.4.18, 0.4.19 changes no values/schema, ServiceAccount or
+RBAC, image, probe, network policy, storage, credential, application API, or
+tenant/workspace contract. Source/package checks for this uncommitted maker diff
+were run on 2026-08-13; record the final reviewed commit and published OCI digest
+here before release or environment authorization.
