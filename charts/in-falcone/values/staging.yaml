@@ -77,10 +77,38 @@ apisix:
       configMap:
         name: falcone-apisix-standalone
         defaultMode: 420
+    - name: apisix-config-source
+      configMap:
+        name: falcone-apisix-config-file
+        defaultMode: 420
+    - name: apisix-config-overlay
+      emptyDir: {}
   extraVolumeMounts:
     - name: standalone-config
       mountPath: /usr/local/apisix/conf/apisix.yaml
       subPath: apisix.yaml
+    - name: apisix-config-overlay
+      mountPath: /usr/local/apisix/conf/config.yaml
+      subPath: config.yaml
+  initContainers:
+    - name: apisix-config-overlay
+      image: docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -ec
+        - cp /config-src/config.yaml /apisix-config-overlay/config.yaml
+      volumeMounts:
+        - name: apisix-config-source
+          mountPath: /config-src
+          readOnly: true
+        - name: apisix-config-overlay
+          mountPath: /apisix-config-overlay
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
 controlPlane:
   replicas: 2
   # Immutable first-party image digests from the approved staging rollout. Helm becomes

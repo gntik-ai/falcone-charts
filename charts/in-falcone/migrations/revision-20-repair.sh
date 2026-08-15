@@ -351,6 +351,10 @@ validate_revision23_named_user_failure() {
             "name": "standalone-config",
             "mountPath": "/usr/local/apisix/conf/apisix.yaml",
             "subPath": "apisix.yaml"
+          }, {
+            "name": "apisix-config-overlay",
+            "mountPath": "/usr/local/apisix/conf/config.yaml",
+            "subPath": "config.yaml"
           }]) ] | length) == 1
       and ($deployment.spec.template.spec.volumes // []) == [{
         "name": "standalone-config",
@@ -358,6 +362,15 @@ validate_revision23_named_user_failure() {
           "name": "falcone-apisix-standalone",
           "defaultMode": 420
         }
+      }, {
+        "name": "apisix-config-source",
+        "configMap": {
+          "name": "falcone-apisix-config-file",
+          "defaultMode": 420
+        }
+      }, {
+        "name": "apisix-config-overlay",
+        "emptyDir": {}
       }];
     def exact_observability:
       one("falcone-observability") as $deployment
@@ -521,6 +534,10 @@ validate_revision23_named_user_failure() {
           "name": "standalone-config",
           "mountPath": "/usr/local/apisix/conf/apisix.yaml",
           "subPath": "apisix.yaml"
+        }, {
+          "name": "apisix-config-overlay",
+          "mountPath": "/usr/local/apisix/conf/config.yaml",
+          "subPath": "config.yaml"
         }])] | length) == 1
       and (.spec.volumes // []) == [{
         "name": "standalone-config",
@@ -528,6 +545,15 @@ validate_revision23_named_user_failure() {
           "name": "falcone-apisix-standalone",
           "defaultMode": 420
         }
+      }, {
+        "name": "apisix-config-source",
+        "configMap": {
+          "name": "falcone-apisix-config-file",
+          "defaultMode": 420
+        }
+      }, {
+        "name": "apisix-config-overlay",
+        "emptyDir": {}
       }]
       and ([.status.containerStatuses[]? | select(.name == "apisix"
         and .image == $apisix_image
@@ -1029,16 +1055,16 @@ if container.get("securityContext") != {
     "runAsUser": 636,
 }:
     raise SystemExit(1)
-if container.get("volumeMounts") != [{
-    "mountPath": "/usr/local/apisix/conf/apisix.yaml",
-    "name": "standalone-config",
-    "subPath": "apisix.yaml",
-}]:
+if container.get("volumeMounts") != [
+    {"mountPath": "/usr/local/apisix/conf/apisix.yaml", "name": "standalone-config", "subPath": "apisix.yaml"},
+    {"mountPath": "/usr/local/apisix/conf/config.yaml", "name": "apisix-config-overlay", "subPath": "config.yaml"},
+]:
     raise SystemExit(1)
-if pod_spec.get("volumes") != [{
-    "configMap": {"defaultMode": 420, "name": "falcone-apisix-standalone"},
-    "name": "standalone-config",
-}]:
+if pod_spec.get("volumes") != [
+    {"configMap": {"defaultMode": 420, "name": "falcone-apisix-standalone"}, "name": "standalone-config"},
+    {"configMap": {"defaultMode": 420, "name": "falcone-apisix-config-file"}, "name": "apisix-config-source"},
+    {"emptyDir": {}, "name": "apisix-config-overlay"},
+]:
     raise SystemExit(1)
 PY
       printf 'APISIX_RENDER_CONVERGENCE_DRIFT reason=contract\n' >&2
