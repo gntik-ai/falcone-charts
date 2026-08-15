@@ -351,36 +351,13 @@ validate_revision23_named_user_failure() {
             "name": "standalone-config",
             "mountPath": "/usr/local/apisix/conf/apisix.yaml",
             "subPath": "apisix.yaml"
-          }, {
-            "name": "apisix-config-overlay",
-            "mountPath": "/usr/local/apisix/conf/config.yaml",
-            "subPath": "config.yaml"
           }]) ] | length) == 1
-      and ([$deployment.spec.template.spec.initContainers[]? | select(
-        .name == "apisix-config-overlay"
-        and .image == "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
-        and .command == ["/bin/sh", "-ec", "cp /config-src/config.yaml /apisix-config-overlay/config.yaml"]
-        and .securityContext.allowPrivilegeEscalation == false
-        and .securityContext.capabilities.drop == ["ALL"]
-        and (.volumeMounts // []) == [
-          {"name": "apisix-config-source", "mountPath": "/config-src", "readOnly": true},
-          {"name": "apisix-config-overlay", "mountPath": "/apisix-config-overlay"}
-        ])] | length) == 1
       and ($deployment.spec.template.spec.volumes // []) == [{
         "name": "standalone-config",
         "configMap": {
           "name": "falcone-apisix-standalone",
           "defaultMode": 420
         }
-      }, {
-        "name": "apisix-config-source",
-        "configMap": {
-          "name": "falcone-apisix-config-file",
-          "defaultMode": 420
-        }
-      }, {
-        "name": "apisix-config-overlay",
-        "emptyDir": {}
       }];
     def exact_observability:
       one("falcone-observability") as $deployment
@@ -544,42 +521,13 @@ validate_revision23_named_user_failure() {
           "name": "standalone-config",
           "mountPath": "/usr/local/apisix/conf/apisix.yaml",
           "subPath": "apisix.yaml"
-        }, {
-          "name": "apisix-config-overlay",
-          "mountPath": "/usr/local/apisix/conf/config.yaml",
-          "subPath": "config.yaml"
         }])] | length) == 1
-      and ([.status.initContainerStatuses[]? | select(
-        .name == "apisix-config-overlay"
-        and .image == "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
-        and .ready == true
-        and .state.terminated.reason == "Completed"
-        and .state.terminated.exitCode == 0)] | length) == 1
-      and ([.spec.initContainers[]? | select(
-        .name == "apisix-config-overlay"
-        and .image == "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
-        and .command == ["/bin/sh", "-ec", "cp /config-src/config.yaml /apisix-config-overlay/config.yaml"]
-        and .securityContext.allowPrivilegeEscalation == false
-        and .securityContext.capabilities.drop == ["ALL"]
-        and (.volumeMounts // []) == [
-          {"name": "apisix-config-source", "mountPath": "/config-src", "readOnly": true},
-          {"name": "apisix-config-overlay", "mountPath": "/apisix-config-overlay"}
-        ])] | length) == 1
       and (.spec.volumes // []) == [{
         "name": "standalone-config",
         "configMap": {
           "name": "falcone-apisix-standalone",
           "defaultMode": 420
         }
-      }, {
-        "name": "apisix-config-source",
-        "configMap": {
-          "name": "falcone-apisix-config-file",
-          "defaultMode": 420
-        }
-      }, {
-        "name": "apisix-config-overlay",
-        "emptyDir": {}
       }]
       and ([.status.containerStatuses[]? | select(.name == "apisix"
         and .image == $apisix_image
@@ -1846,16 +1794,6 @@ validate_revision23_numeric_user_convergence() {
         "mountPath": "/usr/local/apisix/conf/config.yaml",
         "subPath": "config.yaml"
       }])] | length) == 1
-    and ([.spec.template.spec.initContainers[]? | select(
-      .name == "apisix-config-overlay"
-      and .image == "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
-      and .command == ["/bin/sh", "-ec", "cp /config-src/config.yaml /apisix-config-overlay/config.yaml"]
-      and .securityContext.allowPrivilegeEscalation == false
-      and .securityContext.capabilities.drop == ["ALL"]
-      and (.volumeMounts // []) == [
-        {"name": "apisix-config-source", "mountPath": "/config-src", "readOnly": true},
-        {"name": "apisix-config-overlay", "mountPath": "/apisix-config-overlay"}
-      ])] | length) == 1
     and (.spec.template.spec.volumes // []) == [{
       "name": "standalone-config",
       "configMap": {"name": "falcone-apisix-standalone", "defaultMode": 420}
@@ -1904,15 +1842,6 @@ health_gate() {
   health_render="$(mktemp "${TMPDIR:-/tmp}/falcone-revision20-health.XXXXXX")"
   render_and_validate_images "$health_render" || failed=1
   rm -f "$health_render"
-  config_file_cm="$(kubectl -n "$EXPECTED_NAMESPACE" get configmap falcone-apisix-config-file -o json 2>/dev/null)" || config_file_cm=""
-  printf '%s' "${config_file_cm:-}" | jq -e --arg namespace "$EXPECTED_NAMESPACE" '
-    .metadata.name == "falcone-apisix-config-file"
-    and .metadata.namespace == $namespace
-    and (.data | keys) == ["config.yaml"]
-    and (.data["config.yaml"] | type == "string" and contains("enable_export_server: false"))' >/dev/null || {
-    printf 'APISIX_CONFIG_FILE_CONTENT_DRIFT\n' >&2
-    failed=1
-  }
   if [[ "$revision23_state" == partial-manual-recovery || "$revision24_state" == global-wait-timeout ]]; then
     validate_revision23_numeric_user_convergence || {
       printf 'REVISION23_NUMERIC_USER_CONVERGENCE_DRIFT\n' >&2

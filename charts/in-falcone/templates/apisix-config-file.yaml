@@ -15,6 +15,7 @@
   dedicated export server lets the public-api plugin serve the metrics on the
   gateway port that Falcone actually scrapes.
 */ -}}
+{{- if .Values.apisix.initContainers }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -36,3 +37,4 @@ data:
     plugin_attr:
       prometheus:
         enable_export_server: false
+{{- end }}

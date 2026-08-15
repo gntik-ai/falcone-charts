@@ -1623,6 +1623,29 @@ const liveApisixDeployment = () => {
   deployment.spec.template.spec.containers[0].securityContext = structuredClone(
     fixture.convergedApisixContainerSecurityContext
   );
+  deployment.spec.template.spec.containers[0].volumeMounts = [
+    {
+      name: "standalone-config",
+      mountPath: "/usr/local/apisix/conf/apisix.yaml",
+      subPath: "apisix.yaml"
+    },
+    {
+      name: "apisix-config-overlay",
+      mountPath: "/usr/local/apisix/conf/config.yaml",
+      subPath: "config.yaml"
+    }
+  ];
+  deployment.spec.template.spec.volumes = [
+    {
+      name: "standalone-config",
+      configMap: { name: "falcone-apisix-standalone", defaultMode: 420 }
+    },
+    {
+      name: "apisix-config-source",
+      configMap: { name: "falcone-apisix-config-file", defaultMode: 420 }
+    },
+    { name: "apisix-config-overlay", emptyDir: {} }
+  ];
   return deployment;
 };
 
@@ -1868,6 +1891,25 @@ spec:
         runAsUser: ${securityContext.runAsUser}
         seccompProfile:
           type: ${securityContext.seccompProfile.type}
+      initContainers:
+        - name: apisix-config-overlay
+          image: docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - cp /config-src/config.yaml /apisix-config-overlay/config.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: apisix-config-source
+              mountPath: /config-src
+              readOnly: true
+            - name: apisix-config-overlay
+              mountPath: /apisix-config-overlay
       containers:
         - name: apisix
           image: "docker.io/apache/apisix:3.10.0-debian"
@@ -1876,6 +1918,9 @@ spec:
             - mountPath: /usr/local/apisix/conf/apisix.yaml
               name: standalone-config
               subPath: apisix.yaml
+            - mountPath: /usr/local/apisix/conf/config.yaml
+              name: apisix-config-overlay
+              subPath: config.yaml
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -1889,7 +1934,13 @@ spec:
         - configMap:
             defaultMode: 420
             name: falcone-apisix-standalone
-          name: standalone-config`;
+          name: standalone-config
+        - configMap:
+            defaultMode: 420
+            name: falcone-apisix-config-file
+          name: apisix-config-source
+        - emptyDir: {}
+          name: apisix-config-overlay`;
   if (fixture.renderedChartVariants.misplacedApisixContract) {
     apisixDocument = `---
 apiVersion: apps/v1
