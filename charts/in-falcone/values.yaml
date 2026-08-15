@@ -85,6 +85,11 @@ global:
       backupVerified: false
       parityVerified: false
       backupReference: ""
+      # Exceptional chart-only delivery may explicitly suppress the applying
+      # authority replay. The adapter binds waiverReference to an audited
+      # Option-B document; backup/parity remain false and are never inferred.
+      authorityReplayEnabled: true
+      waiverReference: ""
     # PostgreSQL 16 client used by the one-shot authority bootstrap and the
     # control-plane init gate. Registry rewriting applies in Harbor/air-gap
     # profiles; the application image contract remains independently pinned.

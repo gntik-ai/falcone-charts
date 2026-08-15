@@ -1029,16 +1029,31 @@ if container.get("securityContext") != {
     "runAsUser": 636,
 }:
     raise SystemExit(1)
-if container.get("volumeMounts") != [{
-    "mountPath": "/usr/local/apisix/conf/apisix.yaml",
-    "name": "standalone-config",
-    "subPath": "apisix.yaml",
+if container.get("volumeMounts") != [
+    {"mountPath": "/usr/local/apisix/conf/apisix.yaml", "name": "standalone-config", "subPath": "apisix.yaml"},
+    {"mountPath": "/usr/local/apisix/conf/config.yaml", "name": "apisix-config-overlay", "subPath": "config.yaml"},
+]:
+    raise SystemExit(1)
+if pod_spec.get("initContainers") != [{
+    "command": ["/bin/sh", "-ec", "cp /config-src/config.yaml /apisix-config-overlay/config.yaml"],
+    "image": "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0",
+    "imagePullPolicy": "IfNotPresent",
+    "name": "apisix-config-overlay",
+    "securityContext": {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+    },
+    "volumeMounts": [
+        {"mountPath": "/config-src", "name": "apisix-config-source", "readOnly": True},
+        {"mountPath": "/apisix-config-overlay", "name": "apisix-config-overlay"},
+    ],
 }]:
     raise SystemExit(1)
-if pod_spec.get("volumes") != [{
-    "configMap": {"defaultMode": 420, "name": "falcone-apisix-standalone"},
-    "name": "standalone-config",
-}]:
+if pod_spec.get("volumes") != [
+    {"configMap": {"defaultMode": 420, "name": "falcone-apisix-standalone"}, "name": "standalone-config"},
+    {"configMap": {"defaultMode": 420, "name": "falcone-apisix-config-file"}, "name": "apisix-config-source"},
+    {"emptyDir": {}, "name": "apisix-config-overlay"},
+]:
     raise SystemExit(1)
 PY
       printf 'APISIX_RENDER_CONVERGENCE_DRIFT reason=contract\n' >&2
@@ -1774,10 +1789,20 @@ validate_revision23_numeric_user_convergence() {
         "name": "standalone-config",
         "mountPath": "/usr/local/apisix/conf/apisix.yaml",
         "subPath": "apisix.yaml"
+      }, {
+        "name": "apisix-config-overlay",
+        "mountPath": "/usr/local/apisix/conf/config.yaml",
+        "subPath": "config.yaml"
       }])] | length) == 1
     and (.spec.template.spec.volumes // []) == [{
       "name": "standalone-config",
       "configMap": {"name": "falcone-apisix-standalone", "defaultMode": 420}
+    }, {
+      "name": "apisix-config-source",
+      "configMap": {"name": "falcone-apisix-config-file", "defaultMode": 420}
+    }, {
+      "name": "apisix-config-overlay",
+      "emptyDir": {}
     }]' >/dev/null || return 1
   printf '%s' "$observability_json" | jq -e --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" '
     .apiVersion == "apps/v1" and .kind == "Deployment"

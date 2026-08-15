@@ -425,6 +425,16 @@
                   "maxLength": 128,
                   "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                   "description": "Non-secret backup evidence identifier required on every Helm upgrade; empty is permitted only for fresh-install values."
+                },
+                "authorityReplayEnabled": {
+                  "type": "boolean",
+                  "description": "Runs the applying authority bootstrap on an upgrade. False is accepted only with a non-secret audited waiver reference and false backup/parity claims."
+                },
+                "waiverReference": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "description": "Non-secret Option-B evidence identifier; required only when authorityReplayEnabled is false."
                 }
               }
             },
