@@ -147,6 +147,15 @@ postgresqlVector:
     storageClass: local-path
   nodeSelector:
     topology.kubernetes.io/region: fsn1
+  # The fsn1 node is the cluster control-plane and carries the
+  # node-role.kubernetes.io/control-plane=true:NoSchedule taint. Without this
+  # toleration the single-replica vector pod cannot schedule on the only node
+  # that matches the fsn1 region selector (revision-31 regression).
+  tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/control-plane
+      operator: Equal
+      value: "true"
 gatewayPolicy:
   passthrough:
     mode: disabled
