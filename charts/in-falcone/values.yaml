@@ -670,12 +670,12 @@ bootstrap:
           redirectUris:
             - https://console.dev.in-falcone.example.com/*
             - https://console.sandbox.in-falcone.example.com/*
-            - https://console.staging.in-falcone.example.com/*
+            - https://baas.musematic.ai/*
             - https://console.in-falcone.example.com/*
           webOrigins:
             - https://console.dev.in-falcone.example.com
             - https://console.sandbox.in-falcone.example.com
-            - https://console.staging.in-falcone.example.com
+            - https://baas.musematic.ai
             - https://console.in-falcone.example.com
           defaultClientScopes:
             # Standard Keycloak default scopes (see in-falcone-gateway above): without `roles` the

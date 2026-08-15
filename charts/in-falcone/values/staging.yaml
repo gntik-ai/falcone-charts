@@ -12,10 +12,10 @@ global:
     operatorServiceAccount: external-secrets
 publicSurface:
   hostnames:
-    api: api.staging.in-falcone.example.com
-    console: console.staging.in-falcone.example.com
-    identity: iam.staging.in-falcone.example.com
-    realtime: realtime.staging.in-falcone.example.com
+    api: api.baas.musematic.ai
+    console: baas.musematic.ai
+    identity: iam.baas.musematic.ai
+    realtime: realtime.baas.musematic.ai
   certificates:
     wildcardSecretName: in-falcone-staging-wildcard-tls
     surfaces:
@@ -124,7 +124,7 @@ gatewayPolicy:
     mode: disabled
   cors:
     allowOrigins:
-    - https://console.staging.in-falcone.example.com
+    - https://baas.musematic.ai
   oidc:
-    issuerUrl: https://iam.staging.in-falcone.example.com/auth/realms/in-falcone-platform
-    discoveryUrl: https://iam.staging.in-falcone.example.com/auth/realms/in-falcone-platform/.well-known/openid-configuration
+    issuerUrl: https://iam.baas.musematic.ai/auth/realms/in-falcone-platform
+    discoveryUrl: https://iam.baas.musematic.ai/auth/realms/in-falcone-platform/.well-known/openid-configuration
