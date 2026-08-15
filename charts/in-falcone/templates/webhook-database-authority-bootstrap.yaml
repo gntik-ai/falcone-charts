@@ -1,4 +1,8 @@
 {{- $database := .Values.global.webhookDatabase -}}
+{{- $authorityReplayEnabled := true -}}
+{{- if hasKey $database.migration "authorityReplayEnabled" -}}
+  {{- $authorityReplayEnabled = get $database.migration "authorityReplayEnabled" -}}
+{{- end -}}
 {{- $credentials := $database.credentials -}}
 {{- $principals := $database.principals -}}
 {{- $supportName := printf "%s-webhook-db-authority" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
@@ -37,6 +41,7 @@
   {{- $_ := set $jobHookAnnotations "helm.sh/hook-weight" "-40" -}}
   {{- $_ := set $jobHookAnnotations "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" -}}
 {{- end -}}
+{{- if or .Release.IsInstall $authorityReplayEnabled -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -215,3 +220,4 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 1Mi
+{{- end -}}

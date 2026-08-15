@@ -122,13 +122,31 @@
 {{- if and .Release.IsInstall $webhookDatabase.migration.firstHandoff -}}
   {{- fail "global.webhookDatabase.migration.firstHandoff is upgrade-only; fresh installs initialize credentials without it" -}}
 {{- end -}}
-{{- $requiresWebhookDatabaseBackup := .Release.IsUpgrade -}}
-{{- if $requiresWebhookDatabaseBackup -}}
+{{- $authorityReplayEnabled := true -}}
+{{- if hasKey $webhookDatabase.migration "authorityReplayEnabled" -}}
+  {{- $authorityReplayEnabled = get $webhookDatabase.migration "authorityReplayEnabled" -}}
+{{- end -}}
+{{- $waiverReference := $webhookDatabase.migration.waiverReference | default "" -}}
+{{- if and .Release.IsInstall (not $authorityReplayEnabled) -}}
+  {{- fail "global.webhookDatabase.migration.authorityReplayEnabled=false is upgrade-only" -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade (not $authorityReplayEnabled) -}}
+  {{- if or
+        $webhookDatabase.migration.backupVerified
+        $webhookDatabase.migration.parityVerified
+        (ne ($webhookDatabase.migration.backupReference | default "") "")
+        (eq $waiverReference "") -}}
+    {{- fail "authority replay waiver requires false backupVerified/parityVerified, empty backupReference, and a non-secret waiverReference" -}}
+  {{- end -}}
+{{- else if .Release.IsUpgrade -}}
   {{- if or
         (not $webhookDatabase.migration.backupVerified)
         (not $webhookDatabase.migration.parityVerified)
         (eq ($webhookDatabase.migration.backupReference | default "") "") -}}
     {{- fail "global.webhookDatabase.migration requires backupVerified, parityVerified, and a non-secret backupReference before every applying upgrade, including no-op authority replay" -}}
+  {{- end -}}
+  {{- if ne $waiverReference "" -}}
+    {{- fail "global.webhookDatabase.migration.waiverReference is allowed only when authorityReplayEnabled=false" -}}
   {{- end -}}
 {{- end -}}
 {{- range $entry := (.Values.controlPlane.env | default (list)) -}}

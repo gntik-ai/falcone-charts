@@ -346,6 +346,15 @@ test('staging alone selects local-path/fsn1 and renders all six exact approved d
   assert.equal(vectorPvc?.spec?.accessModes?.[0], 'ReadWriteOnce')
   assert.equal(vectorPvc?.spec?.resources?.requests?.storage, '10Gi')
   assert.equal(vectorStatefulSet?.spec?.template?.spec?.nodeSelector?.['topology.kubernetes.io/region'], 'fsn1')
+  // The fsn1 node carries the control-plane NoSchedule taint, so the staging
+  // vector StatefulSet MUST tolerate it or the pod stays Pending/Unschedulable
+  // (revision-31 regression). This is part of the declared staging contract.
+  const vectorTolerations = vectorStatefulSet?.spec?.template?.spec?.tolerations ?? []
+  assert.equal(vectorTolerations.length, 1, 'staging vector must carry exactly one control-plane toleration')
+  assert.equal(vectorTolerations[0]?.key, 'node-role.kubernetes.io/control-plane')
+  assert.equal(vectorTolerations[0]?.operator, 'Equal')
+  assert.equal(vectorTolerations[0]?.value, 'true')
+  assert.equal(vectorTolerations[0]?.effect, 'NoSchedule')
 
   const apisixDeployment = named(objects, 'Deployment', 'falcone-bbx-apisix')
   const apisixPodSpec = apisixDeployment?.spec?.template?.spec

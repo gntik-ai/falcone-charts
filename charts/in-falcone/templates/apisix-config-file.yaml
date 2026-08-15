@@ -1,0 +1,40 @@
+{{- /*
+  APISIX standalone-mode config.yaml override (falcone#986).
+
+  The APISIX Docker entrypoint rewrites /usr/local/apisix/conf/config.yaml in
+  place when APISIX_STAND_ALONE=true (set -eo pipefail), so the override cannot
+  be mounted read-only from a ConfigMap directly. This ConfigMap holds the
+  canonical content; an init container copies it into a writable emptyDir that
+  is then mounted over the config.yaml path (see values/staging.yaml).
+
+  The only functional delta from the stock standalone config is
+  plugin_attr.prometheus.enable_export_server=false. APISIX 3.10 defaults that
+  to true, which makes the Prometheus plugin register NO public-api handler, so
+  the /apisix/prometheus/metrics route (1011-metrics in apisix.yaml) returns a
+  clean 404 and the Prometheus scrape target is permanently DOWN. Disabling the
+  dedicated export server lets the public-api plugin serve the metrics on the
+  gateway port that Falcone actually scrapes.
+*/ -}}
+{{- if .Values.apisix.initContainers }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-apisix-config-file
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: apisix
+data:
+  config.yaml: |
+    deployment:
+      role: data_plane
+      role_data_plane:
+        config_provider: yaml
+      admin:
+        admin_key:
+          - name: admin
+            key: ''
+            role: admin
+    plugin_attr:
+      prometheus:
+        enable_export_server: false
+{{- end }}

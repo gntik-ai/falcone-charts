@@ -592,7 +592,11 @@ check('every applying upgrade fails without non-secret backup/parity proof', () 
   assert.doesNotMatch(failed.stderr, /postgresql:\/\//);
   assert.match(
     validation,
-    /\$requiresWebhookDatabaseBackup := \.Release\.IsUpgrade/,
+    /\$authorityReplayEnabled := true/,
+  );
+  assert.match(
+    validation,
+    /authority replay waiver requires false backupVerified\/parityVerified/,
   );
 
   const ordinary031 = helm([
@@ -640,6 +644,35 @@ check('gated ordinary 0.3.1 replay renders the applying authority Job read-only 
     values,
     /Every Helm upgrade runs the applying authority Job/,
   );
+});
+
+check('Option-B waiver suppresses only authority replay and never claims backup/parity verification', () => {
+  const waived = render([
+    '--is-upgrade',
+    '--set', 'deployment.upgrade.currentVersion=0.3.1',
+    '--set', 'global.webhookDatabase.migration.authorityReplayEnabled=false',
+    '--set', 'global.webhookDatabase.migration.waiverReference=falcone-incident-option-b',
+  ]);
+  assert.equal(
+    documentWith(
+      waived,
+      'kind: Job',
+      'app.kubernetes.io/component: webhook-database-authority-bootstrap',
+    ),
+    undefined,
+  );
+  assert.ok(documentWith(waived, 'kind: Deployment', 'name: falcone-control-plane'));
+
+  const dishonest = helm([
+    'template', 'falcone', chart,
+    '--namespace', 'falcone-test',
+    '--is-upgrade',
+    '--set', 'deployment.upgrade.currentVersion=0.3.1',
+    '--set', 'global.webhookDatabase.migration.authorityReplayEnabled=false',
+    '--set', 'global.webhookDatabase.migration.waiverReference=falcone-incident-option-b',
+    '--set', 'global.webhookDatabase.migration.backupVerified=true',
+  ], { fail: true });
+  assert.match(dishonest.stderr, /requires false backupVerified\/parityVerified/);
 });
 
 check('duplicate/reserved principal inputs fail closed without a manifest', () => {
