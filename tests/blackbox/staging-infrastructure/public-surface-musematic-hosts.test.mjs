@@ -60,6 +60,31 @@ test('staging public surface renders only the real musematic hosts', () => {
   )
 })
 
+test('staging public API Ingress exposes the APISIX metrics route from issue 986', () => {
+  const { objects } = renderStaging()
+  const publicIngress = ingressObjects(objects).find((ing) => (
+    (ing?.spec?.rules ?? []).some((rule) => rule?.host === 'api.baas.musematic.ai')
+  ))
+  assert.ok(publicIngress, 'staging render must emit the public API Ingress')
+
+  const paths = publicIngress.spec.rules
+    .filter((rule) => rule?.host === 'api.baas.musematic.ai')
+    .flatMap((rule) => rule?.http?.paths ?? [])
+    .map((entry) => ({
+      path: entry?.path,
+      serviceSuffix: entry?.backend?.service?.name?.replace(/^falcone-bbx-/, ''),
+      port: entry?.backend?.service?.port?.name,
+    }))
+  assert.deepEqual(
+    paths,
+    [
+      { path: '/control-plane', serviceSuffix: 'apisix', port: 'http' },
+      { path: '/apisix/prometheus/metrics', serviceSuffix: 'apisix', port: 'http' },
+    ],
+    'public API host must route both the product API and the issue-986 metrics endpoint to APISIX',
+  )
+})
+
 test('staging OIDC issuer and discovery point at iam.baas.musematic.ai', () => {
   const { text } = renderStaging()
   assert.match(

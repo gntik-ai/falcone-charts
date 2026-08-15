@@ -11,8 +11,15 @@ global:
     operatorNamespace: external-secrets
     operatorServiceAccount: external-secrets
 publicSurface:
+  bindings:
+    apiMetrics:
+      component: apisix
+      serviceName: ""
+      servicePort: http
+      path: /apisix/prometheus/metrics
   hostnames:
     api: api.baas.musematic.ai
+    apiMetrics: api.baas.musematic.ai
     console: baas.musematic.ai
     identity: iam.baas.musematic.ai
     realtime: realtime.baas.musematic.ai
@@ -20,6 +27,7 @@ publicSurface:
     wildcardSecretName: in-falcone-staging-wildcard-tls
     surfaces:
       api: in-falcone-staging-api-tls
+      apiMetrics: in-falcone-staging-api-tls
       console: in-falcone-staging-console-tls
       identity: in-falcone-staging-identity-tls
       realtime: in-falcone-staging-realtime-tls
