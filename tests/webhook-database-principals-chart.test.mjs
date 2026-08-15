@@ -211,14 +211,7 @@ check('values/schema expose only non-secret PostgreSQL references and fixed prin
     .webhookDatabase.properties.migration;
   assert.deepEqual(
     migrationSchema.required,
-    [
-      'firstHandoff',
-      'backupVerified',
-      'parityVerified',
-      'backupReference',
-      'authorityReplayEnabled',
-      'waiverReference',
-    ],
+    ['firstHandoff', 'backupVerified', 'parityVerified', 'backupReference'],
   );
   assert.equal(migrationSchema.properties.backupVerified.type, 'boolean');
   assert.equal(migrationSchema.properties.parityVerified.type, 'boolean');
@@ -599,7 +592,7 @@ check('every applying upgrade fails without non-secret backup/parity proof', () 
   assert.doesNotMatch(failed.stderr, /postgresql:\/\//);
   assert.match(
     validation,
-    /\$authorityReplayEnabled := get \$webhookDatabase\.migration "authorityReplayEnabled"/,
+    /\$authorityReplayEnabled := true/,
   );
   assert.match(
     validation,

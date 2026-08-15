@@ -122,7 +122,10 @@
 {{- if and .Release.IsInstall $webhookDatabase.migration.firstHandoff -}}
   {{- fail "global.webhookDatabase.migration.firstHandoff is upgrade-only; fresh installs initialize credentials without it" -}}
 {{- end -}}
-{{- $authorityReplayEnabled := get $webhookDatabase.migration "authorityReplayEnabled" -}}
+{{- $authorityReplayEnabled := true -}}
+{{- if hasKey $webhookDatabase.migration "authorityReplayEnabled" -}}
+  {{- $authorityReplayEnabled = get $webhookDatabase.migration "authorityReplayEnabled" -}}
+{{- end -}}
 {{- $waiverReference := $webhookDatabase.migration.waiverReference | default "" -}}
 {{- if and .Release.IsInstall (not $authorityReplayEnabled) -}}
   {{- fail "global.webhookDatabase.migration.authorityReplayEnabled=false is upgrade-only" -}}

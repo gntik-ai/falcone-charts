@@ -1,5 +1,8 @@
 {{- $database := .Values.global.webhookDatabase -}}
-{{- $authorityReplayEnabled := get $database.migration "authorityReplayEnabled" -}}
+{{- $authorityReplayEnabled := true -}}
+{{- if hasKey $database.migration "authorityReplayEnabled" -}}
+  {{- $authorityReplayEnabled = get $database.migration "authorityReplayEnabled" -}}
+{{- end -}}
 {{- $credentials := $database.credentials -}}
 {{- $principals := $database.principals -}}
 {{- $supportName := printf "%s-webhook-db-authority" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
