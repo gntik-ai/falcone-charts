@@ -675,12 +675,12 @@ bootstrap:
           redirectUris:
             - https://console.dev.in-falcone.example.com/*
             - https://console.sandbox.in-falcone.example.com/*
-            - https://console.staging.in-falcone.example.com/*
+            - https://baas.musematic.ai/*
             - https://console.in-falcone.example.com/*
           webOrigins:
             - https://console.dev.in-falcone.example.com
             - https://console.sandbox.in-falcone.example.com
-            - https://console.staging.in-falcone.example.com
+            - https://baas.musematic.ai
             - https://console.in-falcone.example.com
           defaultClientScopes:
             # Standard Keycloak default scopes (see in-falcone-gateway above): without `roles` the
@@ -3448,6 +3448,11 @@ controlPlane:
     successThreshold: 1
     failureThreshold: 3
   env:
+    # server.mjs otherwise loads only its curated seed routes even though the
+    # immutable image packages /app/route-map.runtime.json. The route map is
+    # required for console APIs such as POST /v1/async-operation-query.
+    - name: ROUTE_MAP_FILE
+      value: /app/route-map.runtime.json
     - name: NODE_ENV
       value: production
     - name: DEPLOYMENT_PROFILE

@@ -399,6 +399,15 @@ test('staging alone selects local-path/fsn1 and renders all six exact approved d
   }
   assert.deepEqual(violations, [],
     `staging must use the images built from origin/main ${approvedImageSource.commit} (${approvedImageSource.tag})`)
+
+  const controlPlaneDeployment = named(objects, 'Deployment', 'falcone-bbx-control-plane')
+  const controlPlaneContainer = controlPlaneDeployment?.spec?.template?.spec?.containers
+    ?.find((container) => container.name === 'control-plane')
+  assert.deepEqual(
+    (controlPlaneContainer?.env ?? []).filter((entry) => entry.name === 'ROUTE_MAP_FILE'),
+    [{ name: 'ROUTE_MAP_FILE', value: '/app/route-map.runtime.json' }],
+    'staging must load the packaged runtime route map; otherwise mapped console APIs return NO_ROUTE',
+  )
 })
 
 // bbx-repair-staging-008 | fn-nonstaging-storage-nonregression | OpenSpec #### Scenario: Staging render
