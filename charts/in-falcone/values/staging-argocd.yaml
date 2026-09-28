@@ -13,6 +13,7 @@ controlPlane:
   image:
     tag: sha-47b6bf1
     digest: ""
+    repository: ghcr.io/gntik-ai/in-falcone-control-plane
   functionExecutor:
     runtimeImage:
       tag: sha-47b6bf1
@@ -22,14 +23,17 @@ controlPlaneExecutor:
   image:
     tag: sha-47b6bf1
     digest: ""
+    repository: ghcr.io/gntik-ai/in-falcone-control-plane-executor
 webConsole:
   image:
     tag: sha-47b6bf1
     digest: ""
+    repository: ghcr.io/gntik-ai/in-falcone-web-console
 workflowWorker:
   image:
     tag: sha-47b6bf1
     digest: ""
+    repository: ghcr.io/gntik-ai/in-falcone-workflow-worker
 mcp:
   runtimeImage:
     tag: sha-47b6bf1
