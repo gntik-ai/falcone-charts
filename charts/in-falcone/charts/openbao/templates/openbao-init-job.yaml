@@ -1,4 +1,5 @@
-{{- if .Release.IsInstall }}
+{{- /* Install-only; never under GitOps upgrade semantics (in-falcone global.gitops). */}}
+{{- if and .Release.IsInstall (not (dig "gitops" "upgradeSemantics" false (.Values.global | default dict))) }}
 apiVersion: batch/v1
 kind: Job
 metadata:

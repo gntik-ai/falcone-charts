@@ -2,7 +2,8 @@
 {{- $t := .Values.temporal -}}
 {{- $b := $t.bootstrap -}}
 {{- $adminToolsImage := default (dict "repository" "docker.io/temporalio/admin-tools" "tag" "1.31.1" "pullPolicy" "IfNotPresent") $root.Values.global.temporalAdminToolsImage -}}
-{{- $phase := ternary "-upgrade" "" .Release.IsUpgrade -}}
+{{- $phase := ternary "-upgrade" "" (eq (include "in-falcone.isUpgrade" $) "true") -}}
+{{- $gitops := dig "gitops" "upgradeSemantics" false ($root.Values.global | default dict) -}}
 {{- $jobSuffix := printf "-r%v%s-temporal-bootstrap" .Release.Revision $phase -}}
 {{- $jobPrefix := include "in-falcone.temporal.fullname" $root | trunc (int (sub 63 (len $jobSuffix))) | trimSuffix "-" -}}
 {{- $bootstrapPodSecurity := deepCopy (default (dict) $t.podSecurityContext) -}}
@@ -31,14 +32,27 @@ metadata:
   name: {{ printf "%s%s" $jobPrefix $jobSuffix }}
   annotations:
     falcone.io/helm-release-revision: {{ .Release.Revision | quote }}
+    {{- if $gitops }}
+    {{- /* Argo CD renders revision 1, so this name is constant under GitOps. Replace+Force
+      re-creates the Job whenever its rendered spec changes (Job specs are immutable), so it
+      re-runs then and never accumulates. It stays a normal Sync-phase resource, as under
+      Helm; a PostSync hook could deadlock, because workflow-worker needs the namespace this
+      Job reconciles. Not an Argo CD hook annotation, so the chart's Helm hook mapping holds. */}}
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+    {{- end }}
   labels:
     {{- include "in-falcone.temporal.roleLabels" (dict "root" $root "role" "bootstrap") | nindent 4 }}
     falcone.io/helm-release-revision: {{ .Release.Revision | quote }}
-    falcone.io/helm-lifecycle: {{ ternary "upgrade" "install" .Release.IsUpgrade | quote }}
+    falcone.io/helm-lifecycle: {{ ternary "upgrade" "install" (eq (include "in-falcone.isUpgrade" $) "true") | quote }}
 spec:
   backoffLimit: {{ $t.jobs.backoffLimit }}
   activeDeadlineSeconds: {{ $t.jobs.activeDeadlineSeconds }}
+  {{- if not $gitops }}
+  {{- /* Under GitOps no TTL: Kubernetes could delete the Job before Argo CD records it
+    (hook) or report it missing (resource); hook deletion policies / the hashed name
+    handle cleanup instead. */}}
   ttlSecondsAfterFinished: {{ $t.jobs.ttlSecondsAfterFinished }}
+  {{- end }}
   template:
     metadata:
       labels:

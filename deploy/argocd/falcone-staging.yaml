@@ -1,0 +1,115 @@
+# Argo CD management of falcone staging (falcone-charts#47, gntik-ai/falcone#1027).
+# Automated sync stays off: Hermes triggers each sync after its environment health gate.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: falcone-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/gntik-ai/falcone-charts.git
+    path: charts/in-falcone
+    targetRevision: main
+    helm:
+      releaseName: falcone
+      valueFiles:
+        - values/staging.yaml
+        - values/staging-cluster.yaml
+        - values/staging-argocd.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: in-falcone-staging
+  syncPolicy:
+    automated:
+      enabled: false
+      prune: false
+      selfHeal: false
+    # No ApplyOutOfSyncOnly: with the staging legacy webhook-key adoption, the PreSync
+    # lifecycle hook scales the control plane to 0 and relies on the main apply to restore
+    # controlPlane.replicas (as helm upgrade does), so every sync must re-apply everything.
+    syncOptions:
+      - CreateNamespace=false
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+---
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: falcone-staging
+  namespace: argocd
+spec:
+  applicationRefs:
+    - namePattern: falcone-staging
+      useAnnotations: false
+      images:
+        - alias: cp
+          imageName: ghcr.io/gntik-ai/in-falcone-control-plane
+          manifestTargets:
+            helm:
+              name: controlPlane.image.repository
+              tag: controlPlane.image.tag
+        - alias: executor
+          imageName: ghcr.io/gntik-ai/in-falcone-control-plane-executor
+          manifestTargets:
+            helm:
+              name: controlPlaneExecutor.image.repository
+              tag: controlPlaneExecutor.image.tag
+        - alias: console
+          imageName: ghcr.io/gntik-ai/in-falcone-web-console
+          manifestTargets:
+            helm:
+              name: webConsole.image.repository
+              tag: webConsole.image.tag
+        - alias: fnruntime
+          imageName: ghcr.io/gntik-ai/in-falcone-fn-runtime
+          # Only referenced from env/ConfigMap, never as a container image in the
+          # Application status, so it must be updated without being "in use". A per-image
+          # commonUpdateSettings replaces the global one (CRD default strategy: semver),
+          # so every setting is repeated here.
+          commonUpdateSettings:
+            allowTags: regexp:^sha-[a-f0-9]{7,40}$
+            forceUpdate: true
+            pullSecret: pullsecret:argocd/ghcr-creds
+            updateStrategy: newest-build
+          manifestTargets:
+            helm:
+              name: controlPlane.functionExecutor.runtimeImage.repository
+              tag: controlPlane.functionExecutor.runtimeImage.tag
+        - alias: worker
+          imageName: ghcr.io/gntik-ai/in-falcone-workflow-worker
+          manifestTargets:
+            helm:
+              name: workflowWorker.image.repository
+              tag: workflowWorker.image.tag
+        - alias: mcp
+          imageName: ghcr.io/gntik-ai/in-falcone-mcp-runtime
+          # Only referenced from env/ConfigMap, never as a container image in the
+          # Application status, so it must be updated without being "in use". A per-image
+          # commonUpdateSettings replaces the global one (CRD default strategy: semver),
+          # so every setting is repeated here.
+          commonUpdateSettings:
+            allowTags: regexp:^sha-[a-f0-9]{7,40}$
+            forceUpdate: true
+            pullSecret: pullsecret:argocd/ghcr-creds
+            updateStrategy: newest-build
+          manifestTargets:
+            helm:
+              name: mcp.runtimeImage.repository
+              tag: mcp.runtimeImage.tag
+  commonUpdateSettings:
+    allowTags: regexp:^sha-[a-f0-9]{7,40}$
+    forceUpdate: false
+    pullSecret: pullsecret:argocd/ghcr-creds
+    updateStrategy: newest-build
+  writeBackConfig:
+    method: git:secret:argocd/git-creds
+    gitConfig:
+      repository: https://github.com/gntik-ai/falcone-charts.git
+      branch: main
+      writeBackTarget: helmvalues:values/staging-argocd.yaml

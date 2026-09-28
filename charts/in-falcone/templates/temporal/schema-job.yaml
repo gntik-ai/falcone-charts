@@ -1,4 +1,5 @@
 {{- $root := . -}}
+{{- $gitops := dig "gitops" "upgradeSemantics" false ($root.Values.global | default dict) -}}
 {{- $t := .Values.temporal -}}
 {{- $p := $t.persistence -}}
 {{- $podSecurity := deepCopy (default (dict) $t.podSecurityContext) -}}
@@ -17,7 +18,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "in-falcone.temporal.roleLabels" (dict "root" $root "role" "schema") | nindent 4 }}
-  {{- if .Release.IsUpgrade }}
+  {{- if (eq (include "in-falcone.isUpgrade" $) "true") }}
   annotations:
     helm.sh/hook: pre-upgrade
     helm.sh/hook-weight: "0"
@@ -26,7 +27,12 @@ metadata:
 spec:
   backoffLimit: {{ $t.jobs.backoffLimit }}
   activeDeadlineSeconds: {{ $t.jobs.activeDeadlineSeconds }}
+  {{- if not $gitops }}
+  {{- /* Under GitOps no TTL: Kubernetes could delete the Job before Argo CD records it
+    (hook) or report it missing (resource); hook deletion policies / the hashed name
+    handle cleanup instead. */}}
   ttlSecondsAfterFinished: {{ $t.jobs.ttlSecondsAfterFinished }}
+  {{- end }}
   template:
     metadata:
       labels:

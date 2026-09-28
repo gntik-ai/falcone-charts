@@ -33,7 +33,7 @@
 {{- end -}}
 {{- $supportHookAnnotations := dict -}}
 {{- $jobHookAnnotations := dict -}}
-{{- if .Release.IsUpgrade -}}
+{{- if (eq (include "in-falcone.isUpgrade" $) "true") -}}
   {{- $_ := set $supportHookAnnotations "helm.sh/hook" "pre-upgrade" -}}
   {{- $_ := set $supportHookAnnotations "helm.sh/hook-weight" "-41" -}}
   {{- $_ := set $supportHookAnnotations "helm.sh/hook-delete-policy" "before-hook-creation" -}}
@@ -41,7 +41,7 @@
   {{- $_ := set $jobHookAnnotations "helm.sh/hook-weight" "-40" -}}
   {{- $_ := set $jobHookAnnotations "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" -}}
 {{- end -}}
-{{- if or .Release.IsInstall $authorityReplayEnabled -}}
+{{- if or (ne (include "in-falcone.isUpgrade" $) "true") $authorityReplayEnabled -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

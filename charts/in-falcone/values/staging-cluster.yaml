@@ -1,0 +1,62 @@
+# Live in-falcone-staging settings that are not in values/staging.yaml (falcone-charts#47).
+# Taken from `helm get values falcone -n in-falcone-staging` (release revision 39,
+# 2026-08-16); the Argo CD Application renders staging.yaml, this file, then
+# staging-argocd.yaml. No secrets: only storage classes/sizes, names and evidence IDs.
+global:
+  # Argo CD renders in install mode; the existing release must render as a Helm upgrade.
+  gitops:
+    upgradeSemantics: true
+  webhookDatabase:
+    migration:
+      # Operator decision falcone-1027-option-b-20260928 (gntik-ai/falcone#1027): Argo CD /
+      # Hermes staging syncs skip the applying authority replay; backup/parity evidence is
+      # never inferred. Lift by adding a pre-sync backup step and a fresh backupReference.
+      authorityReplayEnabled: false
+      waiverReference: falcone-1027-option-b-20260928
+      backupVerified: false
+      parityVerified: false
+      backupReference: ""
+  webhookSigningKey:
+    create: false
+    secretName: falcone-webhook-signing-key-c25-legacy
+    secretKey: key
+    adoption:
+      mode: legacy
+      requestId: c25-staging-adopt-20260723-01
+    rotation:
+      action: none
+      recoveryWindowSeconds: 604800
+      requestId: ""
+      rotationId: ""
+      sourceSecretKey: ""
+      sourceSecretName: ""
+deployment:
+  upgrade:
+    currentVersion: "0.3.1"
+documentdb:
+  persistence:
+    size: 10Gi
+    storageClass: local-path
+kafka:
+  persistence:
+    size: 10Gi
+    storageClass: local-path
+observability:
+  persistence:
+    size: 10Gi
+    storageClass: local-path
+postgresql:
+  persistence:
+    size: 10Gi
+    storageClass: local-path
+# Storage sizes: change only through the Helm handoff in deploy/argocd/README.md (the
+# SeaweedFS resize hook needs Helm lookup, which Argo CD renders without).
+seaweedfs:
+  filer:
+    data:
+      size: 10Gi
+      storageClass: hcloud-volumes
+  master:
+    data:
+      size: 10Gi
+      storageClass: hcloud-volumes
