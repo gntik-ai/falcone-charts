@@ -1,0 +1,35 @@
+# Argo CD-managed staging image pins (gntik-ai/falcone#1027, falcone-charts#46/#47).
+#
+# The falcone-staging Argo CD Application renders values/staging.yaml, then
+# values/staging-cluster.yaml, then this file. First-party images are pinned by the
+# immutable sha-<commit> tags that release-images publishes for every gntik-ai/falcone
+# commit (gntik-ai/falcone#1026). argocd-image-updater writes each new sha- tag here and
+# Hermes triggers the sync after its environment health gate.
+#
+# staging.yaml keeps its historical digest pins for the revision-20..24 repair contracts.
+# A digest wins over the tag in component-wrapper.renderImage, so `digest: ""` clears them
+# for the Argo-managed render. Do not hand-pin digests here.
+controlPlane:
+  image:
+    tag: sha-47b6bf1
+    digest: ""
+  functionExecutor:
+    runtimeImage:
+      tag: sha-47b6bf1
+      digest: ""
+controlPlaneExecutor:
+  image:
+    tag: sha-47b6bf1
+    digest: ""
+webConsole:
+  image:
+    tag: sha-47b6bf1
+    digest: ""
+workflowWorker:
+  image:
+    tag: sha-47b6bf1
+    digest: ""
+mcp:
+  runtimeImage:
+    tag: sha-47b6bf1
+    digest: ""
