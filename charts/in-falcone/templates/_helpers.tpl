@@ -315,3 +315,13 @@ imagePullSecrets:
 - name: SQL_TLS_ENABLED
   value: {{ $p.tls.enabled | quote }}
 {{- end -}}
+
+{{/*
+Upgrade semantics for GitOps renders (falcone-charts#47). Argo CD renders charts in
+install mode and cannot pass --is-upgrade; global.gitops.upgradeSemantics=true makes the
+chart treat such a render of an existing release as a Helm upgrade (upgrade-only gates,
+pre-upgrade hooks, which Argo CD runs as PreSync). Returns "true" or "".
+*/}}
+{{- define "in-falcone.isUpgrade" -}}
+{{- if or .Release.IsUpgrade (dig "gitops" "upgradeSemantics" false (.Values.global | default dict)) -}}true{{- end -}}
+{{- end -}}

@@ -116,10 +116,10 @@
 {{- if ne $webhookDatabasePrincipals.grantor $webhookDatabase.administrator.role -}}
   {{- fail "global.webhookDatabase.principals.grantor must equal the durable PostgreSQL administrator role" -}}
 {{- end -}}
-{{- if and .Release.IsInstall (or (eq $adoption.mode "legacy") (ne $rotation.action "none")) -}}
+{{- if and (ne (include "in-falcone.isUpgrade" $) "true") (or (eq $adoption.mode "legacy") (ne $rotation.action "none")) -}}
   {{- fail "webhook key adoption/rotation/recovery/finalization is upgrade-only and requires an existing deployment maintenance window" -}}
 {{- end -}}
-{{- if and .Release.IsInstall $webhookDatabase.migration.firstHandoff -}}
+{{- if and (ne (include "in-falcone.isUpgrade" $) "true") $webhookDatabase.migration.firstHandoff -}}
   {{- fail "global.webhookDatabase.migration.firstHandoff is upgrade-only; fresh installs initialize credentials without it" -}}
 {{- end -}}
 {{- $authorityReplayEnabled := true -}}
@@ -127,10 +127,10 @@
   {{- $authorityReplayEnabled = get $webhookDatabase.migration "authorityReplayEnabled" -}}
 {{- end -}}
 {{- $waiverReference := $webhookDatabase.migration.waiverReference | default "" -}}
-{{- if and .Release.IsInstall (not $authorityReplayEnabled) -}}
+{{- if and (ne (include "in-falcone.isUpgrade" $) "true") (not $authorityReplayEnabled) -}}
   {{- fail "global.webhookDatabase.migration.authorityReplayEnabled=false is upgrade-only" -}}
 {{- end -}}
-{{- if and .Release.IsUpgrade (not $authorityReplayEnabled) -}}
+{{- if and (eq (include "in-falcone.isUpgrade" $) "true") (not $authorityReplayEnabled) -}}
   {{- if or
         $webhookDatabase.migration.backupVerified
         $webhookDatabase.migration.parityVerified
@@ -138,7 +138,7 @@
         (eq $waiverReference "") -}}
     {{- fail "authority replay waiver requires false backupVerified/parityVerified, empty backupReference, and a non-secret waiverReference" -}}
   {{- end -}}
-{{- else if .Release.IsUpgrade -}}
+{{- else if (eq (include "in-falcone.isUpgrade" $) "true") -}}
   {{- if or
         (not $webhookDatabase.migration.backupVerified)
         (not $webhookDatabase.migration.parityVerified)
@@ -532,7 +532,7 @@
 {{- if ne (.Values.eso.eso.vaultAddress | default $expectedOpenBaoAddress) $expectedOpenBaoAddress -}}
   {{- fail (printf "eso.eso.vaultAddress must point at the configured OpenBao namespace (%s)" $expectedOpenBaoAddress) -}}
 {{- end -}}
-{{- if and .Release.IsUpgrade .Values.deployment.upgrade.allowInPlace -}}
+{{- if and (eq (include "in-falcone.isUpgrade" $) "true") .Values.deployment.upgrade.allowInPlace -}}
   {{- $currentVersion := .Values.deployment.upgrade.currentVersion | default "" -}}
   {{- if eq $currentVersion "" -}}
     {{- fail "deployment.upgrade.currentVersion is required during in-place upgrades" -}}

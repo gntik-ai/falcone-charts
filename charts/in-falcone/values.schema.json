@@ -203,6 +203,16 @@
             }
           }
         },
+        "gitops": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "upgradeSemantics": {
+              "type": "boolean",
+              "description": "Treat a GitOps (Argo CD) install-mode render of an existing release as a Helm upgrade."
+            }
+          }
+        },
         "webhookSigningKey": {
           "type": "object",
           "additionalProperties": false,

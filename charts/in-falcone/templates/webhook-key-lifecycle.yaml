@@ -4,7 +4,7 @@
 {{- $databasePrincipals := $database.principals -}}
 {{- $rotation := $key.rotation -}}
 {{- $action := $rotation.action | default "none" -}}
-{{- $credentialCanCreate := and $key.create (or (and .Release.IsInstall (eq $action "none")) (and .Release.IsUpgrade (eq $action "rotate"))) -}}
+{{- $credentialCanCreate := and $key.create (or (and (ne (include "in-falcone.isUpgrade" $) "true") (eq $action "none")) (and (eq (include "in-falcone.isUpgrade" $) "true") (eq $action "rotate"))) -}}
 {{- $mode := "canonical-v1" -}}
 {{- if and (eq ($key.adoption.mode | default "none") "legacy") (ne $action "rotate") -}}
   {{- $mode = "legacy" -}}
@@ -147,7 +147,7 @@ spec:
             - name: WEBHOOK_KEY_CREATE
               value: {{ ternary "true" "false" $key.create | quote }}
             - name: WEBHOOK_KEY_IS_UPGRADE
-              value: {{ ternary "true" "false" .Release.IsUpgrade | quote }}
+              value: {{ ternary "true" "false" (eq (include "in-falcone.isUpgrade" $) "true") | quote }}
             - name: WEBHOOK_KEY_LIFECYCLE_ACTION
               value: {{ $action | quote }}
             - name: WEBHOOK_SIGNING_KEY_MODE

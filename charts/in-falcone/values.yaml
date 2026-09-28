@@ -1,4 +1,8 @@
 global:
+  # Argo CD renders in install mode; true makes a GitOps render of an existing release use
+  # Helm upgrade semantics (falcone-charts#47). Leave false for helm install/upgrade.
+  gitops:
+    upgradeSemantics: false
   nameOverride: in-falcone
   namespace: in-falcone-dev
   environment: dev
