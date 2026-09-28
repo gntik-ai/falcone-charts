@@ -17,6 +17,7 @@ controlPlane:
     runtimeImage:
       tag: sha-47b6bf1
       digest: ""
+      repository: ghcr.io/gntik-ai/in-falcone-fn-runtime
 controlPlaneExecutor:
   image:
     tag: sha-47b6bf1
@@ -33,3 +34,4 @@ mcp:
   runtimeImage:
     tag: sha-47b6bf1
     digest: ""
+    repository: ghcr.io/gntik-ai/in-falcone-mcp-runtime
