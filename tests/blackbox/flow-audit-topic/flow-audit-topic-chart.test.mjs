@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict'
-import { resolve } from 'node:path'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
-import YAML from 'yaml'
-
 import { assertFailure, assertSuccess, combined, run, umbrellaChart } from '../fixtures/blackbox.mjs'
 
 const topic = 'falcone.audit.flow-lifecycle'
+
+function parseDocuments(source) {
+  const directory = mkdtempSync(join(tmpdir(), 'flow-audit-chart-'))
+  try {
+    const file = join(directory, 'render.yaml')
+    writeFileSync(file, source)
+    const result = run('python3', [
+      '-c',
+      'import json, sys, yaml; print(json.dumps(list(yaml.safe_load_all(open(sys.argv[1]))), default=str))',
+      file,
+    ])
+    assertSuccess(result, 'Flow audit YAML decoding')
+    return JSON.parse(result.stdout).filter(Boolean)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+}
 
 function render(args = []) {
   const result = run('helm', [
@@ -16,7 +33,7 @@ function render(args = []) {
     ...args,
   ])
   assertSuccess(result, 'Flow audit chart render')
-  return YAML.parseAllDocuments(result.stdout).map((document) => document.toJS()).filter(Boolean)
+  return parseDocuments(result.stdout)
 }
 
 for (const [profile, args] of [
@@ -83,4 +100,13 @@ test('Flow audit topic cannot enter the tenant events namespace', () => {
   ])
   assertFailure(result, 'tenant-prefixed Flow audit topic')
   assert.match(combined(result), /outside the evt\.<workspaceId> tenant namespace/)
+})
+
+test('Flow audit topic must fit the Kafka topic name limit', () => {
+  const result = run('helm', [
+    'template', 'falcone', umbrellaChart,
+    '--set', `global.flowAuditTopic=${'a'.repeat(250)}`,
+  ])
+  assertFailure(result, 'oversized Flow audit topic')
+  assert.match(combined(result), /flowAuditTopic.*maxLength: got 250, want 249/)
 })
