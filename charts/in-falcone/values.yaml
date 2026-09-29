@@ -6,6 +6,9 @@ global:
   nameOverride: in-falcone
   namespace: in-falcone-dev
   environment: dev
+  # Platform-owned and shared by the executor subchart and topic provisioner.
+  # Public events API topics remain confined to evt.<workspaceId>.*.
+  flowAuditTopic: falcone.audit.flow-lifecycle
   createNamespace: true
   imageRegistry: ""
   imagePullSecrets: []
@@ -3690,6 +3693,8 @@ controlPlaneExecutor:
           optional: true
     - name: KAFKA_BROKERS
       value: "{{ .Release.Name }}-kafka:9092"
+    - name: FLOW_AUDIT_TOPIC
+      value: "{{ .Values.global.flowAuditTopic }}"
     - name: TEMPORAL_ADDRESS
       value: '{{ include "in-falcone.temporal.roleName" (dict "root" . "role" "frontend") }}:7233'
     - name: TEMPORAL_NAMESPACE

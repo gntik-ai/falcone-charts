@@ -9,6 +9,10 @@
 {{- $rotation := $webhookKey.rotation -}}
 {{- $keycloakRealm := .Values.bootstrap.oneShot.keycloak.realm | default (dict) -}}
 {{- $temporalBootstrap := .Values.temporal.bootstrap -}}
+{{- $flowAuditTopic := .Values.global.flowAuditTopic | default "" -}}
+{{- if or (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*$" $flowAuditTopic)) (hasPrefix "evt." $flowAuditTopic) -}}
+  {{- fail "global.flowAuditTopic must be a valid platform topic outside the evt.<workspaceId> tenant namespace" -}}
+{{- end -}}
 {{- if hasKey .Values.workflowWorker "temporalBootstrapImage" -}}
   {{- fail "workflowWorker.temporalBootstrapImage is retired and cannot override global.temporalAdminToolsImage; remove this stale path and copy repository, tag, digest, and pullPolicy to global.temporalAdminToolsImage" -}}
 {{- end -}}

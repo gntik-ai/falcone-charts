@@ -1,0 +1,76 @@
+{{- /* Reconcile the platform Flow audit topic after the broker exists. */ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-flow-audit-topic" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: flow-audit-topic
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        app.kubernetes.io/component: flow-audit-topic
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: topic-reconcile
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.kafka.image "name" "Kafka topic provisioner") | quote }}
+          imagePullPolicy: {{ .Values.kafka.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              topics=/opt/bitnami/kafka/bin/kafka-topics.sh
+              attempt=0
+              while [ "$attempt" -lt 60 ]; do
+                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>&1; then
+                  echo "Flow audit topic is ready"
+                  exit 0
+                fi
+                "$topics" --bootstrap-server "$KAFKA_BROKERS" --create --if-not-exists \
+                  --topic "$FLOW_AUDIT_TOPIC" --partitions 1 --replication-factor 1 >/dev/null 2>&1 || true
+                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>&1; then
+                  echo "Flow audit topic is ready"
+                  exit 0
+                fi
+                attempt=$((attempt + 1))
+                sleep 5
+              done
+              echo "Flow audit topic could not be verified after 60 attempts" >&2
+              exit 1
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ printf "%s:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "kafka")) .Values.kafka.service.port | quote }}
+            - name: FLOW_AUDIT_TOPIC
+              value: {{ .Values.global.flowAuditTopic | quote }}
+            - name: KAFKA_HEAP_OPTS
+              value: -Xmx256M
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
