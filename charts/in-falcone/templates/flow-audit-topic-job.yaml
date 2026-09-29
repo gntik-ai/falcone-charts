@@ -1,4 +1,14 @@
 {{- /* Reconcile the platform Flow audit topic after the broker exists. */ -}}
+{{- $transportSecurity := default (dict) .Values.global.transportSecurity -}}
+{{- $transportOn := $transportSecurity.enabled | default false -}}
+{{- $kafkaTransportEnv := list -}}
+{{- if $transportOn -}}
+  {{- range ($transportSecurity.env | default (list)) -}}
+    {{- if has (.name | default "") (list "KAFKA_SSL" "KAFKA_SSL_CA_FILE") -}}
+      {{- $kafkaTransportEnv = append $kafkaTransportEnv . -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -44,17 +54,28 @@ spec:
             - -ec
             - |
               topics=/opt/bitnami/kafka/bin/kafka-topics.sh
+              client_config=/tmp/flow-audit-client.properties
+              if [ "${KAFKA_SSL:-false}" = true ]; then
+                if [ -z "${KAFKA_SSL_CA_FILE:-}" ] || [ ! -f "$KAFKA_SSL_CA_FILE" ]; then
+                  echo "Flow audit topic TLS CA is unavailable" >&2
+                  exit 1
+                fi
+                printf 'security.protocol=SSL\nssl.truststore.type=PEM\nssl.truststore.location=%s\n' \
+                  "$KAFKA_SSL_CA_FILE" >"$client_config"
+              else
+                printf 'security.protocol=PLAINTEXT\n' >"$client_config"
+              fi
               describe_error=/tmp/flow-audit-describe.stderr
               create_error=/tmp/flow-audit-create.stderr
               attempt=0
               while [ "$attempt" -lt 60 ]; do
-                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>"$describe_error"; then
+                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --command-config "$client_config" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>"$describe_error"; then
                   echo "Flow audit topic is ready"
                   exit 0
                 fi
-                "$topics" --bootstrap-server "$KAFKA_BROKERS" --create --if-not-exists \
+                "$topics" --bootstrap-server "$KAFKA_BROKERS" --command-config "$client_config" --create --if-not-exists \
                   --topic "$FLOW_AUDIT_TOPIC" --partitions 1 --replication-factor 1 >/dev/null 2>"$create_error" || :
-                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>"$describe_error"; then
+                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --command-config "$client_config" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>"$describe_error"; then
                   echo "Flow audit topic is ready"
                   exit 0
                 fi
@@ -80,6 +101,9 @@ spec:
               value: {{ .Values.global.flowAuditTopic | quote }}
             - name: KAFKA_HEAP_OPTS
               value: -Xmx256M
+            {{- with $kafkaTransportEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             requests:
               cpu: 50m
@@ -92,8 +116,18 @@ spec:
               mountPath: /tmp
             - name: kafka-logs
               mountPath: /opt/bitnami/kafka/logs
+            {{- if $transportOn }}
+            - name: transport-ca
+              mountPath: {{ $transportSecurity.caMountPath | default "/etc/falcone/tls" }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
         - name: kafka-logs
           emptyDir: {}
+        {{- if $transportOn }}
+        - name: transport-ca
+          secret:
+            secretName: {{ $transportSecurity.caSecretName }}
+        {{- end }}

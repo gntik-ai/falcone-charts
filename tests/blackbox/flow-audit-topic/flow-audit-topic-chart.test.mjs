@@ -38,6 +38,7 @@ for (const [profile, args] of [
     assert.equal(provisioner.env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC')?.value, topic)
     assert.match(provisioner.command[2], /--create --if-not-exists/)
     assert.match(provisioner.command[2], /--describe --topic/)
+    assert.match(provisioner.command[2], /--command-config "\$client_config"/)
     assert.match(provisioner.command[2], /class=\$failure_class attempts=\$attempt/)
     assert.doesNotMatch(provisioner.command[2], /cat .*stderr/)
     assert.equal(provisioner.securityContext.readOnlyRootFilesystem, true)
@@ -56,6 +57,24 @@ for (const [profile, args] of [
     if (profile === 'staging') assert.match(container.image, /@sha256:[a-f0-9]{64}$/)
   })
 }
+
+test('production transport overlay configures the topic Job for Kafka TLS', () => {
+  const objects = render([
+    '-f', resolve(umbrellaChart, '../../deploy/kind/values-kind.yaml'),
+    '-f', resolve(umbrellaChart, '../../deploy/kind/values-production.yaml'),
+  ])
+  const job = objects.find((object) => object?.kind === 'Job' && object?.metadata?.labels?.['app.kubernetes.io/component'] === 'flow-audit-topic')
+  assert.ok(job)
+  const provisioner = job.spec.template.spec.containers[0]
+  assert.equal(provisioner.env.find((entry) => entry.name === 'KAFKA_SSL')?.value, 'true')
+  assert.equal(provisioner.env.find((entry) => entry.name === 'KAFKA_SSL_CA_FILE')?.value, '/etc/falcone/tls/ca.crt')
+  assert.match(provisioner.command[2], /security\.protocol=SSL/)
+  assert.match(provisioner.command[2], /ssl\.truststore\.type=PEM/)
+  assert.match(provisioner.command[2], /ssl\.truststore\.location=%s/)
+  assert.equal(provisioner.volumeMounts.find((mount) => mount.name === 'transport-ca')?.readOnly, true)
+  assert.equal(provisioner.volumeMounts.find((mount) => mount.name === 'transport-ca')?.mountPath, '/etc/falcone/tls')
+  assert.equal(job.spec.template.spec.volumes.find((volume) => volume.name === 'transport-ca')?.secret?.secretName, 'falcone-transport-ca')
+})
 
 test('Flow audit topic cannot enter the tenant events namespace', () => {
   const result = run('helm', [
