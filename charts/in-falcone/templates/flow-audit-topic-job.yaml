@@ -26,6 +26,7 @@ spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
+        fsGroup: 1001
       {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: topic-reconcile
@@ -43,22 +44,34 @@ spec:
             - -ec
             - |
               topics=/opt/bitnami/kafka/bin/kafka-topics.sh
+              describe_error=/tmp/flow-audit-describe.stderr
+              create_error=/tmp/flow-audit-create.stderr
               attempt=0
               while [ "$attempt" -lt 60 ]; do
-                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>&1; then
+                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>"$describe_error"; then
                   echo "Flow audit topic is ready"
                   exit 0
                 fi
                 "$topics" --bootstrap-server "$KAFKA_BROKERS" --create --if-not-exists \
-                  --topic "$FLOW_AUDIT_TOPIC" --partitions 1 --replication-factor 1 >/dev/null 2>&1 || true
-                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>&1; then
+                  --topic "$FLOW_AUDIT_TOPIC" --partitions 1 --replication-factor 1 >/dev/null 2>"$create_error" || :
+                if "$topics" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$FLOW_AUDIT_TOPIC" >/dev/null 2>"$describe_error"; then
                   echo "Flow audit topic is ready"
                   exit 0
                 fi
                 attempt=$((attempt + 1))
                 sleep 5
               done
-              echo "Flow audit topic could not be verified after 60 attempts" >&2
+              failure_class=unknown
+              if grep -Eqi 'AuthorizationException|not authorized' "$describe_error" "$create_error"; then
+                failure_class=authorization
+              elif grep -Eqi 'AuthenticationException|SSLHandshakeException|SaslAuthenticationException' "$describe_error" "$create_error"; then
+                failure_class=authentication
+              elif grep -Eqi 'TimeoutException|timed out|Connection refused' "$describe_error" "$create_error"; then
+                failure_class=connectivity
+              elif grep -Eqi 'UnknownTopicOrPartitionException|does not exist' "$describe_error" "$create_error"; then
+                failure_class=topic_unavailable
+              fi
+              echo "Flow audit topic could not be verified: class=$failure_class attempts=$attempt" >&2
               exit 1
           env:
             - name: KAFKA_BROKERS
@@ -74,3 +87,13 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: kafka-logs
+              mountPath: /opt/bitnami/kafka/logs
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: kafka-logs
+          emptyDir: {}

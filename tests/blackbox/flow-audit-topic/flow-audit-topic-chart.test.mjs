@@ -38,6 +38,12 @@ for (const [profile, args] of [
     assert.equal(provisioner.env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC')?.value, topic)
     assert.match(provisioner.command[2], /--create --if-not-exists/)
     assert.match(provisioner.command[2], /--describe --topic/)
+    assert.match(provisioner.command[2], /class=\$failure_class attempts=\$attempt/)
+    assert.doesNotMatch(provisioner.command[2], /cat .*stderr/)
+    assert.equal(provisioner.securityContext.readOnlyRootFilesystem, true)
+    assert.equal(job.spec.template.spec.securityContext.fsGroup, 1001)
+    assert.deepEqual(provisioner.volumeMounts.map((mount) => mount.mountPath).sort(), ['/opt/bitnami/kafka/logs', '/tmp'])
+    assert.deepEqual(job.spec.template.spec.volumes.map((volume) => volume.name).sort(), ['kafka-logs', 'tmp'])
 
     const broker = objects.find((object) => object?.kind === 'StatefulSet' && object?.metadata?.name === 'falcone-kafka')
     assert.ok(broker)
