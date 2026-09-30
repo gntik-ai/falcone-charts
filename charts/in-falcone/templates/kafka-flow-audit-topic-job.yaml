@@ -1,0 +1,62 @@
+{{- $audit := .Values.flowAudit | default dict -}}
+{{- $topic := get $audit "topic" | default dict -}}
+{{- $name := get $topic "name" | default "falcone.audit.flow-lifecycle" -}}
+{{- $partitions := get $topic "partitions" | default 3 -}}
+{{- $replicas := get $topic "replicationFactor" | default 1 -}}
+{{- if not (hasPrefix "falcone.audit." $name) -}}
+  {{- fail "flowAudit.topic.name must be platform-scoped under falcone.audit." -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-flow-audit-topic" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: flow-audit-topic
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        in-falcone.io/component: flow-audit-topic
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: create-topic
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.kafka.image "name" "flow audit topic") | quote }}
+          imagePullPolicy: {{ .Values.kafka.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              /opt/bitnami/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "${KAFKA_BROKERS}" \
+                --create --if-not-exists \
+                --topic "${FLOW_AUDIT_TOPIC}" \
+                --partitions "${FLOW_AUDIT_PARTITIONS}" \
+                --replication-factor "${FLOW_AUDIT_REPLICATION_FACTOR}"
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ printf "%s-kafka:9092" .Release.Name | quote }}
+            - name: FLOW_AUDIT_TOPIC
+              value: {{ $name | quote }}
+            - name: FLOW_AUDIT_PARTITIONS
+              value: {{ $partitions | quote }}
+            - name: FLOW_AUDIT_REPLICATION_FACTOR
+              value: {{ $replicas | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits: {cpu: 250m, memory: 512Mi}

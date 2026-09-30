@@ -68,6 +68,8 @@ jobs:
         run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority
         run: sh tests/webhook-database-chart-ci.test.sh
+      - name: Validate flow-audit chart additions and reuse-values rendering
+        run: node --test tests/flow-audit-chart.test.mjs
       - name: Lint and render independent Falcone charts
         shell: bash
         run: |
