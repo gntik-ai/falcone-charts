@@ -23,6 +23,8 @@ data:
       evaluation_interval: 30s
       external_labels:
         cluster: in-falcone
+    rule_files:
+      - /etc/prometheus/flow-audit-alerts.yml
     scrape_configs:
       - job_name: prometheus
         static_configs:
@@ -83,3 +85,21 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
+  flow-audit-alerts.yml: |
+    groups:
+      - name: falcone-flow-audit
+        rules:
+          - alert: FlowAuditOutboxPending
+            expr: max(falcone_flow_audit_outbox_rows{state="pending"}) > 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Flow audit events have remained pending for 10 minutes
+          - alert: FlowAuditOutboxFailed
+            expr: max(falcone_flow_audit_outbox_rows{state="failed"}) > 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: Flow audit events exhausted delivery retries

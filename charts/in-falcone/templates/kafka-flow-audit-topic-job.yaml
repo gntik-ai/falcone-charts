@@ -1,0 +1,93 @@
+{{- $topic := .Values.global.flowAuditTopic -}}
+{{- if or (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,247}[A-Za-z0-9]$" $topic.name)) (hasPrefix "evt." $topic.name) -}}
+  {{- fail "global.flowAuditTopic.name must be a platform-scoped Kafka topic name" -}}
+{{- end -}}
+{{- if or (lt (int $topic.partitions) 1) (lt (int $topic.replicationFactor) 1) (gt (int $topic.replicationFactor) (int .Values.kafka.replicas)) (lt (int64 $topic.retentionMs) 1) -}}
+  {{- fail "global.flowAuditTopic requires positive partitions and retentionMs, with replicationFactor between 1 and kafka.replicas" -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-flow-audit-topic
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: flow-audit-topic
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "6"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        app.kubernetes.io/component: flow-audit-topic
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provision-topic
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" .Values.kafka.image "name" "kafka topic provisioner") | quote }}
+          imagePullPolicy: {{ .Values.kafka.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            {{- if not (dig "podSecurity" "openshiftRestricted" false .Values.global) }}
+            runAsUser: 1001
+            runAsGroup: 1001
+            {{- end }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ printf "%s:9092" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "kafka")) | quote }}
+            - name: FLOW_AUDIT_TOPIC
+              value: {{ $topic.name | quote }}
+            - name: KAFKA_HEAP_OPTS
+              value: -Xms64m -Xmx256m
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              attempt=0
+              until /opt/bitnami/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "$KAFKA_BROKERS" --list >/dev/null 2>&1; do
+                attempt=$((attempt + 1))
+                if [ "$attempt" -ge 60 ]; then
+                  echo "Kafka did not become ready for flow audit topic provisioning" >&2
+                  exit 1
+                fi
+                sleep 5
+              done
+              /opt/bitnami/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "$KAFKA_BROKERS" \
+                --create --if-not-exists \
+                --topic "$FLOW_AUDIT_TOPIC" \
+                --partitions {{ $topic.partitions }} \
+                --replication-factor {{ $topic.replicationFactor }} \
+                --config retention.ms={{ printf "%d" (int64 $topic.retentionMs) }}
+              /opt/bitnami/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "$KAFKA_BROKERS" \
+                --describe --topic "$FLOW_AUDIT_TOPIC"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
