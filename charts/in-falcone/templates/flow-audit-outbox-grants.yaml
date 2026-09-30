@@ -62,22 +62,22 @@ spec:
               psql -v ON_ERROR_STOP=1 -v executor_role="$FLOW_AUDIT_EXECUTOR_ROLE" -f /migration/migration.sql
           env:
             - name: PGHOST
-              value: {{ printf "%s-postgresql" .Release.Name | quote }}
+              value: {{ tpl $database.connection.host . | quote }}
             - name: PGPORT
-              value: "5432"
+              value: {{ $database.connection.port | quote }}
             - name: PGDATABASE
-              value: in_falcone
+              value: {{ $database.connection.database | quote }}
             - name: PGUSER
-              value: postgres
+              value: {{ $database.administrator.role | quote }}
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: in-falcone-postgresql
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
                   key: POSTGRESQL_POSTGRES_PASSWORD
             - name: FLOW_AUDIT_EXECUTOR_ROLE
               valueFrom:
                 secretKeyRef:
-                  name: in-falcone-postgresql
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
                   key: POSTGRESQL_USERNAME
             {{- if $tls }}
             {{- range ($transport.env | default list) }}

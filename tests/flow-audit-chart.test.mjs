@@ -97,6 +97,25 @@ test('older reused values render the same flow-audit defaults', () => {
   assert.equal(observability.spec.template.metadata.annotations[rolloutAnnotation], '2')
 })
 
+test('grants job follows the existing database connection and Secret references', () => {
+  const { objects } = render(umbrellaChart, [
+    '--set-string', 'global.webhookDatabase.connection.host=postgres.internal',
+    '--set', 'global.webhookDatabase.connection.port=5433',
+    '--set-string', 'global.webhookDatabase.connection.database=appdb',
+    '--set-string', 'global.webhookDatabase.administrator.role=db_admin',
+    '--set-string', 'global.webhookDatabase.principals.grantor=db_admin',
+    '--set-string', 'config.secretRefs.postgresCredentials.existingSecret=postgres-credentials',
+  ])
+  const job = flowAuditObjects(objects).find((object) => object.kind === 'Job' && object.metadata.name.endsWith('-flow-audit-grants'))
+  const env = Object.fromEntries(job.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]))
+  assert.equal(env.PGHOST.value, 'postgres.internal')
+  assert.equal(env.PGPORT.value, '5433')
+  assert.equal(env.PGDATABASE.value, 'appdb')
+  assert.equal(env.PGUSER.value, 'db_admin')
+  assert.equal(env.PGPASSWORD.valueFrom.secretKeyRef.name, 'postgres-credentials')
+  assert.equal(env.FLOW_AUDIT_EXECUTOR_ROLE.valueFrom.secretKeyRef.name, 'postgres-credentials')
+})
+
 test('legacy topic name overrides cannot diverge from the executor topic', () => {
   const { objects } = render(umbrellaChart, ['--set', 'flowAudit.topic.name=falcone.audit.other'])
   const topic = flowAuditObjects(objects).find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
