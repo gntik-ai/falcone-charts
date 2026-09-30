@@ -79,6 +79,7 @@ jobs:
 
           helm lint --strict charts/in-falcone
           helm template falcone charts/in-falcone \
+            --api-versions monitoring.coreos.com/v1/PrometheusRule \
             --namespace falcone-ci >"$render_dir/in-falcone.yaml"
 
           helm lint --strict charts/falcone-knative
