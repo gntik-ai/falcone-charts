@@ -54,13 +54,20 @@ export function requireCli() {
   assert.equal(basename(cli), 'falcone-knative', 'public lifecycle executable basename must be falcone-knative')
 }
 
+// A rendered umbrella chart is over 1 MB of YAML. PyYAML's pure-Python loader can take
+// longer than the 30 s command default on a slow CI or sandbox host, so decoding uses the
+// C loader when libyaml is available (same safe semantics, ~10x faster) and gets its own
+// longer bound.
+const YAML_DECODING_TIMEOUT_MS = 120_000
+
 export function yamlDocuments(text) {
   const script = [
     'import json, sys, yaml',
-    'docs = [d for d in yaml.safe_load_all(sys.stdin.read()) if d is not None]',
+    'loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)',
+    'docs = [d for d in yaml.load_all(sys.stdin.read(), Loader=loader) if d is not None]',
     'json.dump(docs, sys.stdout, default=str)',
   ].join('; ')
-  const result = run('python3', ['-c', script], { input: text })
+  const result = run('python3', ['-c', script], { input: text, timeout: YAML_DECODING_TIMEOUT_MS })
   assertSuccess(result, 'YAML decoding')
   return JSON.parse(result.stdout)
 }
