@@ -14,6 +14,10 @@ global:
     partitions: 1
     replicationFactor: 1
     retentionMs: 2592000000 # 30 days
+  flowAuditRelay:
+    # Seven days at the 60-second backoff cap, including the initial ramp.
+    maxAttempts: 10088
+    backoffCapMs: 60000
   temporalAdminToolsImage:
     repository: docker.io/temporalio/admin-tools
     tag: "1.31.1"
@@ -3698,6 +3702,10 @@ controlPlaneExecutor:
       value: "{{ .Release.Name }}-kafka:9092"
     - name: FLOW_AUDIT_TOPIC
       value: "{{ .Values.global.flowAuditTopic.name }}"
+    - name: FLOW_AUDIT_MAX_ATTEMPTS
+      value: "{{ .Values.global.flowAuditRelay.maxAttempts }}"
+    - name: FLOW_AUDIT_BACKOFF_CAP_MS
+      value: "{{ .Values.global.flowAuditRelay.backoffCapMs }}"
     - name: TEMPORAL_ADDRESS
       value: '{{ include "in-falcone.temporal.roleName" (dict "root" . "role" "frontend") }}:7233'
     - name: TEMPORAL_NAMESPACE
