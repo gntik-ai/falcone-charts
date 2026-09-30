@@ -1,11 +1,7 @@
 {{- $audit := .Values.flowAudit | default dict -}}
 {{- $topic := get $audit "topic" | default dict -}}
-{{- $name := get $topic "name" | default "falcone.audit.flow-lifecycle" -}}
 {{- $partitions := get $topic "partitions" | default 3 -}}
 {{- $replicas := get $topic "replicationFactor" | default 1 -}}
-{{- if not (hasPrefix "falcone.audit." $name) -}}
-  {{- fail "flowAudit.topic.name must be platform-scoped under falcone.audit." -}}
-{{- end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -50,7 +46,7 @@ spec:
             - name: KAFKA_BROKERS
               value: {{ printf "%s-kafka:9092" .Release.Name | quote }}
             - name: FLOW_AUDIT_TOPIC
-              value: {{ $name | quote }}
+              value: falcone.audit.flow-lifecycle
             - name: FLOW_AUDIT_PARTITIONS
               value: {{ $partitions | quote }}
             - name: FLOW_AUDIT_REPLICATION_FACTOR

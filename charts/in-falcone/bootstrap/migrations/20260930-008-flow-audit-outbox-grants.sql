@@ -1,4 +1,6 @@
--- Grant the executor only the outbox table operations needed by the relay.
+-- Grant the executor the outbox operations needed by writes, relay, and purge.
+-- Change: finish-flow-audit-kafka-publication (#1045)
+--
 -- Safe to re-run after the runtime creates the table. Data-plane roles must
 -- never inherit access, including on installations with old blanket grants.
 -- psql supplies executor_role from the same secret used by the executor.

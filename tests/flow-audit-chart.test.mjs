@@ -94,6 +94,13 @@ test('older reused values render the same flow-audit defaults', () => {
   assert.equal(observability.spec.template.metadata.annotations[rolloutAnnotation], '1')
 })
 
+test('legacy topic name overrides cannot diverge from the executor topic', () => {
+  const { objects } = render(umbrellaChart, ['--set', 'flowAudit.topic.name=falcone.audit.other'])
+  const topic = flowAuditObjects(objects).find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
+  assert.equal(topic.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC').value,
+    'falcone.audit.flow-lifecycle')
+})
+
 test('operator rule renders only when its CRD is available and matches bundled Prometheus', () => {
   const { objects } = render(umbrellaChart, ['--api-versions', 'monitoring.coreos.com/v1/PrometheusRule'])
   const added = flowAuditObjects(objects)
