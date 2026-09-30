@@ -77,6 +77,7 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   const grants = added.find((object) => object.kind === 'ConfigMap')
   assert.match(grants.data['migration.sql'], /REVOKE ALL PRIVILEGES ON TABLE public\.flow_audit_outbox FROM PUBLIC/)
   assert.match(grants.data['migration.sql'], /current_setting\('flow_audit\.executor_role'\)/)
+  assert.match(grants.data['migration.sql'], /has_table_privilege\(data_role, 'public\.flow_audit_outbox'/)
   const grantsJob = added.find((object) => object.kind === 'Job' && object.metadata.name.endsWith('-flow-audit-grants'))
   assert.equal(grantsJob.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_EXECUTOR_ROLE').valueFrom.secretKeyRef.key,
     'POSTGRESQL_USERNAME')

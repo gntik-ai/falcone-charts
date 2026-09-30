@@ -28,5 +28,16 @@ BEGIN
     RAISE EXCEPTION 'flow audit executor role % does not exist', executor_role;
   END IF;
   EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.flow_audit_outbox TO %I', executor_role);
+
+  -- Direct revokes cannot remove privileges inherited through another role.
+  -- Abort the migration if either data-plane role still has effective access.
+  FOREACH data_role IN ARRAY ARRAY['falcone_service', 'falcone_anon'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = data_role) THEN
+      IF has_table_privilege(data_role, 'public.flow_audit_outbox',
+                             'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') THEN
+        RAISE EXCEPTION 'data role % retains flow_audit_outbox privileges', data_role;
+      END IF;
+    END IF;
+  END LOOP;
 END
 $$;
