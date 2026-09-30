@@ -27,6 +27,9 @@ spec:
         in-falcone.io/component: flow-audit-topic
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       automountServiceAccountToken: false
       enableServiceLinks: false
       {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
@@ -52,11 +55,22 @@ spec:
               value: {{ $partitions | quote }}
             - name: FLOW_AUDIT_REPLICATION_FACTOR
               value: {{ $replicas | quote }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: kafka-logs
+              mountPath: /opt/bitnami/kafka/logs
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             runAsNonRoot: true
             capabilities:
               drop: [ALL]
           resources:
             requests: {cpu: 25m, memory: 128Mi}
             limits: {cpu: 250m, memory: 512Mi}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: kafka-logs
+          emptyDir: {}

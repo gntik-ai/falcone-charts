@@ -40,6 +40,9 @@ spec:
         in-falcone.io/component: flow-audit-grants
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       automountServiceAccountToken: false
       enableServiceLinks: false
       {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
@@ -56,7 +59,7 @@ spec:
                 [ "$attempts" -lt 120 ] || { echo 'flow_audit_outbox not ready' >&2; exit 1; }
                 sleep 2
               done
-              psql -v ON_ERROR_STOP=1 -f /migration/migration.sql
+              psql -v ON_ERROR_STOP=1 -v executor_role="$FLOW_AUDIT_EXECUTOR_ROLE" -f /migration/migration.sql
           env:
             - name: PGHOST
               value: {{ printf "%s-postgresql" .Release.Name | quote }}
@@ -71,6 +74,11 @@ spec:
                 secretKeyRef:
                   name: in-falcone-postgresql
                   key: POSTGRESQL_POSTGRES_PASSWORD
+            - name: FLOW_AUDIT_EXECUTOR_ROLE
+              valueFrom:
+                secretKeyRef:
+                  name: in-falcone-postgresql
+                  key: POSTGRESQL_USERNAME
             {{- if $tls }}
             {{- range ($transport.env | default list) }}
             {{- if has (.name | default "") (list "PGSSLMODE" "PGSSLROOTCERT") }}

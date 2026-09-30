@@ -1,9 +1,12 @@
 -- Grant the executor only the outbox table operations needed by the relay.
 -- Safe to re-run after the runtime creates the table. Data-plane roles must
 -- never inherit access, including on installations with old blanket grants.
+-- psql supplies executor_role from the same secret used by the executor.
+SELECT set_config('flow_audit.executor_role', :'executor_role', false);
 DO $$
 DECLARE
   data_role text;
+  executor_role text := current_setting('flow_audit.executor_role');
 BEGIN
   IF to_regclass('public.flow_audit_outbox') IS NULL THEN
     RAISE EXCEPTION 'flow_audit_outbox is absent; apply source schema first';
@@ -19,8 +22,9 @@ BEGIN
   -- The shared chart's executor connects as the POSTGRESQL_USERNAME app role.
   -- It owns the runtime-created table on fresh installs; this grant also
   -- reconciles an existing table owned by an administrator.
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'falcone') THEN
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.flow_audit_outbox TO falcone;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = executor_role) THEN
+    RAISE EXCEPTION 'flow audit executor role % does not exist', executor_role;
   END IF;
+  EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.flow_audit_outbox TO %I', executor_role);
 END
 $$;
