@@ -16,7 +16,7 @@
       annotations:
         summary: Flow audit outbox has exhausted deliveries
     - alert: FalconeFlowAuditRelayStale
-      expr: {{ printf "time() - falcone_flow_audit_relay_last_success_timestamp_seconds > %v" (get $alerts "relayStaleSeconds" | default 300) | quote }}
+      expr: {{ printf "time() - falcone_flow_audit_relay_last_success_timestamp_seconds > %v or absent(falcone_flow_audit_relay_last_success_timestamp_seconds)" (get $alerts "relayStaleSeconds" | default 300) | quote }}
       for: 5m
       labels: {severity: warning}
       annotations:

@@ -93,7 +93,7 @@
 {{- $podAnnotations := deepCopy (default (dict) .Values.podAnnotations) -}}
 {{- if eq (.Values.wrapper.componentId | default "") "observability" -}}
   {{- /* Roll the bundled Prometheus once to load the new flow-audit rule file. Bump with future rule changes. */ -}}
-  {{- $_ := set $podAnnotations "in-falcone.io/flow-audit-rules-version" "1" -}}
+  {{- $_ := set $podAnnotations "in-falcone.io/flow-audit-rules-version" "2" -}}
 {{- end -}}
 {{- $workloadAnnotations := dict -}}
 {{- $build := default (dict) .Values.global.openshiftBuild -}}

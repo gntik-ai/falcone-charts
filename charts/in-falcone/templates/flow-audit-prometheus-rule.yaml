@@ -2,7 +2,7 @@
 {{- $alerts := get $audit "alerts" | default dict -}}
 {{- $enabled := true -}}
 {{- if hasKey $alerts "enabled" -}}{{- $enabled = get $alerts "enabled" -}}{{- end -}}
-{{- if and $enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
+{{- if $enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
