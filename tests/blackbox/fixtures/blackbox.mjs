@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -64,12 +64,19 @@ export function yamlDocuments(text) {
   const script = [
     'import json, sys, yaml',
     'loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)',
-    'docs = [d for d in yaml.load_all(sys.stdin.read(), Loader=loader) if d is not None]',
+    'docs = [d for d in yaml.load_all(open(sys.argv[1]), Loader=loader) if d is not None]',
     'json.dump(docs, sys.stdout, default=str)',
   ].join('; ')
-  const result = run('python3', ['-c', script], { input: text, timeout: YAML_DECODING_TIMEOUT_MS })
-  assertSuccess(result, 'YAML decoding')
-  return JSON.parse(result.stdout)
+  const directory = mkdtempSync(resolve(tmpdir(), 'falcone-yaml-'))
+  try {
+    const input = resolve(directory, 'render.yaml')
+    writeFileSync(input, text)
+    const result = run('python3', ['-c', script, input], { timeout: YAML_DECODING_TIMEOUT_MS })
+    assertSuccess(result, 'YAML decoding')
+    return JSON.parse(result.stdout)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 export function readYaml(file) {

@@ -10,8 +10,8 @@ const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-topic',
-  'PrometheusRule/falcone-bbx-in-falcone-flow-audit',
 ]
+const operatorRule = 'PrometheusRule/falcone-bbx-in-falcone-flow-audit'
 const prometheusConfigName = 'falcone-bbx-prometheus-config'
 const observabilityName = 'falcone-bbx-observability'
 const rolloutAnnotation = 'in-falcone.io/flow-audit-rules-version'
@@ -104,10 +104,10 @@ test('legacy topic name overrides cannot diverge from the executor topic', () =>
     'falcone.audit.flow-lifecycle')
 })
 
-test('default operator rule matches bundled Prometheus', () => {
-  const { objects } = render(umbrellaChart)
+test('operator rule renders only when its CRD is available and matches bundled Prometheus', () => {
+  const { objects } = render(umbrellaChart, ['--api-versions', 'monitoring.coreos.com/v1/PrometheusRule'])
   const added = flowAuditObjects(objects)
-  assert.deepEqual(added.map(({ kind, metadata }) => `${kind}/${metadata.name}`).sort(), additions.slice().sort())
+  assert.deepEqual(added.map(({ kind, metadata }) => `${kind}/${metadata.name}`).sort(), [...additions, operatorRule].sort())
   const rule = added.find((object) => object.kind === 'PrometheusRule')
   assert.deepEqual(rule.spec.groups, yamlDocuments(prometheusConfig(objects).data['flow-audit.rules.yml'])[0].groups)
 })
