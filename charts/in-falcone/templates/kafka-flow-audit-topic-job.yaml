@@ -1,4 +1,19 @@
 {{- $topic := .Values.global.flowAuditTopic -}}
+{{- $transportSecurity := .Values.global.transportSecurity | default (dict) -}}
+{{- $kafkaSsl := false -}}
+{{- $kafkaCaFile := "" -}}
+{{- if ($transportSecurity.enabled | default false) -}}
+  {{- range ($transportSecurity.env | default (list)) -}}
+    {{- if eq (.name | default "") "KAFKA_SSL" -}}
+      {{- $kafkaSsl = eq (lower (toString (.value | default ""))) "true" -}}
+    {{- else if eq (.name | default "") "KAFKA_SSL_CA_FILE" -}}
+      {{- $kafkaCaFile = .value | default "" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if and $kafkaSsl (or (not (hasPrefix (printf "%s/" (trimSuffix "/" ($transportSecurity.caMountPath | default ""))) $kafkaCaFile)) (contains ".." $kafkaCaFile) (not (regexMatch "^[A-Za-z0-9_./-]+$" $kafkaCaFile))) -}}
+  {{- fail "global.transportSecurity.env KAFKA_SSL_CA_FILE must be a file below caMountPath when KAFKA_SSL=true" -}}
+{{- end -}}
 {{- if or (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,247}[A-Za-z0-9]$" $topic.name)) (hasPrefix "evt." $topic.name) -}}
   {{- fail "global.flowAuditTopic.name must be a platform-scoped Kafka topic name" -}}
 {{- end -}}
@@ -55,13 +70,29 @@ spec:
               value: {{ $topic.name | quote }}
             - name: KAFKA_HEAP_OPTS
               value: -Xms64m -Xmx256m
+            {{- if $kafkaSsl }}
+            - name: KAFKA_SSL
+              value: "true"
+            - name: KAFKA_SSL_CA_FILE
+              value: {{ $kafkaCaFile | quote }}
+            {{- end }}
           command:
             - /bin/bash
             - -ec
             - |
+              kafka_config=()
+              if [ "${KAFKA_SSL:-false}" = "true" ]; then
+                if [ ! -r "$KAFKA_SSL_CA_FILE" ]; then
+                  echo "Kafka CA file is unavailable for flow audit topic provisioning" >&2
+                  exit 1
+                fi
+                printf 'security.protocol=SSL\nssl.truststore.type=PEM\nssl.truststore.location=%s\n' \
+                  "$KAFKA_SSL_CA_FILE" > /tmp/kafka-client.properties
+                kafka_config=(--command-config /tmp/kafka-client.properties)
+              fi
               attempt=0
               until /opt/bitnami/kafka/bin/kafka-topics.sh \
-                --bootstrap-server "$KAFKA_BROKERS" --list >/dev/null 2>&1; do
+                --bootstrap-server "$KAFKA_BROKERS" "${kafka_config[@]}" --list >/dev/null 2>&1; do
                 attempt=$((attempt + 1))
                 if [ "$attempt" -ge 60 ]; then
                   echo "Kafka did not become ready for flow audit topic provisioning" >&2
@@ -70,14 +101,14 @@ spec:
                 sleep 5
               done
               /opt/bitnami/kafka/bin/kafka-topics.sh \
-                --bootstrap-server "$KAFKA_BROKERS" \
+                --bootstrap-server "$KAFKA_BROKERS" "${kafka_config[@]}" \
                 --create --if-not-exists \
                 --topic "$FLOW_AUDIT_TOPIC" \
                 --partitions {{ $topic.partitions }} \
                 --replication-factor {{ $topic.replicationFactor }} \
                 --config retention.ms={{ printf "%d" (int64 $topic.retentionMs) }}
               /opt/bitnami/kafka/bin/kafka-topics.sh \
-                --bootstrap-server "$KAFKA_BROKERS" \
+                --bootstrap-server "$KAFKA_BROKERS" "${kafka_config[@]}" \
                 --describe --topic "$FLOW_AUDIT_TOPIC"
           resources:
             requests:
@@ -89,6 +120,16 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if $kafkaSsl }}
+            - name: falcone-transport-ca
+              mountPath: {{ $transportSecurity.caMountPath | quote }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if $kafkaSsl }}
+        - name: falcone-transport-ca
+          secret:
+            secretName: {{ $transportSecurity.caSecretName | quote }}
+        {{- end }}

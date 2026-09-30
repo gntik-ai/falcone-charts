@@ -44,6 +44,28 @@ test('platform topic is provisioned before upgrades and relay settings reach the
   }
 });
 
+test('topic provisioner uses the production Kafka TLS CA for every admin command', () => {
+  const plainJob = document(helm().stdout, 'Job', 'falcone-flow-audit-topic');
+  assert.doesNotMatch(plainJob, /- name: KAFKA_SSL_CA_FILE/);
+  assert.doesNotMatch(plainJob, /- name: falcone-transport-ca/);
+
+  const tlsJob = document(helm(['-f', 'deploy/kind/values-production.yaml']).stdout,
+    'Job', 'falcone-flow-audit-topic');
+  assert.equal(envValue(tlsJob, 'KAFKA_SSL'), 'true');
+  assert.equal(envValue(tlsJob, 'KAFKA_SSL_CA_FILE'), '/etc/falcone/tls/ca.crt');
+  assert.match(tlsJob, /security\.protocol=SSL\\nssl\.truststore\.type=PEM\\nssl\.truststore\.location=%s/);
+  assert.match(tlsJob, /kafka_config=\(--command-config \/tmp\/kafka-client\.properties\)/);
+  assert.equal(tlsJob.match(/"\$\{kafka_config\[@\]\}"/g)?.length, 3);
+  assert.match(tlsJob, /- name: falcone-transport-ca\n\s+mountPath: "\/etc\/falcone\/tls"\n\s+readOnly: true/);
+  assert.match(tlsJob, /- name: falcone-transport-ca\n\s+secret:\n\s+secretName: "falcone-transport-ca"/);
+});
+
+test('Kafka TLS without a CA file fails chart rendering', () => {
+  const result = helm(['-f', 'deploy/kind/values-production.yaml',
+    '--set', 'global.transportSecurity.env[5].value='], false);
+  assert.match(result.stderr, /KAFKA_SSL_CA_FILE must be a file below caMountPath/);
+});
+
 test('custom platform topic and relay settings render consistently', () => {
   const rendered = helm([
     '--set-string', 'global.flowAuditTopic.name=falcone.audit.flow-review',
