@@ -1,17 +1,23 @@
 # Mongo bearer route #980 deployment repair handoff
 
-The runtime repair is committed at `05bfc41d9095717cff1e33a5c16f2bc3cfe2d855`
-in the assigned issue-980 deployment worktree. This follow-up corrects only the
-handoff's base-relative fixture hashes and paired-repository pin record; chart
-configuration, routes, verifier code and fixtures are unchanged. The
+This repair extends deployment head
+`a37661b424c37f5979ab54415e2ed6dc9d00b569` in the clean assigned issue-980
+worktree and branch `agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6`.
+It fixes the checker's airgap regression with an explicit mirrored init-container
+override in `values/airgap.yaml` and adds a render regression test. The
 config-overlay init container uses
 the separately pinned BusyBox digest
 `sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0`
 from staging in default, prod, kind and staging. It never uses the APISIX image.
 Like the existing staging literal, its `docker.io/library/busybox` reference
-is not rewritten by `global.imageRegistry`. Airgap/mirror installs must provide
-an explicit init-image override with the same digest; release review must decide
-whether to add it to `values/airgap.yaml` and the mirror manifest.
+is not rewritten by `global.imageRegistry` in those four profiles. The airgap
+profile now overrides it with `registry.airgap.in-falcone.local/library/busybox`
+at the identical digest. Because Helm replaces lists, the override retains the
+complete copy command, mounts, pull policy and security context. The regression
+test checks all rendered workload images use the airgap registry and that the
+OpenShift overlay still removes the init container's numeric IDs. Release review
+must confirm the BusyBox digest is present in the mirror's image inventory;
+this repository change does not populate that registry.
 
 The prior attempt's default pod-level UID/GID/fsGroup overrides are restored to
 main's empty component override. APISIX keeps container UID/GID 636 and inherited
@@ -49,20 +55,26 @@ ChangeSet commit.
 
 ## Bounded validation
 
-This documentation follow-up reran strict Helm lint on all four profiles, the
-Mongo bearer chart and flow-audit tests, the managed-Knative default baseline,
-and source Mongo route/parity checks against this chart; all passed. The results
-and CI limits recorded for the runtime repair are:
+This airgap follow-up ran the following bounded checks:
 
-- Mongo bearer chart checks: 9/9 pass, including four-profile BusyBox checks,
+- Mongo bearer chart checks: 10/10 pass, including four-profile BusyBox checks,
   staging issuer/JWKS, route equality without `llmwiki-s2-mongo-jwt`, kind mounts,
-  required verifier failures and OpenShift identities.
+  required verifier failures, OpenShift identities and the new airgap mirror
+  check. The new check first reproduced the public-image regression before the
+  override was added.
 - Source Mongo route/parity checks against this chart: 4/4 pass.
-- Strict Helm lint and renders: default, staging, prod and kind pass.
-- Flow-audit chart checks: 7/7 pass; managed-Knative default baseline passes.
-- Both existing revision23 numeric-user/OpenShift render regressions pass.
-- Identity values and wrapper comparison against main/base passes.
-- Full staging-infrastructure contract: 13/14 pass; the existing shell-syntax
+- Strict Helm lint and renders: default, staging, prod, kind and airgap pass.
+- Complete airgap render comparison against the preceding deployment head:
+  only the overlay image registry changes; the digest and all other bytes agree.
+- Flow-audit chart checks: 7/7 pass, including the default render and flow-audit
+  baseline hashes. No fixtures are re-baselined by this follow-up; the reviewed
+  base-relative justifications above remain valid.
+
+The prior runtime repair also passed the managed-Knative default baseline,
+both revision23 numeric-user/OpenShift render regressions and the identity
+values/wrapper comparison against base. Its remaining CI limits are:
+
+- Full staging-infrastructure contract previously passed 13/14; the shell-syntax
   subprocess at `staging-infrastructure-contract.test.mjs:248` times out at its
   30-second bound with Node pipe input. The same rendered script passes
   `/bin/sh -n` with file input; no script is executed. Rerun the full gate in CI.
@@ -73,17 +85,19 @@ and CI limits recorded for the runtime repair are:
 
 ## Paired-repository pin and release follow-up
 
-Source commit `82d3b815b43935327dad018fa70f15a053959879` corrected both
-`FALCONE_CHARTS_REF` pins to the runtime repair head
-`05bfc41d9095717cff1e33a5c16f2bc3cfe2d855` and refreshed the source OpenSpec
-record. The checker's previous `bb3284bf` pin finding is resolved for that head.
-This required documentation correction creates a new final deployment head.
-Pin state: **source pin refresh pending documentation commit**. Runtime repairs
-are complete, so "pin pending deployment repair" no longer applies. The next
-source maker must set both pins to the final deployment HEAD containing this
-handoff (obtained with `git rev-parse HEAD`) and repeat parity. Source files are
-outside this assignment. The paired checker gate remains pending until the pins
-converge; no further deployment commit is needed for the pin.
+The preceding source maker at
+`a7b9994fc8bb32cda973b57320b3eeb83cbd1909` records
+**pin pending deployment repair** and preserves both `FALCONE_CHARTS_REF` pins at
+`05bfc41d9095717cff1e33a5c16f2bc3cfe2d855`, as required by operator addendum 9
+while this airgap repair was outstanding. The airgap repair is complete in the
+commit containing this handoff. That commit is the final deployment ChangeSet
+head, obtained with `git rev-parse HEAD`, and is the exact revision both source
+workflow pins must select. Pin state after this commit: **source pin refresh
+pending final deployment head**. The next source maker must update
+`.github/workflows/ci.yml` and `.github/workflows/integration.yml`, refresh the
+source OpenSpec record and rerun parity. Source files are outside this assignment.
+The paired checker gate remains pending until the pins converge; no deployment
+follow-up commit is needed to record the pin.
 
 Release review must confirm that wrong-audience rejection is required only for
 the platform realm; tenant tokens currently use the trusted realm issuer and

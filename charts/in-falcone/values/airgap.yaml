@@ -13,6 +13,26 @@ global:
 apisix:
   image:
     repository: registry.airgap.in-falcone.local/apache/apisix
+  # Helm replaces init-container lists; retain the config copy and hardening.
+  # Mirror the reviewed BusyBox overlay digest alongside the APISIX image.
+  initContainers:
+    - name: apisix-config-overlay
+      image: registry.airgap.in-falcone.local/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+      imagePullPolicy: IfNotPresent
+      command: [/bin/sh, -ec, 'cp /config-src/config.yaml /apisix-config-overlay/config.yaml']
+      volumeMounts:
+        - name: apisix-config-source
+          mountPath: /config-src
+          readOnly: true
+        - name: apisix-config-overlay
+          mountPath: /apisix-config-overlay
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 636
+        runAsGroup: 636
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
 keycloak:
   image:
     repository: registry.airgap.in-falcone.local/keycloak/keycloak

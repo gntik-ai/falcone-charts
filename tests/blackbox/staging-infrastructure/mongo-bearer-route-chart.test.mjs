@@ -3,7 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { render, umbrellaChart, repoRoot, run, sha256, yamlDocuments } from '../fixtures/blackbox.mjs'
+import { imageReferences, render, umbrellaChart, repoRoot, run, sha256, yamlDocuments } from '../fixtures/blackbox.mjs'
 
 const overlayImage = 'docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0'
 
@@ -143,6 +143,28 @@ test('all profiles keep staging BusyBox registry handling independently of APISI
     // Like the existing staging init image, this literal is not rewritten by global.imageRegistry.
     assert.equal(overlay.image, overlayImage)
   }
+})
+
+test('airgap mirrors the BusyBox overlay without changing its config copy or security settings', () => {
+  const airgap = ['-f', `${umbrellaChart}/values/airgap.yaml`]
+  const { objects } = render(umbrellaChart, airgap)
+  const gateway = objects.find((object) => object.kind === 'Deployment' && /-apisix$/.test(object.metadata.name))
+  const configOverlay = (gateway) => gateway.spec.template.spec.initContainers.find((container) => container.name === 'apisix-config-overlay')
+  const mirrored = configOverlay(gateway)
+  const original = configOverlay(renderedGateway())
+  assert.equal(mirrored.image, overlayImage.replace('docker.io', 'registry.airgap.in-falcone.local'))
+  assert.deepEqual({ ...mirrored, image: original.image }, original,
+    'airgap must preserve the overlay command, mounts, pull policy and security context')
+  const images = imageReferences(objects)
+  assert.ok(images.length > 0)
+  for (const image of images) {
+    assert.ok(image.startsWith('registry.airgap.in-falcone.local/'), `airgap contains an unmirrored image: ${image}`)
+  }
+  const openshiftOverlay = configOverlay(renderedGateway([...airgap, '-f', `${umbrellaChart}/values/platform-openshift.yaml`]))
+  assert.equal(openshiftOverlay.image, mirrored.image)
+  assert.equal(openshiftOverlay.securityContext.runAsUser, undefined)
+  assert.equal(openshiftOverlay.securityContext.runAsGroup, undefined)
+  assert.equal(openshiftOverlay.securityContext.runAsNonRoot, true)
 })
 
 test('APISIX numeric identities and OpenShift overlay retain the main contracts', () => {
