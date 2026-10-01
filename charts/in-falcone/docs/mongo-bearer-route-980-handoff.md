@@ -1,7 +1,10 @@
 # Mongo bearer route #980 deployment repair handoff
 
-This repair builds on `bb3284bf992a05d1c85149a1115982321fc2f2e5` in the
-assigned issue-980 deployment worktree. The config-overlay init container uses
+The runtime repair is committed at `05bfc41d9095717cff1e33a5c16f2bc3cfe2d855`
+in the assigned issue-980 deployment worktree. This follow-up corrects only the
+handoff's base-relative fixture hashes and paired-repository pin record; chart
+configuration, routes, verifier code and fixtures are unchanged. The
+config-overlay init container uses
 the separately pinned BusyBox digest
 `sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0`
 from staging in default, prod, kind and staging. It never uses the APISIX image.
@@ -26,14 +29,18 @@ Standalone routes and the verifier implementation are unchanged by this repair.
 
 ## Reviewed fixture re-baselines
 
+All "from" hashes below are relative to base/main
+`433be510e84be3043ffa09ca354475184f0460f6`, rather than an intermediate
+ChangeSet commit.
+
 - `tests/blackbox/fixtures/umbrella-default-render.sha256`: from
-  `8abf83afb239aea9911bb1d3ad7b88d315255766ee1f7354fdd5d1f4f259140e`
+  `b18179ef33e096050c236aee0efc87c886f63ceaf06bc61269c4370225d5c15c`
   to `b19843c58df41783469ca6655a5d160bc458488de4089dc4bb05839f29715588`.
   The canonical default render now includes the reviewed BusyBox digest,
   explicit pull policy and init identity, with the APISIX pod identity restored
   to main. Existing #980 verifier configuration and mounts remain in the render.
 - `tests/flow-audit-chart.test.mjs` prior baseline: from
-  `eaeef43016cb21a01378e6a6dee23e361bdce072b25c1ac97ecb2dffec86badb`
+  `26c5dc19ecbb5054fc3a8565852c89def7f2456793010fe320d0fa046e56087b`
   to `3abc15a2691fc8839c74640770b23771c2d27f001e663fb319ea0543ea7a8b08`.
   This hashes the same reviewed default after removing only flow-audit objects,
   bundled rule loading and the rollout marker. Flow-audit behavior is unchanged;
@@ -41,6 +48,11 @@ Standalone routes and the verifier implementation are unchanged by this repair.
   is re-baselined, including the pre-980 routes and canonical route hashes.
 
 ## Bounded validation
+
+This documentation follow-up reran strict Helm lint on all four profiles, the
+Mongo bearer chart and flow-audit tests, the managed-Knative default baseline,
+and source Mongo route/parity checks against this chart; all passed. The results
+and CI limits recorded for the runtime repair are:
 
 - Mongo bearer chart checks: 9/9 pass, including four-profile BusyBox checks,
   staging issuer/JWKS, route equality without `llmwiki-s2-mongo-jwt`, kind mounts,
@@ -61,13 +73,24 @@ Standalone routes and the verifier implementation are unchanged by this repair.
 
 ## Paired-repository pin and release follow-up
 
-Pin state: **pin pending deployment repair** from the preceding source-maker
-handoff. Both source workflow pins currently name `bb3284bf992a05d1c85149a1115982321fc2f2e5`.
-This commit completes the deployment repairs; the next source maker must set
-both `FALCONE_CHARTS_REF` pins to the final deployment HEAD (the commit containing
-this handoff, obtained with `git rev-parse HEAD`) and repeat parity. Source files
-are outside this assignment. The paired checker gate remains pending until the
-pins converge; no additional deployment follow-up commit is needed for the pin.
+Source commit `82d3b815b43935327dad018fa70f15a053959879` corrected both
+`FALCONE_CHARTS_REF` pins to the runtime repair head
+`05bfc41d9095717cff1e33a5c16f2bc3cfe2d855` and refreshed the source OpenSpec
+record. The checker's previous `bb3284bf` pin finding is resolved for that head.
+This required documentation correction creates a new final deployment head.
+Pin state: **source pin refresh pending documentation commit**. Runtime repairs
+are complete, so "pin pending deployment repair" no longer applies. The next
+source maker must set both pins to the final deployment HEAD containing this
+handoff (obtained with `git rev-parse HEAD`) and repeat parity. Source files are
+outside this assignment. The paired checker gate remains pending until the pins
+converge; no further deployment commit is needed for the pin.
+
+Release review must confirm that wrong-audience rejection is required only for
+the platform realm; tenant tokens currently use the trusted realm issuer and
+executor workspace binding. Bearer rate limiting retains its existing shared-IP
+fallback because identity headers must be empty; a per-subject bucket is a
+separate follow-up. The bootstrap Mongo body cap remains 262144 bytes and the
+standalone/kind cap remains 1048576 bytes; both are bounded and unchanged here.
 
 Before operator-gated sync, verify the staging token issuer without exposing the
 token, confirm prod hosts and executor egress to public issuer hosts, and record
