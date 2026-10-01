@@ -18,6 +18,10 @@ global:
   # Use mode: external for administrator-owned Knative, or mode: disabled for
   # no Function/MCP serving dependency. The projected ConfigMap name defaults
   # to falcone-knative-runtime in this application namespace.
+gateway:
+  mongoBearer:
+    tenantAudience: falcone-data-api
+    enforceTenantAudience: true
 mcp:
   runtimeImage:
     repository: localhost:30500/in-falcone-mcp-runtime

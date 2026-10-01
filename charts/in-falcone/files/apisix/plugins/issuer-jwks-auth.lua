@@ -13,12 +13,14 @@ local plugin = {
     name = "issuer-jwks-auth",
     schema = {
         type = "object",
-        required = {"issuer_base_url", "jwks_base_url", "platform_realm", "audience", "cache_ttl", "cache_max_entries", "timeout"},
+        required = {"issuer_base_url", "jwks_base_url", "platform_realm", "audience", "tenant_audience", "enforce_tenant_audience", "cache_ttl", "cache_max_entries", "timeout"},
         properties = {
             issuer_base_url = {type = "string", pattern = "^https?://"},
             jwks_base_url = {type = "string", pattern = "^https?://"},
             platform_realm = {type = "string", minLength = 1},
             audience = {type = "string", minLength = 1},
+            tenant_audience = {type = "string", minLength = 1, pattern = "\\S"},
+            enforce_tenant_audience = {type = "boolean"},
             cache_ttl = {type = "integer", minimum = 1, maximum = 3600},
             cache_max_entries = {type = "integer", minimum = 1, maximum = 1024},
             timeout = {type = "integer", minimum = 1, maximum = 10},
@@ -208,7 +210,10 @@ function plugin.rewrite(conf, ctx)
     if not realm or #realm == 0 or #realm > 128 or not realm:match("^[A-Za-z0-9_-]+$")
         or type(payload.exp) ~= "number" or payload.exp <= ngx.time()
         or (payload.nbf ~= nil and (type(payload.nbf) ~= "number" or payload.nbf > ngx.time()))
-        or (realm == conf.platform_realm and not allowed_audience(payload.aud, conf.audience)) then
+        or (realm == conf.platform_realm and not allowed_audience(payload.aud, conf.audience))
+        or (realm ~= conf.platform_realm and conf.enforce_tenant_audience
+            and (type(conf.tenant_audience) ~= "string" or not conf.tenant_audience:match("%S")
+                or not allowed_audience(payload.aud, conf.tenant_audience))) then
         return 401, {message = "Unauthorized"}
     end
     local keys = get_keys(conf, realm)

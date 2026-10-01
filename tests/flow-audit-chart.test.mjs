@@ -5,8 +5,8 @@ import test from 'node:test'
 
 import { render, repoRoot, sha256, umbrellaChart, yamlDocuments } from './blackbox/fixtures/blackbox.mjs'
 
-// #980: include verifier wiring, API-key header removal and the BusyBox overlay, preserving main's pod identities.
-const priorBaseline = '362fb0be45c9d0cdbc6982367ce82a5319f4a43ae6c138e3aaf0a21069e38cca'
+// #980 addendum 12: include tenant audience enforcement and executor wiring, preserving main's pod identities.
+const priorBaseline = '11bba368262a4c704b0d2ebc84d14f8d316632e1af53bf5c8718c11601247034'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',

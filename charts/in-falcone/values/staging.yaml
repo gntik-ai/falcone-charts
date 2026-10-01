@@ -12,6 +12,11 @@ global:
   externalSecrets:
     operatorNamespace: external-secrets
     operatorServiceAccount: external-secrets
+gateway:
+  mongoBearer:
+    tenantAudience: falcone-data-api
+    # Enable only in a follow-up values change after tenant mapper reconciliation.
+    enforceTenantAudience: false
 publicSurface:
   bindings:
     apiMetrics:

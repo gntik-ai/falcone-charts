@@ -3738,6 +3738,16 @@ controlPlaneExecutor:
         configMapKeyRef:
           name: '{{ .Release.Name }}-executor-jwt-config'
           key: KEYCLOAK_AUDIENCE
+    - name: KEYCLOAK_TENANT_AUDIENCE
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_TENANT_AUDIENCE
+    - name: KEYCLOAK_ENFORCE_TENANT_AUDIENCE
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_ENFORCE_TENANT_AUDIENCE
     - name: PGHOST
       value: "{{ .Release.Name }}-postgresql"
     - name: PGUSER
@@ -4133,6 +4143,11 @@ workflowWorker:
       capabilities:
         drop:
           - ALL
+
+gateway:
+  mongoBearer:
+    tenantAudience: falcone-data-api
+    enforceTenantAudience: true
 
 gatewayPolicy:
   version: 2026-03-24

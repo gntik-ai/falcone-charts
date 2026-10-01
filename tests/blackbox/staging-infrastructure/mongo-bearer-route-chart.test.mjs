@@ -42,7 +42,7 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.ok(route.plugins['issuer-jwks-auth'])
     assert.equal(route.plugins['openid-connect'], undefined)
     assert.deepEqual(Object.keys(route.plugins['issuer-jwks-auth']).sort(), [
-      'issuer_base_url', 'jwks_base_url', 'platform_realm', 'audience', 'cache_ttl', 'cache_max_entries', 'timeout',
+      'issuer_base_url', 'jwks_base_url', 'platform_realm', 'audience', 'tenant_audience', 'enforce_tenant_audience', 'cache_ttl', 'cache_max_entries', 'timeout',
     ].sort())
     assert.equal(route.plugins['issuer-jwks-auth'].cache_max_entries, 128)
     assert.equal(route.plugins['issuer-jwks-auth'].cache_ttl, 300)
@@ -92,6 +92,10 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.equal(env.KEYCLOAK_ISSUER, `${verifier.issuer_base_url}/realms/${verifier.platform_realm}`)
     assert.equal(env.KEYCLOAK_JWKS_URL, `${verifier.jwks_base_url}/realms/${verifier.platform_realm}/protocol/openid-connect/certs`)
     assert.equal(env.KEYCLOAK_AUDIENCE, verifier.audience)
+    assert.equal(verifier.tenant_audience, 'falcone-data-api')
+    assert.equal(verifier.enforce_tenant_audience, name !== 'staging', 'staging requires reconciliation before enforcement')
+    assert.equal(env.KEYCLOAK_TENANT_AUDIENCE, verifier.tenant_audience)
+    assert.equal(env.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, String(verifier.enforce_tenant_audience))
     if (name === 'staging') {
       assert.equal(verifier.issuer_base_url, 'https://iam.baas.musematic.ai')
       assert.equal(verifier.jwks_base_url, 'http://falcone-keycloak:8080')
@@ -128,6 +132,14 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   assert.ok(mounts.includes('/usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua'))
   const config = objects.find((object) => object.kind === 'ConfigMap' && /-apisix-config-file$/.test(object.metadata.name))
   assert.match(config.data['config.yaml'], /- issuer-jwks-auth/)
+  const executor = objects.find((object) => object.kind === 'Deployment' && /-control-plane-executor$/.test(object.metadata.name))
+  const env = executorEnv(objects, executor)
+  const canonical = yamlDocuments(readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8'))[0]
+  const verifier = canonical.routes.find((entry) => String(entry.id) === '2006').plugins['issuer-jwks-auth']
+  assert.equal(verifier.tenant_audience, 'falcone-data-api')
+  assert.equal(verifier.enforce_tenant_audience, true)
+  assert.equal(env.KEYCLOAK_TENANT_AUDIENCE, verifier.tenant_audience)
+  assert.equal(env.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, String(verifier.enforce_tenant_audience))
 })
 
 test('staging render and canonical kind bearer routes strip API keys while preserving the per-key route', () => {
@@ -224,6 +236,8 @@ test('staging standalone, bootstrap and executor use every configured verifier s
     '--set-string', 'gatewayPolicy.issuerJwksAuth.jwksBaseUrl=http://keycloak.internal:8080/',
     '--set-string', 'gatewayPolicy.issuerJwksAuth.platformRealm=custom-platform',
     '--set-string', 'gatewayPolicy.issuerJwksAuth.audience=custom-api',
+    '--set-string', 'gateway.mongoBearer.tenantAudience=custom-data-api',
+    '--set', 'gateway.mongoBearer.enforceTenantAudience=true',
     '--set', 'gatewayPolicy.issuerJwksAuth.cache_ttl=60',
     '--set', 'gatewayPolicy.issuerJwksAuth.cache_max_entries=4',
     '--set', 'gatewayPolicy.issuerJwksAuth.timeout=2',
@@ -234,12 +248,15 @@ test('staging standalone, bootstrap and executor use every configured verifier s
   assert.deepEqual(standalone.routes.find((entry) => String(entry.id) === '2006').plugins['issuer-jwks-auth'], verifier)
   assert.deepEqual(verifier, {
     issuer_base_url: 'https://iam.example.test/auth', jwks_base_url: 'http://keycloak.internal:8080',
-    platform_realm: 'custom-platform', audience: 'custom-api', cache_ttl: 60, cache_max_entries: 4, timeout: 2,
+    platform_realm: 'custom-platform', audience: 'custom-api', tenant_audience: 'custom-data-api',
+    enforce_tenant_audience: true, cache_ttl: 60, cache_max_entries: 4, timeout: 2,
   })
   const env = executorEnv(objects, executor)
   assert.equal(env.KEYCLOAK_ISSUER, `${verifier.issuer_base_url}/realms/custom-platform`)
   assert.equal(env.KEYCLOAK_JWKS_URL, `${verifier.jwks_base_url}/realms/custom-platform/protocol/openid-connect/certs`)
   assert.equal(env.KEYCLOAK_AUDIENCE, verifier.audience)
+  assert.equal(env.KEYCLOAK_TENANT_AUDIENCE, verifier.tenant_audience)
+  assert.equal(env.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'true')
   const policy = objects.find((object) => object.kind === 'ConfigMap' && object.data?.['gateway-policy.json'])
   const policyVerifier = JSON.parse(policy.data['gateway-policy.json']).issuerJwksAuth
   assert.equal(policyVerifier.issuerBaseUrl, verifier.issuer_base_url)
@@ -265,6 +282,23 @@ test('all verifier settings are required at render time', () => {
   }
 })
 
+test('tenant audience configuration rejects empty, absent and invalid settings', () => {
+  for (const setting of ['tenantAudience=', 'tenantAudience=null', 'tenantAudience=   ',
+    'enforceTenantAudience=null', 'enforceTenantAudience=invalid']) {
+    const result = run('helm', ['template', 'falcone-bbx', umbrellaChart,
+      '--set', `gateway.mongoBearer.${setting}`])
+    assert.notEqual(result.status, 0, `${setting} must fail closed`)
+    assert.match(result.stderr, /gateway.*mongoBearer|gateway\.mongoBearer/)
+  }
+})
+
+test('explicit enforcement off reaches both verifiers without changing the audience', () => {
+  const { objects, route, executor } = rendered(['--set', 'gateway.mongoBearer.enforceTenantAudience=false'])
+  assert.equal(route.plugins['issuer-jwks-auth'].enforce_tenant_audience, false)
+  assert.equal(route.plugins['issuer-jwks-auth'].tenant_audience, 'falcone-data-api')
+  assert.equal(executorEnv(objects, executor).KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'false')
+})
+
 test('staging standalone routes preserve the recorded pre-980 routes except the reviewed Mongo repair', () => {
   const renderedStaging = run('helm', [
     'template', 'falcone', umbrellaChart, '--namespace', 'in-falcone-staging',
@@ -284,13 +318,16 @@ test('staging standalone routes preserve the recorded pre-980 routes except the 
   const oldComment = '# falls through to the JWT route -> control-plane.'
   const currentComment = '# falls through to the JWT route (Mongo -> executor).'
   const credentialRemoval = '            # API-key credentials must use 2006-key and its per-key bucket.\n            - apikey\n            - x-api-key\n'
+  const tenantAudience = '        tenant_audience: "falcone-data-api"\n        enforce_tenant_audience: true\n'
   assert.ok(canonical.includes(credentialRemoval), 'reviewed API-key removal delta must be present')
   assert.ok(canonical.includes(currentComment), 'Mongo upstream comment must match the executor')
-  assert.equal(sha256(canonical.replace(credentialRemoval, '').replace(currentComment, oldComment)), recordedHash,
-    'canonical snapshot permits only the reviewed API-key removals and Mongo upstream comment correction')
+  assert.ok(canonical.includes(tenantAudience), 'canonical kind route must enforce the tenant audience')
+  assert.equal(sha256(canonical.replace(tenantAudience, '').replace(credentialRemoval, '').replace(currentComment, oldComment)), recordedHash,
+    'canonical snapshot permits only tenant audience settings, API-key removals and Mongo upstream comment correction')
   const current = canonical
     .replaceAll('.falcone.svc.cluster.local', '.in-falcone-staging.svc.cluster.local')
     .replace('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai"')
+    .replace('enforce_tenant_audience: true', 'enforce_tenant_audience: false')
   const route2006 = (routes) => {
     const match = routes.match(/^  - id: "2006"\n[\s\S]*?(?=^  - id: "2007")/m)
     assert.ok(match, 'route 2006 must be bounded by route 2007')

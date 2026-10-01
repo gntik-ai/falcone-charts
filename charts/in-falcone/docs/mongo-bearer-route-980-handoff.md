@@ -1,128 +1,127 @@
 # Mongo bearer route #980 deployment repair handoff
 
-This repair extends deployment head `ac1e66a401acc62e09337920980c39233b5eaad6`
-on the assigned branch `agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6`.
-It mirrors source repair `0bef4812`: route 2006 strips `apikey` and `x-api-key`
-before reaching the executor, so JWT requests cannot switch credentials and
-bypass route 2006-key's per-key bucket. The standalone file equals the source
-kind file byte-for-byte, including the corrected Mongo upstream comment. The
-Helm bootstrap route removes the same headers. Route 2006-key is unchanged;
-staging/kind render tests compare it to the immutable pre-980 fixture.
-Deployment CI now runs the offline verifier tests with LuaJIT, matching APISIX
-and the OpenSpec test plan.
+This addendum-12 repair extends deployment head
+`ef5a926bcfadf3a2e6d9136dd44bda1db221eca6` on assigned branch
+`agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6` and pairs with
+source repair `49d18d6a`. The entry worktree was clean. The existing route,
+policy, managed ConfigMap, mounts and API-key protections are preserved.
 
-## Preserved deployment decisions
+## Tenant audience enforcement
 
-The config-overlay init container retains the reviewed BusyBox digest
-`sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0`
-in default, prod, kind and staging. The existing staging registry handling is
-preserved; airgap explicitly mirrors the same digest and retains the command,
-mounts and security context. No image reference changes in this repair.
-Release review must confirm the digest exists in the mirror inventory.
+`gateway.mongoBearer.tenantAudience` defaults to `falcone-data-api`.
+`gateway.mongoBearer.enforceTenantAudience` is true in default and kind;
+prod inherits true. Staging explicitly sets false until reconciliation evidence
+permits a follow-up values revision. The chart validates a nonempty audience and
+a boolean flag, then feeds identical settings to bootstrap route 2006, managed
+standalone route 2006 and the executor ConfigMap as `KEYCLOAK_TENANT_AUDIENCE`
+and `KEYCLOAK_ENFORCE_TENANT_AUDIENCE`. Canonical kind routes match the source
+file byte-for-byte and enforce the default audience.
 
-APISIX retains main-container UID/GID 636 and inherited fsGroup 1001, with
-staging's existing pod UID/GID 636. The BusyBox init container uses UID/GID 636.
-The OpenShift overlay removes fixed IDs for SCC assignment. These contracts
-remain equal to base/main `433be510e84be3043ffa09ca354475184f0460f6`.
+The Lua verifier requires an exact string `aud` or array member for tenant
+realms when enforcement is true. Missing/wrong audience and `azp` substitution
+return 401 before JWKS lookup. Empty/absent configured audience cannot match
+any token, including a token without `aud`; schema/render validation also
+rejects this configuration. Explicit false supports the documented migration.
+The platform audience rule, trusted issuer selection and bounded cache remain
+unchanged. The Lua test matrix replaces the former wrong-audience acceptance
+assertion and retains rejection/cache coverage.
 
-Staging's issuer base remains `https://iam.baas.musematic.ai` without `/auth`;
-JWKS stays at `http://falcone-keycloak:8080`. Executor and verifier agree.
-Other route families' `gatewayPolicy.oidc` settings remain unchanged. Prod
-Keycloak hosts remain documented placeholders; the existing non-Keycloak
-console/CORS dev hostname is outside this change.
+Executor enforcement covers every tenant-token executor route. Default audiences
+also align with both source provisioning paths and reconciliation. For a custom
+audience, release review must supply the same `KEYCLOAK_TENANT_AUDIENCE` to the
+control-plane provisioner and reconciliation environment. Kind's external route
+ConfigMap must also use the custom value if kind overrides the default.
 
-## Reviewed baseline changes and gate adaptations
+## Reviewed baseline changes
 
-Only the umbrella default render hash and flow-audit baseline are re-baselined.
-The original #980 render changes add verifier configuration, plugin mounts,
-managed staging routes and the BusyBox overlay while preserving pod identity.
+Only the two permitted render baselines change:
 
-- `tests/blackbox/fixtures/umbrella-default-render.sha256`: base/main
-  `b18179ef33e096050c236aee0efc87c886f63ceaf06bc61269c4370225d5c15c`,
-  previous deployment `b19843c58df41783469ca6655a5d160bc458488de4089dc4bb05839f29715588`,
-  repaired render `f74e1c505429b9823f5a352488ffafa674aa4af0d48b85b88cead3154cdba4fa`. Against the previous deployment, only
-  `route-2006.json` in the bootstrap ConfigMap changes: its removal list adds
-  the two API-key headers. A complete parsed render comparison confirms this.
-- `tests/flow-audit-chart.test.mjs`: base/main prior-object baseline
-  `26c5dc19ecbb5054fc3a8565852c89def7f2456793010fe320d0fa046e56087b`,
-  previous deployment `3abc15a2691fc8839c74640770b23771c2d27f001e663fb319ea0543ea7a8b08`,
-  repaired baseline `362fb0be45c9d0cdbc6982367ce82a5319f4a43ae6c138e3aaf0a21069e38cca`.
-  This hashes the same default render after removing only flow-audit additions,
-  rule loading and the rollout marker. The same two header removals require
-  this update; flow-audit behavior and its exact assertions are unchanged.
+- `tests/blackbox/fixtures/umbrella-default-render.sha256`: deployment entry
+  `f74e1c505429b9823f5a352488ffafa674aa4af0d48b85b88cead3154cdba4fa`,
+  repaired `5ca1986297dc0c39ebd98ce720d3d352ddb7b2bacc79555bc1c0c3eeb1d3579a`.
+- `tests/flow-audit-chart.test.mjs`: deployment entry prior-object baseline
+  `362fb0be45c9d0cdbc6982367ce82a5319f4a43ae6c138e3aaf0a21069e38cca`,
+  repaired `11bba368262a4c704b0d2ebc84d14f8d316632e1af53bf5c8718c11601247034`.
 
-The earlier ChangeSet also adapts these existing contracts, which were omitted
-from the old handoff's accounting:
+A parsed default-render comparison against the entry commit confirms unchanged
+object inventory and exactly four changed objects: the Lua plugin ConfigMap,
+bootstrap route payload, executor JWT ConfigMap and executor Deployment.
+Their tenant-audience verifier/configuration additions require both hashes to
+change. Flow-audit objects, rules and assertions remain unchanged. No other
+fixture is re-baselined. The pre-980 route fixture and canonical hash stay
+immutable; the snapshot check removes only the explicit audience fields,
+previously reviewed API-key header removals and Mongo upstream comment fix.
+The source maker must update its tasks/handoff baseline records to these final
+hashes when refreshing the paired pins; the earlier b19843c5/3abc15a2 records
+are superseded.
 
-- `tests/blackbox/fixtures/staging-infrastructure/revision23-partial-manual-recovery-tools.mjs`
-  adds the exact read-only verifier mount and ConfigMap volume to its synthetic
-  live Deployment and Helm-render representations. This models the reviewed
-  plugin attachment; it does not capture or change a live cluster.
-- `charts/in-falcone/migrations/revision-20-repair.sh` requires those same exact
-  mount and volume entries in both fail-closed APISIX convergence checks.
-  Ownership, identity, image, evidence and mutation gates remain intact.
-- `tests/blackbox/staging-infrastructure/staging-infrastructure-contract.test.mjs`
-  requires exactly one Helm-managed `falcone-apisix-standalone` ConfigMap,
-  implementing the operator's adoption decision instead of referencing it only.
+## Preserved safety and release gates
 
-Those adaptations are preserved, not expanded by this repair. The pre-980
-route fixture and canonical route hash remain unchanged. The staging equality
-test removes only the explicit reviewed header-removal delta and comment fix
-when checking the original canonical hash, then verifies the rendered routes
-against the pre-980 table plus route 2006 and the corrected comment.
+APISIX container UID/GID 636, inherited fsGroup 1001, staging pod identity and
+OpenShift SCC behavior retain the main contracts. The previously reviewed
+BusyBox overlay digest, registry handling and airgap mirror are unchanged;
+release review still verifies mirror inventory. No image references change.
 
-## Validation and sandbox limits
+Staging issuer remains `https://iam.baas.musematic.ai` without `/auth`, with
+JWKS at `http://falcone-keycloak:8080`. Other `gatewayPolicy.oidc` settings stay
+unchanged. Prod hosts remain documented placeholders and must be supplied
+before rollout: enabling executor verification against the placeholder would
+reject prod bearer traffic. Tenant JWKS fetches require executor egress to the
+public environment issuer host, including `iam.baas.musematic.ai` in staging.
 
-The new assertions first reproduced the missing API-key header removals.
-Scoped chart checks cover bootstrap, staging render and canonical kind removal lists,
-unchanged API-key routes, four-profile BusyBox, issuer/JWKS parity, managed
-staging route equality, required-key failures, airgap and OpenShift identities.
-The flow-audit suite checks both permitted baselines. Strict lint and renders
-cover default, prod, staging, kind and airgap. Source gateway route tests check
-byte parity and both credential paths against this chart.
+Keep Secret-sourced gateway trust, External Secrets/OpenBao and all migration,
+backup, ownership and evidence gates. API-key route 2006-key and its per-key
+rate limits/scopes stay unchanged. Bearer limiting retains its shared-IP
+fallback as a separate follow-up. Unknown-kid refresh remains out of scope.
+Release review must confirm strictly named non-tenant realms cannot reach
+tenant data through the existing issuer/workspace binding.
 
-Final bounded results: Mongo chart 11/11, flow-audit 7/7, source route/parity
-5/5, source policy/API-key contracts 14/14 with the read-only dependency loader,
-five-profile strict lint/render, five scoped numeric-identity/OpenShift/staging
-contract checks and the managed-Knative default baseline all pass. JavaScript
-syntax, workflow YAML/LuaJIT command checks, repair-script Bash syntax and
-`git diff --check` pass. These tests render or use synthetic fixtures only.
+## Mandatory staging rollout order (operator execution only)
 
-The full staging-infrastructure contract, including its shell-syntax subprocess,
-remains a PR CI gate: that subprocess previously timed out at its 30-second bound
-locally. LuaJIT is absent here; the updated CI step must run verifier rejection
-and cache tests. Kind/Docker and image scans require PR CI/release infrastructure.
-The source integration repair now exercises workspace-bound tokens, cross-workspace
-403/404 without disclosure, mixed credentials, data:write enforcement and per-key
-429 with an independent fresh-key bucket; it must run against the public APISIX
-endpoint in CI. Native source policy contracts need installed dependencies;
-read-only dependency-shim results are supplemental evidence, not the CI gate.
+1. Keep staging enforcement false. Capture a redacted live standalone ConfigMap
+   SHA256/diff and rollback artifact; confirm the rendered routes omit
+   `llmwiki-s2-mongo-jwt` and match the canonical table plus this repair.
+2. With the existing Secret-backed kc-admin environment, run source
+   `node scripts/backfill-tenant-realm-audience.mjs` (dry run), then the same
+   command with `--apply`, then `--apply` again. Retain redacted reports proving
+   all relevant tenant-app clients have the matching mapper and zero repairs
+   on repeat. Confirm provisioning retry tests and required additional callers
+   such as console/service-account clients have audience preparation.
+3. Only after successful reconciliation, make a follow-up staging values
+   revision setting `gateway.mongoBearer.enforceTenantAudience: true`. Ensure
+   both APISIX and executor pods reload the configuration during operator-gated
+   sync: plugin/route subPath mounts and ConfigMap-backed executor environment
+   do not automatically refresh running processes. Verify the rendered flags
+   match and that new pods use them. Prod requires reconciliation and real
+   hosts before its rollout because it inherits true.
+4. Verify public-gateway CRUD, wrong/missing/azp-only audience 401s, direct
+   executor 401s, unknown issuer and unauthenticated 401s, workspace A/B 403,
+   API-key scope/rate-limit behavior and plugin loading. Roll back enforcement
+   to false with pod reloads if needed; audience mappers may remain.
 
-## Paired-repository pin and release follow-up
+## Validation and paired handoff
 
-At entry, both source workflow pins equal the previous deployment head
-`ac1e66a401acc62e09337920980c39233b5eaad6`. Source repair `0bef4812`
-correctly records **pin pending deployment repair** while these chart repairs
-are outstanding. The commit containing this handoff completes deployment repair;
-its `git rev-parse HEAD` is the final deployment head. The next source maker must
-set both `FALCONE_CHARTS_REF` pins to that exact head and rerun parity. Source files
-are outside this deployment-only assignment. No further deployment commit is
-needed to record the source pin refresh. The paired checker remains pending
-until the pins converge.
+Scoped evidence covers chart profiles, audience/flag parity and overrides,
+invalid configuration rejection, unchanged API-key routes, managed staging
+route equality, BusyBox and APISIX/OpenShift identities. The two permitted
+baseline suites and source route/parity checks are rerun for this repair.
+Local results: Mongo chart 13/13, flow-audit 7/7, default umbrella baseline 1/1,
+source route/parity 5/5, staging/OpenShift scoped checks 2/2, and strict Helm
+lint for default, prod, staging, kind, airgap and OpenShift pass. The separate
+Node numeric-identity suite requires the absent `yaml` package; its native run
+is deferred to CI. Mongo chart identity assertions pass without that dependency.
+LuaJIT is absent; its verifier matrix remains a required PR CI gate. Live kind
+CRUD/isolation/API-key/429, frozen-dependency gateway-policy contracts, full
+staging-infrastructure contracts and image builds/scans remain PR CI/release
+gates. Supplemental local checks never replace those gates.
 
-Release review must confirm platform-only audience rejection versus the literal
-wrong-audience acceptance criterion: tenant tokens currently use trusted realm
-issuers and executor workspace binding. Bearer limiting retains the existing
-shared-IP fallback; a per-subject bucket is a separate follow-up. Bootstrap and
-standalone body caps remain bounded and unchanged. Unknown `kid` fails closed
-until the bounded 300-second cache expires; refresh is a separate review decision.
-
-Before operator-gated sync, verify the live staging issuer without exposing tokens,
-confirm prod hosts, mirror inventory and executor egress, and retain the live
-standalone ConfigMap SHA256/diff and rollback content as an artifact. The route
-fixture derives from base kind routes, not a live capture. The managed render
-omits `llmwiki-s2-mongo-jwt`. Preserve Secret-sourced gateway trust and External
-Secrets/OpenBao gates. Verify CRUD, isolation, rejected tokens, scope/429 and
-plugin loading after rollout.
+Both source `FALCONE_CHARTS_REF` pins equal the entry deployment head
+`ef5a926bcfadf3a2e6d9136dd44bda1db221eca6`.
+Current state: **pin pending deployment repair**.
+After the single additional deployment commit, the next
+source maker must set both pins to that exact final head, update its baseline
+records and rerun parity. This deployment-only work does not edit source files;
+no extra deployment commit is needed to record the source pin refresh.
+The supplied addendum is truncated; release review retains that open question.
 
 No deployment, push, merge, credential access or cluster mutation was performed.

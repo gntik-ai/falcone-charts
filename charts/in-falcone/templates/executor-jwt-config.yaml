@@ -11,4 +11,6 @@ data:
   KEYCLOAK_ISSUER: {{ printf "%s/realms/%s" $verifier.issuer_base_url $verifier.platform_realm | quote }}
   KEYCLOAK_JWKS_URL: {{ printf "%s/realms/%s/protocol/openid-connect/certs" $verifier.jwks_base_url $verifier.platform_realm | quote }}
   KEYCLOAK_AUDIENCE: {{ $verifier.audience | quote }}
+  KEYCLOAK_TENANT_AUDIENCE: {{ $verifier.tenant_audience | quote }}
+  KEYCLOAK_ENFORCE_TENANT_AUDIENCE: {{ $verifier.enforce_tenant_audience | toString | quote }}
 {{- end }}

@@ -48,7 +48,8 @@ local platform = "https://iam/realms/platform"
 local tenant = "https://iam/realms/tenant-a"
 local foreign = "https://other/realms/tenant-a"
 local conf = {issuer_base_url = "https://iam", jwks_base_url = "https://internal-iam",
-    platform_realm = "platform", audience = "api", cache_ttl = 10, cache_max_entries = 2, timeout = 1}
+    platform_realm = "platform", audience = "api", tenant_audience = "falcone-data-api",
+    enforce_tenant_audience = true, cache_ttl = 10, cache_max_entries = 2, timeout = 1}
 local valid_keys = {keys = {{kid = "key-1", kty = "RSA", x5c = {"Y2VydA=="}}}}
 responses.keys = valid_keys
 
@@ -60,6 +61,8 @@ local function reset()
     reply_body = "keys"
     fail_fetch = false
     responses.keys = valid_keys
+    conf.tenant_audience = "falcone-data-api"
+    conf.enforce_tenant_audience = true
     now = now + 100
 end
 
@@ -72,7 +75,7 @@ local function call(header, payload, signature)
 end
 
 local function claims(iss)
-    return {iss = iss, aud = "api", exp = now + 60}
+    return {iss = iss, aud = iss == platform and "api" or "falcone-data-api", exp = now + 60}
 end
 
 local header = {alg = "RS256", kid = "key-1"}
@@ -102,8 +105,39 @@ wrong_audience.aud = "other"
 assert(call(header, wrong_audience) == 401)
 local tenant_other_audience = claims(tenant)
 tenant_other_audience.aud = "tenant-client"
-assert(call(header, tenant_other_audience) == nil, "tenant audience is not platform audience")
+assert(call(header, tenant_other_audience) == 401, "wrong tenant audience must reject")
+tenant_other_audience.azp = conf.tenant_audience
+assert(call(header, tenant_other_audience) == 401, "azp must not substitute for aud")
+tenant_other_audience.aud = nil
+assert(call(header, tenant_other_audience) == 401, "absent aud with matching azp must reject")
+tenant_other_audience.azp = nil
+assert(call(header, tenant_other_audience) == 401, "absent tenant audience must reject")
+tenant_other_audience.aud = "prefix-falcone-data-api"
+assert(call(header, tenant_other_audience) == 401, "tenant audience requires exact match")
+tenant_other_audience.aud = {"tenant-client"}
+assert(call(header, tenant_other_audience) == 401, "array without tenant audience must reject")
+assert(fetches == 1, "wrong tenant audiences must not fetch JWKS")
+assert(call(header, claims(tenant)) == nil, "matching string tenant audience must pass")
 assert(fetches == 2 and last_response == "https://internal-iam/realms/tenant-a/protocol/openid-connect/certs")
+local tenant_array_audience = claims(tenant)
+tenant_array_audience.aud = {"tenant-client", conf.tenant_audience}
+assert(call(header, tenant_array_audience) == nil, "array containing tenant audience must pass")
+for _, empty in ipairs({"", "   ", false}) do
+    conf.tenant_audience = empty or nil
+    assert(call(header, claims(tenant)) == 401, "enforcement with empty configured audience must fail closed")
+    local absent_aud = claims(tenant)
+    absent_aud.aud = nil
+    assert(call(header, absent_aud) == 401, "absent configured and token audience must never match")
+end
+conf.tenant_audience = "falcone-data-api"
+conf.enforce_tenant_audience = false
+assert(call(header, tenant_other_audience) == nil, "explicit enforcement off allows legacy tenant audience")
+tenant_other_audience.aud = nil
+assert(call(header, tenant_other_audience) == nil, "enforcement off permits absent tenant aud")
+assert(call(header, wrong_audience) == 401, "enforcement off must preserve platform audience rejection")
+local platform_array_audience = claims(platform)
+platform_array_audience.aud = {"other", "api"}
+assert(call(header, platform_array_audience) == nil, "platform array audience rule is unchanged")
 
 reset()
 assert(call({alg = "RS256", kid = "unknown"}, claims(tenant)) == 401)

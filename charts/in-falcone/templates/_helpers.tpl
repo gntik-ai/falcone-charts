@@ -110,6 +110,9 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{/* One verifier configuration for bootstrap payloads and standalone routes. */}}
 {{- define "in-falcone.issuerJwksAuth" -}}
 {{- $verifier := .Values.gatewayPolicy.issuerJwksAuth -}}
+{{- $mongo := .Values.gateway.mongoBearer -}}
+{{- if not (kindIs "bool" $mongo.enforceTenantAudience) }}{{- fail "gateway.mongoBearer.enforceTenantAudience must be boolean" -}}{{- end -}}
+{{- if or (not (kindIs "string" $mongo.tenantAudience)) (not (trim $mongo.tenantAudience)) }}{{- fail "gateway.mongoBearer.tenantAudience must be non-empty" -}}{{- end -}}
 {{- range $key := list "issuerBaseUrl" "jwksBaseUrl" "platformRealm" "audience" "cache_ttl" "cache_max_entries" "timeout" -}}
 {{- if not (index $verifier $key) }}{{- fail (printf "gatewayPolicy.issuerJwksAuth.%s is required" $key) -}}{{- end -}}
 {{- end -}}
@@ -117,7 +120,7 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{- $jwksBase := trimSuffix "/" (tpl (tpl $verifier.jwksBaseUrl .) .) -}}
 {{- if not $issuerBase }}{{- fail "gatewayPolicy.issuerJwksAuth.issuerBaseUrl is required" -}}{{- end -}}
 {{- if not $jwksBase }}{{- fail "gatewayPolicy.issuerJwksAuth.jwksBaseUrl is required" -}}{{- end -}}
-{{- dict "issuer_base_url" $issuerBase "jwks_base_url" $jwksBase "platform_realm" $verifier.platformRealm "audience" $verifier.audience "cache_ttl" $verifier.cache_ttl "cache_max_entries" $verifier.cache_max_entries "timeout" $verifier.timeout | toJson -}}
+{{- dict "issuer_base_url" $issuerBase "jwks_base_url" $jwksBase "platform_realm" $verifier.platformRealm "audience" $verifier.audience "tenant_audience" $mongo.tenantAudience "enforce_tenant_audience" $mongo.enforceTenantAudience "cache_ttl" $verifier.cache_ttl "cache_max_entries" $verifier.cache_max_entries "timeout" $verifier.timeout | toJson -}}
 {{- end -}}
 
 {{- define "in-falcone.bootstrapOneShotHash" -}}
