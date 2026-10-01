@@ -1,18 +1,22 @@
 # Mongo bearer route #980 deployment repair handoff
 
-This render-contract continuation extends deployment head
-`c63c8617e23733e6ebfd633d1fd56cbbc13acc8e` on assigned branch
+This deployment review extends the supplied deployment head
+`f8370ca13edd0117a70afa922278791964d29fb8` on assigned branch
 `agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6` and pairs with
-source continuation `faacf562b73478aecab0e0378571db34a6b28937`
+source continuation `f1d90d8bd968b43ee00a9dfe6565ec0b2e653e79`
 (the supplied source maker result). The entry worktree was
-clean. The existing route,
-policy, managed ConfigMap, mounts and API-key protections are preserved.
+clean and its path, branch and Git metadata match the assigned lease. The supplied
+implement-issue contract, OpenSpec, acceptance criteria and R2 policy bound this
+review. This continuation corrects rollout guidance and records fresh evidence;
+no runtime, chart values, images, migration contracts or fixtures change. The
+existing route, policy, managed ConfigMap, mounts and API-key protections are preserved.
 
-The checker-reproduced `APISIX_RENDER_CONVERGENCE_DRIFT reason=contract`
+The previously repaired `APISIX_RENDER_CONVERGENCE_DRIFT reason=contract`
 occurred because the preceding repair made the config-copy root filesystem
-read-only without updating the migration's exact render expectation. This
-continuation adds that required field to the revision-20 render contract and
-the revision-23 synthetic render. The exact comparison remains fail-closed;
+read-only without updating the migration's exact render expectation. Entry
+commit `f8370ca13edd0117a70afa922278791964d29fb8` added that required field to
+the revision-20 render contract and revision-23 synthetic render. Fresh scoped
+checks retain that repair. The exact comparison remains fail-closed;
 no chart values, images, numeric identities or baselines change here.
 
 ## Tenant audience enforcement
@@ -42,10 +46,12 @@ after creating a service-account client, before persisting the service account.
 `scripts/backfill-tenant-realm-audience.mjs` reconciles clients marked
 `in-falcone.kind=tenant-app` or `in-falcone.kind=service-account`, listing mappers
 before adding a missing mapper. Service-account preparation is mandatory for
-Mongo, events and functions because they share the executor verifier. For a custom
-audience, release review must supply the same `KEYCLOAK_TENANT_AUDIENCE` to the
-control-plane provisioner and reconciliation environment. Kind's external route
-ConfigMap must also use the custom value if kind overrides the default.
+Mongo, events and functions because they share the executor verifier. Keep
+`tenantAudience` at `falcone-data-api` for this ChangeSet. The source deployment
+validation gate rejects overrides until the control-plane provisioner and kind's
+external route ConfigMap consume the configured audience. Passing a custom value
+only to the gateway and executor would break parity with those callers. Custom
+audience support requires a later paired change; do not bypass the existing gate.
 
 ## Reviewed baseline changes
 
@@ -101,7 +107,10 @@ tenant data through the existing issuer/workspace binding.
 
 ## Mandatory staging rollout order (operator execution only)
 
-1. Keep staging enforcement false. Capture a redacted live standalone ConfigMap
+1. Keep staging enforcement false and `tenantAudience` at `falcone-data-api`.
+   Validate every ordered values layer with source
+   `node scripts/validate-deployment-chart.mjs --values <layer> ...`, preserving
+   the custom-audience rejection gate. Capture a redacted live standalone ConfigMap
    SHA256/diff and rollback artifact; confirm the rendered routes omit
    `llmwiki-s2-mongo-jwt` and match the canonical table plus this repair.
 2. With the existing Secret-backed kc-admin environment, run source
@@ -127,22 +136,26 @@ tenant data through the existing issuer/workspace binding.
 
 ## Validation and paired handoff
 
-Scoped evidence covers chart profiles, audience/flag parity and overrides,
+Fresh scoped evidence covers chart profiles, audience/flag parity and render overrides,
 invalid configuration rejection, unchanged API-key routes, managed staging
 route equality, BusyBox and APISIX/OpenShift identities. The two permitted
-baseline suites and source route/parity checks were rerun for this continuation.
+baseline suites were rerun for this continuation.
 The Mongo chart, flow-audit and APISIX metrics suites pass all 22 tests,
 including both retained baselines. Strict Helm lint passes for default, prod,
-staging and kind. Bash and Node syntax checks pass for the changed migration
-and fixture respectively. Before the fix, both checker-targeted staging tests
-reproduced the render-contract failure; after the fix, both pass. The combined
-recovery run also passed all 20 cases in the revision-23 partial-recovery group,
-including rejection of rendered identity, cardinality and mount drift.
-The full staging suite passes 13 of 14 tests; its unchanged OpenBao reconciler
-shell syntax check times out after 30 seconds. The broader combined run exits
-124 at its 180-second bound and reports revision-24 fixture
-`REPAIR_PACKAGE_PULL_FAILED` errors before the changed render gate. These
-broader paths need CI revalidation; neither failing path changes here.
+staging and kind. Bash and Node syntax checks pass for the existing repaired
+migration and fixture respectively. Both checker-targeted revision-20 tests
+pass again using isolated fake cluster clients (read-only dry run and confirmed
+Phase B). Four selected revision-23 checks pass: exact apply, rejection of an
+inexact confirmation before mutation, OpenShift identity behavior and recovery
+dry-run admission. All recovery clients are isolated fakes, never live cluster
+clients. The broader staging and revision-24 suites remain CI gates; this
+continuation does not claim a fresh full-suite result or change their fixtures.
+
+The fresh render run used a 90-second bound with
+`node --test --experimental-test-isolation=none` and the Mongo chart, flow-audit
+and APISIX metrics files. The two revision-20 and four revision-23 checks used
+the same bound and runner with name filters in their existing contract files.
+`git diff --check` passes. No supplemental dependency loader was used.
 
 The preceding repair's offline Trivy evidence used embedded checks and confirmed no KSV-0014
 on the config-copy init container in default, prod, staging, kind and airgap;
@@ -156,17 +169,15 @@ CRUD/isolation/API-key/429, frozen-dependency gateway-policy contracts, full
 staging-infrastructure contracts and image builds/scans remain PR CI/release
 gates. Supplemental local checks never replace those gates.
 
-Both source `FALCONE_CHARTS_REF` pins still equal the earlier deployment head
-`19b9aa7bc25005be0d962dc7014394946e3a73e4`.
-At entry, source route parity passes five tests and fails only the pin check
-against `c63c8617e23733e6ebfd633d1fd56cbbc13acc8e`.
-Current state: **pin pending deployment repair** until this continuation is
-committed, then **pin refresh required against the final deployment head**.
-After this single additional deployment commit, the next
-source maker must set both pins to that exact final head, update its baseline
-and tasks.md gate records and rerun parity. The paired ChangeSet remains
-incomplete until that check passes. This deployment-only work does not edit source files;
-no extra deployment commit is needed to record the source pin refresh.
+Both source `FALCONE_CHARTS_REF` pins match the entry deployment head
+`f8370ca13edd0117a70afa922278791964d29fb8`. The supplied source maker already
+verified route parity there. This required rollout-documentation commit advances
+the deployment head: **pin refresh required against the final deployment head**.
+The next source maker must set both workflow pins to that exact head and rerun
+parity. The paired ChangeSet remains incomplete until that check passes. This
+deployment-only work does not edit source files; no extra deployment commit is
+needed to record the source pin refresh. Both permitted render baseline hashes
+above remain unchanged.
 The supplied addendum is truncated; release review retains that open question.
 
 No deployment, push, merge, credential access or cluster mutation was performed.
