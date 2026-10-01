@@ -2719,6 +2719,16 @@ ferretdb:
       - control-plane
       - control-plane-executor
       - workflow-worker
+# Platform-scoped flow definition audit transport. Templates provide these same
+# defaults when upgrading with --reuse-values from a release without this block.
+flowAudit:
+  topic:
+    partitions: 3
+    replicationFactor: 1
+  alerts:
+    enabled: true
+    pendingRows: 100
+    relayStaleSeconds: 300
 kafka:
   wrapper:
     componentId: kafka

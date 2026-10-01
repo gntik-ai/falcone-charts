@@ -1,0 +1,16 @@
+{{- $audit := .Values.flowAudit | default dict -}}
+{{- $alerts := get $audit "alerts" | default dict -}}
+{{- $enabled := true -}}
+{{- if hasKey $alerts "enabled" -}}{{- $enabled = get $alerts "enabled" -}}{{- end -}}
+{{- if and $enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ printf "%s-flow-audit" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: flow-audit-alerts
+spec:
+  groups:
+{{ include "in-falcone.flowAuditRules" . | indent 4 }}
+{{- end }}

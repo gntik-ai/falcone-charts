@@ -9,6 +9,10 @@
 {{- $ns := .Release.Namespace -}}
 {{- $cp := printf "%s.%s.svc.cluster.local:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "controlPlane")) $ns .Values.controlPlane.service.port -}}
 {{- $apisix := printf "%s.%s.svc.cluster.local:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "apisix")) $ns (.Values.apisix.service.port | default 9080) -}}
+{{- $audit := .Values.flowAudit | default dict -}}
+{{- $alerts := get $audit "alerts" | default dict -}}
+{{- $alertsEnabled := true -}}
+{{- if hasKey $alerts "enabled" -}}{{- $alertsEnabled = get $alerts "enabled" -}}{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -23,6 +27,10 @@ data:
       evaluation_interval: 30s
       external_labels:
         cluster: in-falcone
+    {{- if $alertsEnabled }}
+    rule_files:
+      - /etc/prometheus/flow-audit.rules.yml
+    {{- end }}
     scrape_configs:
       - job_name: prometheus
         static_configs:
@@ -83,3 +91,8 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
+  {{- if $alertsEnabled }}
+  flow-audit.rules.yml: |
+    groups:
+{{ include "in-falcone.flowAuditRules" . | indent 6 }}
+  {{- end }}

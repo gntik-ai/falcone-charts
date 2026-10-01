@@ -1,0 +1,119 @@
+{{- $database := .Values.global.webhookDatabase -}}
+{{- $migration := $database.migration | default dict -}}
+{{- $authorityReplayEnabled := true -}}
+{{- if hasKey $migration "authorityReplayEnabled" -}}
+  {{- $authorityReplayEnabled = get $migration "authorityReplayEnabled" -}}
+{{- end -}}
+{{- /* A chart-only upgrade waiver must not apply this database migration. */ -}}
+{{- if or (ne (include "in-falcone.isUpgrade" .) "true") $authorityReplayEnabled -}}
+{{- $transport := .Values.global.transportSecurity | default dict -}}
+{{- $tls := $transport.enabled | default false -}}
+{{- $ca := and $tls (ne ($transport.caSecretName | default "") "") -}}
+{{- $security := deepCopy ($database.securityContext | default dict) -}}
+{{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
+  {{- $_ := unset $security "runAsUser" -}}
+  {{- $_ := unset $security "runAsGroup" -}}
+{{- end -}}
+{{- $name := printf "%s-flow-audit-grants" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: flow-audit-grants
+data:
+  migration.sql: |
+{{ .Files.Get "bootstrap/migrations/20260930-008-flow-audit-outbox-grants.sql" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: flow-audit-grants
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "12"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "in-falcone.labels" . | nindent 8 }}
+        in-falcone.io/component: flow-audit-grants
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- include "in-falcone.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: apply-grants
+          image: {{ include "component-wrapper.renderImage" (dict "Values" .Values "image" $database.bootstrapImage "name" "flow audit grants") | quote }}
+          imagePullPolicy: {{ $database.bootstrapImage.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              attempts=0
+              until [ "$(psql -v ON_ERROR_STOP=1 -tAc "SELECT to_regclass('public.flow_audit_outbox') IS NOT NULL" | tr -d '[:space:]')" = t ]; do
+                attempts=$((attempts + 1))
+                [ "$attempts" -lt 120 ] || { echo 'flow_audit_outbox not ready' >&2; exit 1; }
+                sleep 2
+              done
+              psql -v ON_ERROR_STOP=1 -v executor_role="$FLOW_AUDIT_EXECUTOR_ROLE" -f /migration/migration.sql
+          env:
+            - name: PGHOST
+              value: {{ tpl $database.connection.host . | quote }}
+            - name: PGPORT
+              value: {{ $database.connection.port | quote }}
+            - name: PGDATABASE
+              value: {{ $database.connection.database | quote }}
+            - name: PGUSER
+              value: {{ $database.administrator.role | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
+                  key: POSTGRESQL_POSTGRES_PASSWORD
+            - name: FLOW_AUDIT_EXECUTOR_ROLE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.secretRefs.postgresCredentials.existingSecret | quote }}
+                  key: POSTGRESQL_USERNAME
+            {{- if $tls }}
+            {{- range ($transport.env | default list) }}
+            {{- if has (.name | default "") (list "PGSSLMODE" "PGSSLROOTCERT") }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: migration
+              mountPath: /migration
+              readOnly: true
+            {{- if $ca }}
+            - name: falcone-transport-ca
+              mountPath: {{ $transport.caMountPath | default "/etc/falcone/tls" }}
+              readOnly: true
+            {{- end }}
+          securityContext:
+            {{- toYaml $security | nindent 12 }}
+          resources:
+            {{- toYaml $database.resources | nindent 12 }}
+      volumes:
+        - name: migration
+          configMap:
+            name: {{ $name }}
+        {{- if $ca }}
+        - name: falcone-transport-ca
+          secret:
+            secretName: {{ $transport.caSecretName }}
+        {{- end }}
+{{- end }}
