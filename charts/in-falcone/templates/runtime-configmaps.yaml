@@ -46,7 +46,11 @@ metadata:
     {{- include "in-falcone.labels" . | nindent 4 }}
 data:
   gateway-policy.json: |
-{{ toPrettyJson .Values.gatewayPolicy | nindent 4 }}
+{{- $gatewayPolicy := deepCopy .Values.gatewayPolicy -}}
+{{- $issuerJwksAuth := $gatewayPolicy.issuerJwksAuth -}}
+{{- $_ := set $issuerJwksAuth "issuerBaseUrl" (tpl (tpl $issuerJwksAuth.issuerBaseUrl .) .) -}}
+{{- $_ := set $issuerJwksAuth "jwksBaseUrl" (tpl (tpl $issuerJwksAuth.jwksBaseUrl .) .) -}}
+{{ toPrettyJson $gatewayPolicy | nindent 4 }}
   enabled-apisix-routes.json: |
 {{- $mode := .Values.gatewayPolicy.passthrough.mode -}}
 {{- $routes := list -}}

@@ -30,6 +30,7 @@ local plugin = {
 -- entries are never used if a refresh fails. Unknown issuers do not reach HTTP.
 local cache = {}
 local count = 0
+local failed_fetch_ttl = 5
 
 local function b64url(value)
     if type(value) ~= "string" or not value:match("^[A-Za-z0-9_-]+$") then return nil end
@@ -64,6 +65,25 @@ local function rsa_pem(key)
     return "-----BEGIN PUBLIC KEY-----\n" .. encoded .. "\n-----END PUBLIC KEY-----"
 end
 
+local function remember(conf, cache_key, now, keys, ttl)
+    local cached = cache[cache_key]
+    -- Failed fetches occupy the same bounded LRU as successful JWKS documents.
+    -- An expired success is replaced by a short negative entry, never reused.
+    local available = conf.cache_max_entries - (cached and 0 or 1)
+    while count > available do
+        local oldest, oldest_time
+        for issuer, item in pairs(cache) do
+            if issuer ~= cache_key and (not oldest_time or item.used < oldest_time) then
+                oldest, oldest_time = issuer, item.used
+            end
+        end
+        cache[oldest] = nil
+        count = count - 1
+    end
+    if not cached then count = count + 1 end
+    cache[cache_key] = {keys = keys, expires = now + ttl, used = now}
+end
+
 local function get_keys(conf, realm)
     local now = ngx.now()
     local cache_key = conf.jwks_base_url .. "/realms/" .. realm
@@ -77,19 +97,16 @@ local function get_keys(conf, realm)
     local ok, response = pcall(client.request_uri, client,
         cache_key .. "/protocol/openid-connect/certs", {method = "GET", ssl_verify = true})
     if not ok or not response or response.status ~= 200
-        or type(response.body) ~= "string" or #response.body > 65536 then return nil end
-    local document = cjson.decode(response.body)
-    if type(document) ~= "table" or type(document.keys) ~= "table" or #document.keys > 32 then return nil end
-    while not cached and count >= conf.cache_max_entries do
-        local oldest, oldest_time
-        for issuer, item in pairs(cache) do
-            if not oldest_time or item.used < oldest_time then oldest, oldest_time = issuer, item.used end
-        end
-        cache[oldest] = nil
-        count = count - 1
+        or type(response.body) ~= "string" or #response.body > 65536 then
+        remember(conf, cache_key, now, nil, failed_fetch_ttl)
+        return nil
     end
-    if not cached then count = count + 1 end
-    cache[cache_key] = {keys = document.keys, expires = now + conf.cache_ttl, used = now}
+    local document = cjson.decode(response.body)
+    if type(document) ~= "table" or type(document.keys) ~= "table" or #document.keys > 32 then
+        remember(conf, cache_key, now, nil, failed_fetch_ttl)
+        return nil
+    end
+    remember(conf, cache_key, now, document.keys, conf.cache_ttl)
     return document.keys
 end
 

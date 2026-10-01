@@ -3,7 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { render, umbrellaChart, repoRoot, run, sha256 } from './fixtures/blackbox.mjs'
+import { render, umbrellaChart, repoRoot, run, sha256, yamlDocuments } from './fixtures/blackbox.mjs'
 
 function rendered(overlay = []) {
   const { objects, text } = render(umbrellaChart, overlay)
@@ -60,6 +60,10 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.ok(executor.spec.template.spec.containers[0].env.some((item) => item.name === 'KEYCLOAK_JWKS_URL'))
     const env = Object.fromEntries(executor.spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]))
     const verifier = route.plugins['issuer-jwks-auth']
+    const policyConfig = objects.find((object) => object.kind === 'ConfigMap' && /-gateway-policy$/.test(object.metadata.name))
+    const policyVerifier = JSON.parse(policyConfig.data['gateway-policy.json']).issuerJwksAuth
+    assert.equal(policyVerifier.issuerBaseUrl, verifier.issuer_base_url)
+    assert.equal(policyVerifier.jwksBaseUrl, verifier.jwks_base_url)
     assert.equal(env.KEYCLOAK_ISSUER, `${verifier.issuer_base_url}/realms/${verifier.platform_realm}`)
     assert.equal(env.KEYCLOAK_JWKS_URL, `${verifier.jwks_base_url}/realms/${verifier.platform_realm}/protocol/openid-connect/certs`)
     if (name === 'staging' || name === 'prod') {
@@ -100,17 +104,34 @@ test('verifier base is required at render time', () => {
   assert.match(missingEnvironmentBase.stderr, /issuerJwksAuth\.issuerBaseUrl is required/)
 })
 
-test('staging standalone routes match the canonical kind routes with only environment substitutions', () => {
-  const { objects } = rendered(['-f', `${umbrellaChart}/values/staging.yaml`])
+test('staging standalone routes preserve the recorded pre-980 routes except route 2006', () => {
+  const renderedStaging = run('helm', [
+    'template', 'falcone', umbrellaChart, '--namespace', 'in-falcone-staging',
+    '-f', `${umbrellaChart}/values/staging.yaml`,
+  ])
+  assert.equal(renderedStaging.status, 0, renderedStaging.stderr)
+  const objects = yamlDocuments(renderedStaging.stdout)
   const config = objects.find((object) => object.kind === 'ConfigMap' && object.metadata.name === 'falcone-apisix-standalone')
   assert.ok(config)
+  const baseline = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/mongo-staging-routes-before-980.yaml'), 'utf8')
+  assert.equal(sha256(baseline), '445c3b628e904ece2a1c31b86b141966b87d65fda886cb9be66473cf6afe1bd5',
+    'recorded pre-980 staging route fixture changed')
+  // The operator reports that the live ConfigMap is this kind route table plus
+  // the hand-applied llmwiki route. That live-only route is deliberately absent.
   const canonical = readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8')
   const recordedHash = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/mongo-staging-routes.sha256'), 'utf8').split(' ')[0]
   assert.equal(sha256(canonical), recordedHash, 'canonical staging route snapshot changed without a baseline update')
-  const expected = canonical
-    .replaceAll('.falcone.svc.cluster.local', '.falcone-bbx.svc.cluster.local')
+  const current = canonical
+    .replaceAll('.falcone.svc.cluster.local', '.in-falcone-staging.svc.cluster.local')
     .replace('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai/auth"')
+  const route2006 = (routes) => {
+    const match = routes.match(/^  - id: "2006"\n[\s\S]*?(?=^  - id: "2007")/m)
+    assert.ok(match, 'route 2006 must be bounded by route 2007')
+    return match[0]
+  }
+  const expected = baseline.replace(route2006(baseline), route2006(current))
+  assert.notEqual(route2006(baseline), route2006(current), 'route 2006 must change')
   assert.equal(config.data['apisix.yaml'].trim(), expected.trim())
   assert.doesNotMatch(config.data['apisix.yaml'], /llmwiki-s2-mongo-jwt/)
-  assert.match(config.data['apisix.yaml'], /falcone-control-plane-executor\.falcone-bbx\.svc\.cluster\.local:8080/)
+  assert.match(config.data['apisix.yaml'], /falcone-control-plane-executor\.in-falcone-staging\.svc\.cluster\.local:8080/)
 })

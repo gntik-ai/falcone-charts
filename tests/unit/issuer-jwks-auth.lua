@@ -92,6 +92,11 @@ now = now + 11
 fail_fetch = true
 assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == 401)
 fail_fetch = false
+assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == 401)
+assert(fetches == 4, "failed JWKS fetch should be briefly cached")
+now = now + 5
 assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == nil)
 assert(fetches == 5, "expired JWKS must be refreshed and failed refresh must reject")
+assert(call({alg = "RS256", kid = "key-1"}, claims(tenant), "good") == nil)
+assert(fetches == 6, "negative entries must share the bounded LRU with valid JWKS")
 print("issuer-jwks-auth unit tests passed")
