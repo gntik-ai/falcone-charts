@@ -168,6 +168,12 @@ local function get_keys(conf, realm)
         remember_failure(conf, cache_key, now)
         return nil
     end
+    for _, key in ipairs(document.keys) do
+        if type(key) ~= "table" then
+            remember_failure(conf, cache_key, now)
+            return nil
+        end
+    end
     remember(conf, cache_key, now, document.keys)
     return document.keys
 end

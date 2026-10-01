@@ -132,6 +132,14 @@ assert(call(header, claims(tenant)) == nil)
 assert(call(header, claims(platform)) == nil and fetches == 3,
     "one-entry successful cache must evict the oldest valid realm")
 
+for _, malformed in ipairs({false, 42, "invalid-key"}) do
+    reset()
+    responses.keys = {keys = {malformed}}
+    assert(call(header, claims(tenant)) == 401, "malformed JWKS entry must reject without an error")
+    assert(call(header, claims(tenant)) == 401 and fetches == 1,
+        "malformed JWKS must use the bounded failure cache")
+end
+
 reset()
 conf.cache_max_entries = 2
 assert(call(header, claims(platform)) == nil)

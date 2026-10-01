@@ -3719,11 +3719,20 @@ controlPlaneExecutor:
       value: "http://{{ .Release.Name }}-control-plane:8080"
     # Always activate the executor's own JWT verifier for bearer data routes.
     - name: KEYCLOAK_JWKS_URL
-      value: '{{ tpl .Values.global.keycloakJwksBaseUrl . }}/realms/in-falcone-platform/protocol/openid-connect/certs'
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_JWKS_URL
     - name: KEYCLOAK_ISSUER
-      value: "{{ .Values.global.keycloakIssuerBaseUrl }}/realms/in-falcone-platform"
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_ISSUER
     - name: KEYCLOAK_AUDIENCE
-      value: in-falcone
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_AUDIENCE
     - name: PGHOST
       value: "{{ .Release.Name }}-postgresql"
     - name: PGUSER

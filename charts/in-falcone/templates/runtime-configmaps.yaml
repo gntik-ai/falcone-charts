@@ -48,8 +48,9 @@ data:
   gateway-policy.json: |
 {{- $gatewayPolicy := deepCopy .Values.gatewayPolicy -}}
 {{- $issuerJwksAuth := $gatewayPolicy.issuerJwksAuth -}}
-{{- $_ := set $issuerJwksAuth "issuerBaseUrl" (tpl (tpl $issuerJwksAuth.issuerBaseUrl .) .) -}}
-{{- $_ := set $issuerJwksAuth "jwksBaseUrl" (tpl (tpl $issuerJwksAuth.jwksBaseUrl .) .) -}}
+{{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
+{{- $_ := set $issuerJwksAuth "issuerBaseUrl" $verifier.issuer_base_url -}}
+{{- $_ := set $issuerJwksAuth "jwksBaseUrl" $verifier.jwks_base_url -}}
 {{ toPrettyJson $gatewayPolicy | nindent 4 }}
   enabled-apisix-routes.json: |
 {{- $mode := .Values.gatewayPolicy.passthrough.mode -}}

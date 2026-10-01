@@ -1,10 +1,11 @@
 {{- if .Values.apisix.manageStandaloneRoutes }}
 {{- $routes := .Files.Get "files/apisix/standalone/apisix.yaml" -}}
 {{- $routes = replace ".falcone.svc.cluster.local" (printf ".%s.svc.cluster.local" .Release.Namespace) $routes -}}
-{{- $issuer := tpl .Values.global.keycloakIssuerBaseUrl . -}}
-{{- $jwks := tpl .Values.global.keycloakJwksBaseUrl . -}}
-{{- $routes = replace "issuer_base_url: \"http://falcone-keycloak:8080\"" (printf "issuer_base_url: %q" $issuer) $routes -}}
-{{- $routes = replace "jwks_base_url: \"http://falcone-keycloak:8080\"" (printf "jwks_base_url: %q" $jwks) $routes -}}
+{{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
+{{- $original := regexFind "(?m)^      issuer-jwks-auth:\n(?:        [^\n]*\n)+" $routes -}}
+{{- if not $original }}{{- fail "standalone route 2006 verifier configuration is missing" -}}{{- end -}}
+{{- $configured := printf "      issuer-jwks-auth:\n        issuer_base_url: %q\n        jwks_base_url: %q\n        platform_realm: %q\n        audience: %q\n        cache_ttl: %v\n        cache_max_entries: %v\n        timeout: %v\n" $verifier.issuer_base_url $verifier.jwks_base_url $verifier.platform_realm $verifier.audience $verifier.cache_ttl $verifier.cache_max_entries $verifier.timeout -}}
+{{- $routes = replace $original $configured $routes -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

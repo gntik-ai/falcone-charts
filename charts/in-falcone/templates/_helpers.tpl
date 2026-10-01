@@ -107,6 +107,19 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{- .Values.config.configMapNames.runtimeEnv | default "in-falcone-runtime-env" -}}
 {{- end -}}
 
+{{/* One verifier configuration for bootstrap payloads and standalone routes. */}}
+{{- define "in-falcone.issuerJwksAuth" -}}
+{{- $verifier := .Values.gatewayPolicy.issuerJwksAuth -}}
+{{- range $key := list "issuerBaseUrl" "jwksBaseUrl" "platformRealm" "audience" "cache_ttl" "cache_max_entries" "timeout" -}}
+{{- if not (index $verifier $key) }}{{- fail (printf "gatewayPolicy.issuerJwksAuth.%s is required" $key) -}}{{- end -}}
+{{- end -}}
+{{- $issuerBase := trimSuffix "/" (tpl (tpl $verifier.issuerBaseUrl .) .) -}}
+{{- $jwksBase := trimSuffix "/" (tpl (tpl $verifier.jwksBaseUrl .) .) -}}
+{{- if not $issuerBase }}{{- fail "gatewayPolicy.issuerJwksAuth.issuerBaseUrl is required" -}}{{- end -}}
+{{- if not $jwksBase }}{{- fail "gatewayPolicy.issuerJwksAuth.jwksBaseUrl is required" -}}{{- end -}}
+{{- dict "issuer_base_url" $issuerBase "jwks_base_url" $jwksBase "platform_realm" $verifier.platformRealm "audience" $verifier.audience "cache_ttl" $verifier.cache_ttl "cache_max_entries" $verifier.cache_max_entries "timeout" $verifier.timeout | toJson -}}
+{{- end -}}
+
 {{- define "in-falcone.bootstrapOneShotHash" -}}
 {{- toJson (dict "keycloak" .Values.bootstrap.oneShot.keycloak "governanceCatalog" .Values.bootstrap.oneShot.governanceCatalog "internalNamespaces" .Values.bootstrap.oneShot.internalNamespaces) | sha256sum -}}
 {{- end -}}

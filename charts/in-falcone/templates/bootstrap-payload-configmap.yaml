@@ -124,15 +124,7 @@ data:
 {{- $_ := set $oidc "ssl_verify" $.Values.gatewayPolicy.oidc.sslVerify -}}
 {{- end }}
 {{- if hasKey $plugins "issuer-jwks-auth" }}
-{{- $verifier := $.Values.gatewayPolicy.issuerJwksAuth -}}
-{{- range $key := list "issuerBaseUrl" "jwksBaseUrl" "platformRealm" "audience" "cache_ttl" "cache_max_entries" "timeout" -}}
-{{- if not (index $verifier $key) }}{{- fail (printf "gatewayPolicy.issuerJwksAuth.%s is required" $key) -}}{{- end -}}
-{{- end -}}
-{{- $issuerBase := trimSuffix "/" (tpl (tpl $verifier.issuerBaseUrl $) $) -}}
-{{- $jwksBase := trimSuffix "/" (tpl (tpl $verifier.jwksBaseUrl $) $) -}}
-{{- if not $issuerBase }}{{- fail "gatewayPolicy.issuerJwksAuth.issuerBaseUrl is required" -}}{{- end -}}
-{{- if not $jwksBase }}{{- fail "gatewayPolicy.issuerJwksAuth.jwksBaseUrl is required" -}}{{- end -}}
-{{- $_ := set $plugins "issuer-jwks-auth" (dict "issuer_base_url" $issuerBase "jwks_base_url" $jwksBase "platform_realm" $verifier.platformRealm "audience" $verifier.audience "cache_ttl" $verifier.cache_ttl "cache_max_entries" $verifier.cache_max_entries "timeout" $verifier.timeout) -}}
+{{- $_ := set $plugins "issuer-jwks-auth" (include "in-falcone.issuerJwksAuth" $ | fromJson) -}}
 {{- end }}
 {{- if hasKey $plugins "cors" }}
 {{- $cors := index $plugins "cors" -}}

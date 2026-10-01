@@ -16,6 +16,16 @@ function rendered(overlay = []) {
   return { objects, text, route, apiKey, gateway, executor }
 }
 
+function executorEnv(objects, executor) {
+  return Object.fromEntries(executor.spec.template.spec.containers[0].env.map((item) => {
+    const ref = item.valueFrom?.configMapKeyRef
+    if (!ref) return [item.name, item.value]
+    const config = objects.find((object) => object.kind === 'ConfigMap' && object.metadata.name === ref.name)
+    assert.ok(config?.data?.[ref.key], `${item.name}: referenced configuration must be rendered`)
+    return [item.name, config.data[ref.key]]
+  }))
+}
+
 for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaChart}/values/staging.yaml`]], ['prod', ['-f', `${umbrellaChart}/values/prod.yaml`]]]) {
   test(`${name} Mongo bearer route enables issuer verification and keeps API key priority`, () => {
     const { objects, text, route, apiKey, gateway, executor } = rendered(overlay)
@@ -62,7 +72,7 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     }
     assert.ok(mounts.some((mount) => mount.mountPath === '/usr/local/apisix/conf/config.yaml'))
     assert.ok(executor.spec.template.spec.containers[0].env.some((item) => item.name === 'KEYCLOAK_JWKS_URL'))
-    const env = Object.fromEntries(executor.spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]))
+    const env = executorEnv(objects, executor)
     const verifier = route.plugins['issuer-jwks-auth']
     const policyConfig = objects.find((object) => object.kind === 'ConfigMap' && /-gateway-policy$/.test(object.metadata.name))
     const policyVerifier = JSON.parse(policyConfig.data['gateway-policy.json']).issuerJwksAuth
@@ -70,6 +80,7 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.equal(policyVerifier.jwksBaseUrl, verifier.jwks_base_url)
     assert.equal(env.KEYCLOAK_ISSUER, `${verifier.issuer_base_url}/realms/${verifier.platform_realm}`)
     assert.equal(env.KEYCLOAK_JWKS_URL, `${verifier.jwks_base_url}/realms/${verifier.platform_realm}/protocol/openid-connect/certs`)
+    assert.equal(env.KEYCLOAK_AUDIENCE, verifier.audience)
     if (name === 'staging' || name === 'prod') {
       assert.doesNotMatch(env.KEYCLOAK_ISSUER, /iam\.dev\./)
       assert.doesNotMatch(verifier.issuer_base_url, /iam\.dev\./)
@@ -99,13 +110,52 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   assert.match(config.data['config.yaml'], /- issuer-jwks-auth/)
 })
 
-test('verifier base is required at render time', () => {
-  const result = run('helm', ['template', 'falcone-bbx', umbrellaChart, '--set', 'gatewayPolicy.issuerJwksAuth.issuerBaseUrl='])
-  assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /issuerJwksAuth\.issuerBaseUrl is required/)
-  const missingEnvironmentBase = run('helm', ['template', 'falcone-bbx', umbrellaChart, '--set', 'global.keycloakIssuerBaseUrl='])
-  assert.notEqual(missingEnvironmentBase.status, 0)
-  assert.match(missingEnvironmentBase.stderr, /issuerJwksAuth\.issuerBaseUrl is required/)
+test('staging standalone, bootstrap and executor use every configured verifier setting', () => {
+  const { objects, route, executor } = rendered([
+    '-f', `${umbrellaChart}/values/staging.yaml`,
+    '--set-string', 'gatewayPolicy.issuerJwksAuth.issuerBaseUrl=https://iam.example.test/auth/',
+    '--set-string', 'gatewayPolicy.issuerJwksAuth.jwksBaseUrl=http://keycloak.internal:8080/',
+    '--set-string', 'gatewayPolicy.issuerJwksAuth.platformRealm=custom-platform',
+    '--set-string', 'gatewayPolicy.issuerJwksAuth.audience=custom-api',
+    '--set', 'gatewayPolicy.issuerJwksAuth.cache_ttl=60',
+    '--set', 'gatewayPolicy.issuerJwksAuth.cache_max_entries=4',
+    '--set', 'gatewayPolicy.issuerJwksAuth.timeout=2',
+  ])
+  const config = objects.find((object) => object.kind === 'ConfigMap' && object.metadata.name === 'falcone-apisix-standalone')
+  const standalone = yamlDocuments(config.data['apisix.yaml'])[0]
+  const verifier = route.plugins['issuer-jwks-auth']
+  assert.deepEqual(standalone.routes.find((entry) => String(entry.id) === '2006').plugins['issuer-jwks-auth'], verifier)
+  assert.deepEqual(verifier, {
+    issuer_base_url: 'https://iam.example.test/auth', jwks_base_url: 'http://keycloak.internal:8080',
+    platform_realm: 'custom-platform', audience: 'custom-api', cache_ttl: 60, cache_max_entries: 4, timeout: 2,
+  })
+  const env = executorEnv(objects, executor)
+  assert.equal(env.KEYCLOAK_ISSUER, `${verifier.issuer_base_url}/realms/custom-platform`)
+  assert.equal(env.KEYCLOAK_JWKS_URL, `${verifier.jwks_base_url}/realms/custom-platform/protocol/openid-connect/certs`)
+  assert.equal(env.KEYCLOAK_AUDIENCE, verifier.audience)
+  const policy = objects.find((object) => object.kind === 'ConfigMap' && object.data?.['gateway-policy.json'])
+  const policyVerifier = JSON.parse(policy.data['gateway-policy.json']).issuerJwksAuth
+  assert.equal(policyVerifier.issuerBaseUrl, verifier.issuer_base_url)
+  assert.equal(policyVerifier.jwksBaseUrl, verifier.jwks_base_url)
+
+  const canonical = yamlDocuments(readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8'))[0]
+  const withoutBearerRoute = (routes) => routes.filter((entry) => String(entry.id) !== '2006')
+  assert.deepEqual(withoutBearerRoute(standalone.routes), withoutBearerRoute(canonical.routes.map((entry) =>
+    JSON.parse(JSON.stringify(entry).replaceAll('.falcone.svc.cluster.local', '.falcone-bbx.svc.cluster.local')))))
+})
+
+test('all verifier settings are required at render time', () => {
+  for (const key of ['issuerBaseUrl', 'jwksBaseUrl', 'platformRealm', 'audience', 'cache_ttl', 'cache_max_entries', 'timeout']) {
+    const result = run('helm', ['template', 'falcone-bbx', umbrellaChart,
+      '-f', `${umbrellaChart}/values/staging.yaml`, '--set', `gatewayPolicy.issuerJwksAuth.${key}=`])
+    assert.notEqual(result.status, 0, `${key} must be required`)
+    assert.ok(result.stderr.includes(`issuerJwksAuth.${key} is required`), result.stderr)
+  }
+  for (const [key, setting] of [['keycloakIssuerBaseUrl', 'issuerBaseUrl'], ['keycloakJwksBaseUrl', 'jwksBaseUrl']]) {
+    const result = run('helm', ['template', 'falcone-bbx', umbrellaChart, '--set', `global.${key}=`])
+    assert.notEqual(result.status, 0)
+    assert.ok(result.stderr.includes(`issuerJwksAuth.${setting} is required`), result.stderr)
+  }
 })
 
 test('staging standalone routes preserve the recorded pre-980 routes except route 2006', () => {
