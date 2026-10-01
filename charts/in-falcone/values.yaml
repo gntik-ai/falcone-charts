@@ -1903,10 +1903,7 @@ apisix:
     annotations: {}
   podAnnotations: {}
   podLabels: {}
-  podSecurityContext:
-    runAsUser: 636
-    runAsGroup: 636
-    fsGroup: 636
+  podSecurityContext: {}
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: false
@@ -1941,8 +1938,9 @@ apisix:
       APISIX_STAND_ALONE: "true"
   initContainers:
     - name: apisix-config-overlay
-      # Reuse the workload image so the overlay adds no image to promote.
-      image: '{{ include "component-wrapper.image" . }}'
+      # Match staging's separate, immutable BusyBox overlay image in every profile.
+      image: docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+      imagePullPolicy: IfNotPresent
       command: [/bin/sh, -ec, 'cp /config-src/config.yaml /apisix-config-overlay/config.yaml']
       volumeMounts:
         - name: apisix-config-source
@@ -1951,6 +1949,9 @@ apisix:
         - name: apisix-config-overlay
           mountPath: /apisix-config-overlay
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 636
+        runAsGroup: 636
         allowPrivilegeEscalation: false
         capabilities:
           drop: [ALL]

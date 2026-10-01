@@ -5,6 +5,13 @@ import { resolve } from 'node:path'
 
 import { render, umbrellaChart, repoRoot, run, sha256, yamlDocuments } from '../fixtures/blackbox.mjs'
 
+const overlayImage = 'docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0'
+
+function renderedGateway(overlay = []) {
+  const { objects } = render(umbrellaChart, overlay)
+  return objects.find((object) => object.kind === 'Deployment' && /-apisix$/.test(object.metadata.name))
+}
+
 function rendered(overlay = []) {
   const { objects, text } = render(umbrellaChart, overlay)
   const payload = objects.find((object) => object.kind === 'ConfigMap' && object.data?.['route-2006.json'])
@@ -59,11 +66,9 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.match(config.data['config.yaml'], /- issuer-jwks-auth/)
     assert.match(config.data['config.yaml'], /extra_lua_path: \/usr\/local\/apisix\/falcone\/\?\.lua/)
     const mounts = gateway.spec.template.spec.containers[0].volumeMounts
-    if (name !== 'staging') {
-      const overlay = gateway.spec.template.spec.initContainers.find((container) => container.name === 'apisix-config-overlay')
-      assert.equal(overlay.image, gateway.spec.template.spec.containers[0].image,
-        `${name}: the config overlay must introduce no additional image reference`)
-    }
+    const configOverlay = gateway.spec.template.spec.initContainers.find((container) => container.name === 'apisix-config-overlay')
+    assert.equal(configOverlay.image, overlayImage, `${name}: the overlay must use the reviewed BusyBox digest`)
+    assert.notEqual(configOverlay.image, gateway.spec.template.spec.containers[0].image)
     assert.ok(mounts.some((mount) => mount.mountPath.endsWith('/apisix/plugins/issuer-jwks-auth.lua')))
     const volumes = new Set(gateway.spec.template.spec.volumes.map((volume) => volume.name))
     if (name === 'staging') {
@@ -86,6 +91,12 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.equal(env.KEYCLOAK_ISSUER, `${verifier.issuer_base_url}/realms/${verifier.platform_realm}`)
     assert.equal(env.KEYCLOAK_JWKS_URL, `${verifier.jwks_base_url}/realms/${verifier.platform_realm}/protocol/openid-connect/certs`)
     assert.equal(env.KEYCLOAK_AUDIENCE, verifier.audience)
+    if (name === 'staging') {
+      assert.equal(verifier.issuer_base_url, 'https://iam.baas.musematic.ai')
+      assert.equal(verifier.jwks_base_url, 'http://falcone-keycloak:8080')
+      assert.equal(env.KEYCLOAK_ISSUER, 'https://iam.baas.musematic.ai/realms/in-falcone-platform')
+      assert.equal(env.KEYCLOAK_JWKS_URL, 'http://falcone-keycloak:8080/realms/in-falcone-platform/protocol/openid-connect/certs')
+    }
     if (name === 'staging' || name === 'prod') {
       assert.doesNotMatch(env.KEYCLOAK_ISSUER, /iam\.dev\./)
       assert.doesNotMatch(verifier.issuer_base_url, /iam\.dev\./)
@@ -100,8 +111,8 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   const gateway = objects.find((object) => object.kind === 'Deployment' && /-apisix$/.test(object.metadata.name))
   const pod = gateway.spec.template.spec
   const overlay = pod.initContainers.find((container) => container.name === 'apisix-config-overlay')
-  assert.equal(overlay.image, pod.containers[0].image,
-    'kind: the config overlay must introduce no additional image reference')
+  assert.equal(overlay.image, overlayImage, 'kind: the overlay must use the reviewed BusyBox digest')
+  assert.notEqual(overlay.image, pod.containers[0].image)
   const volumes = new Set(pod.volumes.map((volume) => volume.name))
   for (const required of ['standalone-config', 'apisix-config-source', 'apisix-config-overlay', 'issuer-jwks-auth']) {
     assert.ok(volumes.has(required), `missing kind APISIX volume ${required}`)
@@ -118,17 +129,43 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   assert.match(config.data['config.yaml'], /- issuer-jwks-auth/)
 })
 
-test('config overlay follows APISIX image promotion and registry mirroring', () => {
+test('all profiles keep staging BusyBox registry handling independently of APISIX promotion', () => {
   const digest = `sha256:${'a'.repeat(64)}`
-  const { gateway } = rendered([
-    '--set-string', `apisix.image.digest=${digest}`,
-    '--set-string', 'global.imageRegistry=mirror.example.test',
-  ])
-  const pod = gateway.spec.template.spec
-  const overlay = pod.initContainers.find((container) => container.name === 'apisix-config-overlay')
-  assert.equal(pod.containers[0].image, `mirror.example.test/apache/apisix@${digest}`)
-  assert.equal(overlay.image, pod.containers[0].image,
-    'the overlay must use the same promoted image and mirror as APISIX')
+  for (const profile of [null, `${umbrellaChart}/values/prod.yaml`, `${umbrellaChart}/values/staging.yaml`, `${repoRoot}/deploy/kind/values-kind.yaml`]) {
+    const gateway = renderedGateway([
+      ...(profile ? ['-f', profile] : []),
+      '--set-string', `apisix.image.digest=${digest}`,
+      '--set-string', 'global.imageRegistry=mirror.example.test',
+    ])
+    const pod = gateway.spec.template.spec
+    const overlay = pod.initContainers.find((container) => container.name === 'apisix-config-overlay')
+    assert.equal(pod.containers[0].image, `mirror.example.test/apache/apisix@${digest}`)
+    // Like the existing staging init image, this literal is not rewritten by global.imageRegistry.
+    assert.equal(overlay.image, overlayImage)
+  }
+})
+
+test('APISIX numeric identities and OpenShift overlay retain the main contracts', () => {
+  for (const profile of [null, `${umbrellaChart}/values/prod.yaml`, `${umbrellaChart}/values/staging.yaml`, `${repoRoot}/deploy/kind/values-kind.yaml`]) {
+    const args = profile ? ['-f', profile] : []
+    const gateway = renderedGateway(args)
+    const pod = gateway.spec.template.spec
+    assert.equal(pod.containers[0].securityContext.runAsUser, 636)
+    assert.equal(pod.containers[0].securityContext.runAsGroup, 636)
+    const staging = profile?.endsWith('/staging.yaml')
+    for (const [field, expected] of [['runAsUser', 636], ['runAsGroup', 636], ['fsGroup', 1001]]) {
+      assert.equal(pod.securityContext?.[field], field === 'fsGroup' || staging ? expected : undefined)
+    }
+    const openshift = renderedGateway([...args, '-f', `${umbrellaChart}/values/platform-openshift.yaml`])
+    const openshiftPod = openshift.spec.template.spec
+    for (const field of ['runAsUser', 'runAsGroup', 'fsGroup']) {
+      assert.equal(openshiftPod.securityContext?.[field], undefined)
+    }
+    for (const container of [...openshiftPod.initContainers, ...openshiftPod.containers]) {
+      assert.equal(container.securityContext?.runAsUser, undefined)
+      assert.equal(container.securityContext?.runAsGroup, undefined)
+    }
+  }
 })
 
 test('staging standalone, bootstrap and executor use every configured verifier setting', () => {
@@ -198,7 +235,7 @@ test('staging standalone routes preserve the recorded pre-980 routes except rout
   assert.equal(sha256(canonical), recordedHash, 'canonical staging route snapshot changed without a baseline update')
   const current = canonical
     .replaceAll('.falcone.svc.cluster.local', '.in-falcone-staging.svc.cluster.local')
-    .replace('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai/auth"')
+    .replace('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai"')
   const route2006 = (routes) => {
     const match = routes.match(/^  - id: "2006"\n[\s\S]*?(?=^  - id: "2007")/m)
     assert.ok(match, 'route 2006 must be bounded by route 2007')

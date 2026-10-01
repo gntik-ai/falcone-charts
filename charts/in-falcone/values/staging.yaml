@@ -1,5 +1,5 @@
 global:
-  keycloakIssuerBaseUrl: https://iam.baas.musematic.ai/auth
+  keycloakIssuerBaseUrl: https://iam.baas.musematic.ai
   keycloakJwksBaseUrl: http://falcone-keycloak:8080
   namespace: in-falcone-staging
   environment: staging
