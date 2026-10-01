@@ -1419,6 +1419,9 @@ bootstrap:
                   X-Request-Id: $request_id
                   x-gateway-auth: "${{GATEWAY_SHARED_SECRET}}"
                 remove:
+                  # API-key credentials must use 2006-key and its per-key bucket.
+                  - apikey
+                  - x-api-key
                   - x-tenant-id
                   - x-workspace-id
                   - x-auth-subject

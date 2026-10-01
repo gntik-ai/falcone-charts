@@ -61,7 +61,7 @@ jobs:
       - name: Install process sandbox
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap iproute2 lua5.4
+          sudo apt-get install --yes --no-install-recommends bubblewrap iproute2 luajit
           bwrap --version
           ip -Version
       - name: Verify vendored dependencies
@@ -130,7 +130,7 @@ jobs:
             KUBECONFORM_SCHEMA_CACHE_DIR="$KUBECONFORM_SCHEMA_CACHE_DIR" \
             unshare --net -- bash -c 'ip link set lo up; exec bash tests/blackbox/run.sh'
       - name: Run Mongo bearer verifier unit tests
-        run: lua5.4 tests/unit/issuer-jwks-auth.lua
+        run: luajit tests/unit/issuer-jwks-auth.lua
       - name: Verify managed bundle provenance lock
         run: python3 charts/falcone-knative/tools/validate_bundle.py
       - name: Package and verify chart provenance inputs

@@ -50,6 +50,7 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.ok(route.plugins['client-control'].max_body_size > 0)
     assert.ok(route.plugins['request-validation'].header_schema.properties['X-Tenant-Id'].maxLength === 0)
     assert.deepEqual(route.plugins['proxy-rewrite'].headers.remove, [
+      'apikey', 'x-api-key',
       'x-tenant-id', 'x-workspace-id', 'x-auth-subject', 'x-actor-roles',
     ])
     assert.equal(route.plugins['proxy-rewrite'].headers.set['x-gateway-auth'], '${{GATEWAY_SHARED_SECRET}}')
@@ -127,6 +128,32 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   assert.ok(mounts.includes('/usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua'))
   const config = objects.find((object) => object.kind === 'ConfigMap' && /-apisix-config-file$/.test(object.metadata.name))
   assert.match(config.data['config.yaml'], /- issuer-jwks-auth/)
+})
+
+test('staging render and canonical kind bearer routes strip API keys while preserving the per-key route', () => {
+  const baseline = yamlDocuments(readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/mongo-staging-routes-before-980.yaml'), 'utf8'))[0]
+  const { objects, route, apiKey } = rendered(['-f', `${umbrellaChart}/values/staging.yaml`])
+  const config = objects.find((object) => object.kind === 'ConfigMap' && object.metadata.name === 'falcone-apisix-standalone')
+  assert.ok(config, 'staging standalone routes must be managed')
+  // Kind mounts the externally supplied canonical table and disables bootstrap.
+  const canonical = readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8')
+    .replaceAll('.falcone.svc.cluster.local', '.falcone-bbx.svc.cluster.local')
+  for (const [profile, standalone] of [
+    ['staging', yamlDocuments(config.data['apisix.yaml'])[0]],
+    ['kind canonical', yamlDocuments(canonical)[0]],
+  ]) {
+    const bearer = standalone.routes.find((entry) => String(entry.id) === '2006')
+    assert.deepEqual(bearer.plugins['proxy-rewrite'].headers.remove, route.plugins['proxy-rewrite'].headers.remove)
+    for (const header of ['apikey', 'x-api-key']) {
+      assert.ok(bearer.plugins['proxy-rewrite'].headers.remove.includes(header), `${profile}: ${header} must not reach executor JWT requests`)
+    }
+    const keyRoute = standalone.routes.find((entry) => String(entry.id) === '2006-key')
+    const expectedKey = JSON.parse(JSON.stringify(baseline.routes.find((entry) => String(entry.id) === '2006-key'))
+      .replaceAll('.in-falcone-staging.svc.cluster.local', '.falcone-bbx.svc.cluster.local'))
+    assert.deepEqual(keyRoute, expectedKey, 'API-key route must remain identical to the pre-980 contract')
+    assert.equal(apiKey.plugins['limit-count'].key, '$http_apikey')
+    assert.equal(apiKey.plugins['limit-count'].rejected_code, 429)
+  }
 })
 
 test('all profiles keep staging BusyBox registry handling independently of APISIX promotion', () => {
@@ -238,7 +265,7 @@ test('all verifier settings are required at render time', () => {
   }
 })
 
-test('staging standalone routes preserve the recorded pre-980 routes except route 2006', () => {
+test('staging standalone routes preserve the recorded pre-980 routes except the reviewed Mongo repair', () => {
   const renderedStaging = run('helm', [
     'template', 'falcone', umbrellaChart, '--namespace', 'in-falcone-staging',
     '-f', `${umbrellaChart}/values/staging.yaml`,
@@ -254,7 +281,13 @@ test('staging standalone routes preserve the recorded pre-980 routes except rout
   // the hand-applied llmwiki route. That live-only route is deliberately absent.
   const canonical = readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8')
   const recordedHash = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/mongo-staging-routes.sha256'), 'utf8').split(' ')[0]
-  assert.equal(sha256(canonical), recordedHash, 'canonical staging route snapshot changed without a baseline update')
+  const oldComment = '# falls through to the JWT route -> control-plane.'
+  const currentComment = '# falls through to the JWT route (Mongo -> executor).'
+  const credentialRemoval = '            # API-key credentials must use 2006-key and its per-key bucket.\n            - apikey\n            - x-api-key\n'
+  assert.ok(canonical.includes(credentialRemoval), 'reviewed API-key removal delta must be present')
+  assert.ok(canonical.includes(currentComment), 'Mongo upstream comment must match the executor')
+  assert.equal(sha256(canonical.replace(credentialRemoval, '').replace(currentComment, oldComment)), recordedHash,
+    'canonical snapshot permits only the reviewed API-key removals and Mongo upstream comment correction')
   const current = canonical
     .replaceAll('.falcone.svc.cluster.local', '.in-falcone-staging.svc.cluster.local')
     .replace('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai"')
@@ -263,7 +296,7 @@ test('staging standalone routes preserve the recorded pre-980 routes except rout
     assert.ok(match, 'route 2006 must be bounded by route 2007')
     return match[0]
   }
-  const expected = baseline.replace(route2006(baseline), route2006(current))
+  const expected = baseline.replace(route2006(baseline), route2006(current)).replace(oldComment, currentComment)
   assert.notEqual(route2006(baseline), route2006(current), 'route 2006 must change')
   assert.equal(config.data['apisix.yaml'].trim(), expected.trim())
   assert.doesNotMatch(config.data['apisix.yaml'], /llmwiki-s2-mongo-jwt/)
