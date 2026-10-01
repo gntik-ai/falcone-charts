@@ -42,10 +42,11 @@ package.preload["resty.jwt"] = function()
 end
 
 local plugin = dofile("charts/in-falcone/files/apisix/plugins/issuer-jwks-auth.lua")
-local platform = {issuer = "https://iam/realms/platform", jwks_uri = "https://iam/realms/platform/certs", audiences = {"api"}}
-local tenant = {issuer = "https://iam/realms/tenant-a", jwks_uri = "https://iam/realms/tenant-a/certs", audiences = {"api"}}
-local unknown = {issuer = "https://other/realms/tenant-a", jwks_uri = "https://other/certs", audiences = {"api"}}
-local conf = {issuers = {platform, tenant}, cache_ttl = 10, cache_max_entries = 1, timeout = 1}
+local platform = "https://iam/realms/platform"
+local tenant = "https://iam/realms/tenant-a"
+local unknown = "https://other/realms/tenant-a"
+local conf = {issuer_base_url = "https://iam", jwks_base_url = "https://internal-iam",
+    platform_realm = "platform", audience = "api", cache_ttl = 10, cache_max_entries = 1, timeout = 1}
 responses.keys = {keys = {{kid = "key-1", kty = "RSA", x5c = {"Y2VydA=="}}}}
 
 local function call(header, payload, signature)
@@ -61,29 +62,36 @@ local function claims(iss)
     return {iss = iss, aud = "api", exp = now + 60}
 end
 
-assert(call({alg = "RS256", kid = "key-1"}, claims(platform.issuer), "good") == nil)
-assert(fetches == 1 and last_response == platform.jwks_uri)
-assert(call({alg = "RS256", kid = "key-1"}, claims(platform.issuer), "good") == nil)
+assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == nil)
+assert(fetches == 1 and last_response == "https://internal-iam/realms/platform/protocol/openid-connect/certs")
+assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == nil)
 assert(fetches == 1, "cached JWKS should avoid another fetch")
-assert(call({alg = "RS256", kid = "key-1"}, claims(unknown.issuer), "good") == 401)
+assert(call({alg = "RS256", kid = "key-1"}, claims(unknown), "good") == 401)
 assert(fetches == 1, "unknown issuer must never cause a fetch")
-assert(call({alg = "RS256", kid = "key-1"}, claims(platform.issuer), "bad") == 401)
-assert(call({alg = "none", kid = "key-1"}, claims(platform.issuer), "good") == 401)
-assert(call({alg = "HS256", kid = "key-1"}, claims(platform.issuer), "good") == 401)
-local expired = claims(platform.issuer)
+for _, issuer in ipairs({"https://iam/realms/../other", "https://iam/realms/a%2Fb",
+    "https://iam/realms/a/b", "https://iam/realms/a?b", "https://iam/realms/a#b"}) do
+    assert(call({alg = "RS256", kid = "key-1"}, claims(issuer), "good") == 401)
+end
+assert(fetches == 1, "invalid realm must never cause a fetch")
+assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "bad") == 401)
+assert(call({alg = "none", kid = "key-1"}, claims(platform), "good") == 401)
+assert(call({alg = "HS256", kid = "key-1"}, claims(platform), "good") == 401)
+local expired = claims(platform)
 expired.exp = now - 1
 assert(call({alg = "RS256", kid = "key-1"}, expired, "good") == 401)
-local wrong_audience = claims(platform.issuer)
+local wrong_audience = claims(platform)
 wrong_audience.aud = "other"
 assert(call({alg = "RS256", kid = "key-1"}, wrong_audience, "good") == 401)
-assert(call({alg = "RS256", kid = "key-1"}, claims(tenant.issuer), "good") == nil)
-assert(fetches == 2 and last_response == tenant.jwks_uri)
-assert(call({alg = "RS256", kid = "key-1"}, claims(platform.issuer), "good") == nil)
+local tenant_other_audience = claims(tenant)
+tenant_other_audience.aud = "tenant-client"
+assert(call({alg = "RS256", kid = "key-1"}, tenant_other_audience, "good") == nil)
+assert(fetches == 2 and last_response == "https://internal-iam/realms/tenant-a/protocol/openid-connect/certs")
+assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == nil)
 assert(fetches == 3, "one-entry cache should evict platform after tenant")
 now = now + 11
 fail_fetch = true
-assert(call({alg = "RS256", kid = "key-1"}, claims(platform.issuer), "good") == 401)
+assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == 401)
 fail_fetch = false
-assert(call({alg = "RS256", kid = "key-1"}, claims(platform.issuer), "good") == nil)
+assert(call({alg = "RS256", kid = "key-1"}, claims(platform), "good") == nil)
 assert(fetches == 5, "expired JWKS must be refreshed and failed refresh must reject")
 print("issuer-jwks-auth unit tests passed")

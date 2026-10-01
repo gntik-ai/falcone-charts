@@ -1,5 +1,5 @@
--- Route-local bearer verifier. Issuer URLs and JWKS endpoints come only from
--- rendered realm configuration, never from an unverified token.
+-- Route-local bearer verifier. The token selects only a realm under the
+-- configured Keycloak base; it never selects the JWKS host.
 local core = require("apisix.core")
 local cjson = require("cjson.safe")
 local http = require("resty.http")
@@ -13,16 +13,12 @@ local plugin = {
     name = "issuer-jwks-auth",
     schema = {
         type = "object",
-        required = {"issuers", "cache_ttl", "cache_max_entries", "timeout"},
+        required = {"issuer_base_url", "jwks_base_url", "platform_realm", "audience", "cache_ttl", "cache_max_entries", "timeout"},
         properties = {
-            issuers = {type = "array", minItems = 1, items = {
-                type = "object", required = {"issuer", "jwks_uri", "audiences"},
-                properties = {
-                    issuer = {type = "string", minLength = 1},
-                    jwks_uri = {type = "string", pattern = "^https?://"},
-                    audiences = {type = "array", minItems = 1, items = {type = "string"}},
-                },
-            }},
+            issuer_base_url = {type = "string", pattern = "^https?://"},
+            jwks_base_url = {type = "string", pattern = "^https?://"},
+            platform_realm = {type = "string", minLength = 1},
+            audience = {type = "string", minLength = 1},
             cache_ttl = {type = "integer", minimum = 1, maximum = 3600},
             cache_max_entries = {type = "integer", minimum = 1, maximum = 1024},
             timeout = {type = "integer", minimum = 1, maximum = 10},
@@ -68,16 +64,18 @@ local function rsa_pem(key)
     return "-----BEGIN PUBLIC KEY-----\n" .. encoded .. "\n-----END PUBLIC KEY-----"
 end
 
-local function get_keys(conf, entry)
+local function get_keys(conf, realm)
     local now = ngx.now()
-    local cached = cache[entry.issuer]
+    local cache_key = conf.jwks_base_url .. "/realms/" .. realm
+    local cached = cache[cache_key]
     if cached and cached.expires > now then
         cached.used = now
         return cached.keys
     end
     local client = http.new()
     client:set_timeout(conf.timeout * 1000)
-    local ok, response = pcall(client.request_uri, client, entry.jwks_uri, {method = "GET", ssl_verify = true})
+    local ok, response = pcall(client.request_uri, client,
+        cache_key .. "/protocol/openid-connect/certs", {method = "GET", ssl_verify = true})
     if not ok or not response or response.status ~= 200
         or type(response.body) ~= "string" or #response.body > 65536 then return nil end
     local document = cjson.decode(response.body)
@@ -91,16 +89,14 @@ local function get_keys(conf, entry)
         count = count - 1
     end
     if not cached then count = count + 1 end
-    cache[entry.issuer] = {keys = document.keys, expires = now + conf.cache_ttl, used = now}
+    cache[cache_key] = {keys = document.keys, expires = now + conf.cache_ttl, used = now}
     return document.keys
 end
 
 local function allowed_audience(aud, expected)
-    for _, value in ipairs(expected) do
-        if aud == value then return true end
-        if type(aud) == "table" then
-            for _, actual in ipairs(aud) do if actual == value then return true end end
-        end
+    if aud == expected then return true end
+    if type(aud) == "table" then
+        for _, actual in ipairs(aud) do if actual == expected then return true end end
     end
     return false
 end
@@ -121,16 +117,16 @@ function plugin.rewrite(conf, ctx)
         or type(header.kid) ~= "string" or #header.kid > 256 then
         return 401, {message = "Unauthorized"}
     end
-    local entry
-    for _, candidate in ipairs(conf.issuers) do
-        if payload.iss == candidate.issuer then entry = candidate; break end
-    end
-    if not entry or type(payload.exp) ~= "number" or payload.exp <= ngx.time()
+    local prefix = conf.issuer_base_url .. "/realms/"
+    local realm = type(payload.iss) == "string" and payload.iss:sub(1, #prefix) == prefix
+        and payload.iss:sub(#prefix + 1) or nil
+    if not realm or #realm == 0 or #realm > 128 or not realm:match("^[A-Za-z0-9_-]+$")
+        or type(payload.exp) ~= "number" or payload.exp <= ngx.time()
         or (payload.nbf ~= nil and (type(payload.nbf) ~= "number" or payload.nbf > ngx.time()))
-        or not allowed_audience(payload.aud, entry.audiences) then
+        or (realm == conf.platform_realm and not allowed_audience(payload.aud, conf.audience)) then
         return 401, {message = "Unauthorized"}
     end
-    local keys = get_keys(conf, entry)
+    local keys = get_keys(conf, realm)
     if not keys then return 401, {message = "Unauthorized"} end
     for _, key in ipairs(keys) do
         if key.kty == "RSA" and key.kid == header.kid

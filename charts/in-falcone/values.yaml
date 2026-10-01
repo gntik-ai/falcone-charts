@@ -1,4 +1,6 @@
 global:
+  keycloakIssuerBaseUrl: https://iam.dev.in-falcone.example.com/auth
+  keycloakJwksBaseUrl: "http://{{ .Release.Name }}-keycloak:8080"
   # Argo CD renders in install mode; true makes a GitOps render of an existing release use
   # Helm upgrade semantics (falcone-charts#47). Leave false for helm install/upgrade.
   gitops:
@@ -1840,6 +1842,7 @@ bootstrap:
             component: keycloak
             port: 8080
 apisix:
+  manageStandaloneRoutes: false
   wrapper:
     componentId: apisix
     workload:
@@ -1922,14 +1925,14 @@ apisix:
         name: '{{ .Release.Name }}-apisix-config-file'
     - name: apisix-config-overlay
       emptyDir: {}
-    - name: issuer-jwks-plugin
+    - name: issuer-jwks-auth
       configMap:
         name: '{{ .Release.Name }}-issuer-jwks-auth'
   extraVolumeMounts:
     - name: apisix-config-overlay
       mountPath: /usr/local/apisix/conf/config.yaml
       subPath: config.yaml
-    - name: issuer-jwks-plugin
+    - name: issuer-jwks-auth
       mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
       subPath: issuer-jwks-auth.lua
       readOnly: true
@@ -3716,9 +3719,9 @@ controlPlaneExecutor:
       value: "http://{{ .Release.Name }}-control-plane:8080"
     # Always activate the executor's own JWT verifier for bearer data routes.
     - name: KEYCLOAK_JWKS_URL
-      value: "http://{{ .Release.Name }}-keycloak:8080/realms/in-falcone-platform/protocol/openid-connect/certs"
+      value: '{{ tpl .Values.global.keycloakJwksBaseUrl . }}/realms/in-falcone-platform/protocol/openid-connect/certs'
     - name: KEYCLOAK_ISSUER
-      value: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform
+      value: "{{ .Values.global.keycloakIssuerBaseUrl }}/realms/in-falcone-platform"
     - name: KEYCLOAK_AUDIENCE
       value: in-falcone
     - name: PGHOST
@@ -4119,13 +4122,12 @@ workflowWorker:
 
 gatewayPolicy:
   version: 2026-03-24
-  # Provision tenant entries from the authoritative realm configuration before
-  # their bearer tokens are accepted. No token field can expand this list.
+  # Only realm names under the configured Keycloak host can select a JWKS URL.
   issuerJwksAuth:
-    issuers:
-      - issuer: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform
-        jwks_uri: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform/protocol/openid-connect/certs
-        audiences: [in-falcone]
+    issuerBaseUrl: "{{ .Values.global.keycloakIssuerBaseUrl }}"
+    jwksBaseUrl: "{{ .Values.global.keycloakJwksBaseUrl }}"
+    platformRealm: in-falcone-platform
+    audience: in-falcone
     cache_ttl: 300
     cache_max_entries: 128
     timeout: 3

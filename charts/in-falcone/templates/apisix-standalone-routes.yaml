@@ -1,0 +1,18 @@
+{{- if .Values.apisix.manageStandaloneRoutes }}
+{{- $routes := .Files.Get "files/apisix/standalone/apisix.yaml" -}}
+{{- $routes = replace ".falcone.svc.cluster.local" (printf ".%s.svc.cluster.local" .Release.Namespace) $routes -}}
+{{- $issuer := tpl .Values.global.keycloakIssuerBaseUrl . -}}
+{{- $jwks := tpl .Values.global.keycloakJwksBaseUrl . -}}
+{{- $routes = replace "issuer_base_url: \"http://falcone-keycloak:8080\"" (printf "issuer_base_url: %q" $issuer) $routes -}}
+{{- $routes = replace "jwks_base_url: \"http://falcone-keycloak:8080\"" (printf "jwks_base_url: %q" $jwks) $routes -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falcone-apisix-standalone
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: apisix
+data:
+  apisix.yaml: |
+{{ $routes | nindent 4 }}
+{{- end }}

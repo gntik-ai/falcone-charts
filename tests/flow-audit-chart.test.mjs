@@ -5,7 +5,7 @@ import test from 'node:test'
 
 import { render, repoRoot, sha256, umbrellaChart, yamlDocuments } from './blackbox/fixtures/blackbox.mjs'
 
-const priorBaseline = 'f9fa675cf42e7d550793adfbee63a3db935b675c617c602d0ed0367f2c1a08b0'
+const priorBaseline = 'e816cab558a65f132157c098ba597f7928cb355e82cd1ee04b70302b7f7e5295'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',

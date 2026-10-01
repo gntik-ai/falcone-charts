@@ -378,8 +378,8 @@ test('staging alone selects local-path/fsn1 and renders all six exact approved d
   assert.equal(
     objects.filter((object) => object?.kind === 'ConfigMap'
       && object?.metadata?.name === 'falcone-apisix-standalone').length,
-    0,
-    'the staging render must reference, not create, the live APISIX standalone ConfigMap',
+    1,
+    'the staging render must manage the live APISIX standalone ConfigMap',
   )
 
   const rendered = JSON.stringify(objects)

@@ -1,4 +1,6 @@
 global:
+  keycloakIssuerBaseUrl: https://iam.baas.musematic.ai/auth
+  keycloakJwksBaseUrl: http://falcone-keycloak:8080
   namespace: in-falcone-staging
   environment: staging
   # repair-staging-infrastructure-20260809: consume the administrator-owned External
@@ -66,6 +68,7 @@ openbao:
       allowRecoveryRoot: false
       forceRecoveryRoot: false
 apisix:
+  manageStandaloneRoutes: true
   replicas: 3
   # The staging gateway predates this Helm release and consumes the separately
   # administered standalone route ConfigMap. Declare the live mount and numeric
@@ -91,7 +94,7 @@ apisix:
         defaultMode: 420
     - name: apisix-config-overlay
       emptyDir: {}
-    - name: issuer-jwks-plugin
+    - name: issuer-jwks-auth
       configMap:
         name: falcone-issuer-jwks-auth
   extraVolumeMounts:
@@ -101,7 +104,7 @@ apisix:
     - name: apisix-config-overlay
       mountPath: /usr/local/apisix/conf/config.yaml
       subPath: config.yaml
-    - name: issuer-jwks-plugin
+    - name: issuer-jwks-auth
       mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
       subPath: issuer-jwks-auth.lua
       readOnly: true
