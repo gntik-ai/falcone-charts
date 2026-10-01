@@ -26,11 +26,22 @@ local plugin = {
     },
 }
 
--- Each APISIX worker holds at most cache_max_entries JWKS documents. Expired
--- entries are never used if a refresh fails. Unknown issuers do not reach HTTP.
+-- Each APISIX worker holds at most cache_max_entries total cache entries.
+-- Failed lookups use spare capacity and cannot evict valid tenant keys.
+-- Expired keys are never used after a failed refresh.
 local cache = {}
 local count = 0
+local failures = {}
+local failure_count = 0
 local failed_fetch_ttl = 5
+-- A worker may burst ten fetches, refill five fetches per second, and hold
+-- at most four fetches in flight. Cached keys remain usable during a flood.
+local fetch_burst = 10
+local fetch_rate = 5
+local max_in_flight = 4
+local fetch_tokens = fetch_burst
+local fetch_updated = 0
+local in_flight = 0
 
 local function b64url(value)
     if type(value) ~= "string" or not value:match("^[A-Za-z0-9_-]+$") then return nil end
@@ -65,10 +76,51 @@ local function rsa_pem(key)
     return "-----BEGIN PUBLIC KEY-----\n" .. encoded .. "\n-----END PUBLIC KEY-----"
 end
 
-local function remember(conf, cache_key, now, keys, ttl)
+local function forget(cache_key)
+    if cache[cache_key] then
+        cache[cache_key] = nil
+        count = count - 1
+    end
+end
+
+local function remember_failure(conf, cache_key, now)
+    forget(cache_key)
+    local available = conf.cache_max_entries - count
+    if available <= 0 then return end
+    if not failures[cache_key] then
+        while failure_count >= available do
+            local oldest, expiry
+            for issuer, item in pairs(failures) do
+                if not expiry or item < expiry then
+                    oldest, expiry = issuer, item
+                end
+            end
+            failures[oldest] = nil
+            failure_count = failure_count - 1
+        end
+        failure_count = failure_count + 1
+    end
+    failures[cache_key] = now + failed_fetch_ttl
+end
+
+local function remember(conf, cache_key, now, keys)
+    if failures[cache_key] then
+        failures[cache_key] = nil
+        failure_count = failure_count - 1
+    end
     local cached = cache[cache_key]
-    -- Failed fetches occupy the same bounded LRU as successful JWKS documents.
-    -- An expired success is replaced by a short negative entry, never reused.
+    -- A successful fetch takes spare capacity from failed lookups first.
+    while failure_count + count + (cached and 0 or 1) > conf.cache_max_entries
+        and failure_count > 0 do
+        local oldest, expiry
+        for issuer, item in pairs(failures) do
+            if not expiry or item < expiry then
+                oldest, expiry = issuer, item
+            end
+        end
+        failures[oldest] = nil
+        failure_count = failure_count - 1
+    end
     local available = conf.cache_max_entries - (cached and 0 or 1)
     while count > available do
         local oldest, oldest_time
@@ -81,7 +133,7 @@ local function remember(conf, cache_key, now, keys, ttl)
         count = count - 1
     end
     if not cached then count = count + 1 end
-    cache[cache_key] = {keys = keys, expires = now + ttl, used = now}
+    cache[cache_key] = {keys = keys, expires = now + conf.cache_ttl, used = now}
 end
 
 local function get_keys(conf, realm)
@@ -92,21 +144,31 @@ local function get_keys(conf, realm)
         cached.used = now
         return cached.keys
     end
-    local client = http.new()
-    client:set_timeout(conf.timeout * 1000)
-    local ok, response = pcall(client.request_uri, client,
-        cache_key .. "/protocol/openid-connect/certs", {method = "GET", ssl_verify = true})
+    if failures[cache_key] and failures[cache_key] > now then return nil end
+    fetch_tokens = math.min(fetch_burst, fetch_tokens + math.max(0, now - fetch_updated) * fetch_rate)
+    fetch_updated = now
+    if fetch_tokens < 1 or in_flight >= max_in_flight then return nil end
+    fetch_tokens = fetch_tokens - 1
+    in_flight = in_flight + 1
+    local ok, response = pcall(function()
+        local client = http.new()
+        client:set_timeout(conf.timeout * 1000)
+        return client:request_uri(cache_key .. "/protocol/openid-connect/certs",
+            {method = "GET", ssl_verify = true})
+    end)
+    in_flight = in_flight - 1
     if not ok or not response or response.status ~= 200
         or type(response.body) ~= "string" or #response.body > 65536 then
-        remember(conf, cache_key, now, nil, failed_fetch_ttl)
+        remember_failure(conf, cache_key, now)
         return nil
     end
     local document = cjson.decode(response.body)
-    if type(document) ~= "table" or type(document.keys) ~= "table" or #document.keys > 32 then
-        remember(conf, cache_key, now, nil, failed_fetch_ttl)
+    if type(document) ~= "table" or type(document.keys) ~= "table"
+        or #document.keys == 0 or #document.keys > 32 then
+        remember_failure(conf, cache_key, now)
         return nil
     end
-    remember(conf, cache_key, now, document.keys, conf.cache_ttl)
+    remember(conf, cache_key, now, document.keys)
     return document.keys
 end
 
