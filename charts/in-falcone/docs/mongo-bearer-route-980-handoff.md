@@ -1,9 +1,10 @@
 # Mongo bearer route #980 deployment repair handoff
 
-This addendum-12 repair extends deployment head
-`ef5a926bcfadf3a2e6d9136dd44bda1db221eca6` on assigned branch
+This rollout handoff repair extends deployment head
+`13fcbfee738d2dd49da3928831871fa0da469ace` on assigned branch
 `agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6` and pairs with
-source repair `49d18d6a`. The entry worktree was clean. The existing route,
+source repair `69337587783f5d706f5965882a554dcf1397a7c0`. The entry worktree was
+clean. The existing route,
 policy, managed ConfigMap, mounts and API-key protections are preserved.
 
 ## Tenant audience enforcement
@@ -27,14 +28,21 @@ unchanged. The Lua test matrix replaces the former wrong-audience acceptance
 assertion and retains rejection/cache coverage.
 
 Executor enforcement covers every tenant-token executor route. Default audiences
-also align with both source provisioning paths and reconciliation. For a custom
+also align with both source provisioning paths and reconciliation. Source
+`apps/control-plane/b-handlers.mjs` now ensures the audience mapper immediately
+after creating a service-account client, before persisting the service account.
+`scripts/backfill-tenant-realm-audience.mjs` reconciles clients marked
+`in-falcone.kind=tenant-app` or `in-falcone.kind=service-account`, listing mappers
+before adding a missing mapper. Service-account preparation is mandatory for
+Mongo, events and functions because they share the executor verifier. For a custom
 audience, release review must supply the same `KEYCLOAK_TENANT_AUDIENCE` to the
 control-plane provisioner and reconciliation environment. Kind's external route
 ConfigMap must also use the custom value if kind overrides the default.
 
 ## Reviewed baseline changes
 
-Only the two permitted render baselines change:
+The preceding addendum-12 commit changed only the two permitted render baselines;
+this handoff repair changes neither:
 
 - `tests/blackbox/fixtures/umbrella-default-render.sha256`: deployment entry
   `f74e1c505429b9823f5a352488ffafa674aa4af0d48b85b88cead3154cdba4fa`,
@@ -43,7 +51,7 @@ Only the two permitted render baselines change:
   `362fb0be45c9d0cdbc6982367ce82a5319f4a43ae6c138e3aaf0a21069e38cca`,
   repaired `11bba368262a4c704b0d2ebc84d14f8d316632e1af53bf5c8718c11601247034`.
 
-A parsed default-render comparison against the entry commit confirms unchanged
+A parsed default-render comparison in the preceding repair confirmed unchanged
 object inventory and exactly four changed objects: the Lua plugin ConfigMap,
 bootstrap route payload, executor JWT ConfigMap and executor Deployment.
 Their tenant-audience verifier/configuration additions require both hashes to
@@ -84,9 +92,12 @@ tenant data through the existing issuer/workspace binding.
 2. With the existing Secret-backed kc-admin environment, run source
    `node scripts/backfill-tenant-realm-audience.mjs` (dry run), then the same
    command with `--apply`, then `--apply` again. Retain redacted reports proving
-   all relevant tenant-app clients have the matching mapper and zero repairs
-   on repeat. Confirm provisioning retry tests and required additional callers
-   such as console/service-account clients have audience preparation.
+   all relevant tenant-app and service-account clients have the matching mapper
+   and zero repairs on repeat. Verify freshly minted service-account tokens carry
+   the audience and reach their Mongo, events and functions routes. Confirm both
+   provisioning paths and service-account creation pass mapper retry tests.
+   Review any additional executor callers, such as console clients, before
+   enabling enforcement.
 3. Only after successful reconciliation, make a follow-up staging values
    revision setting `gateway.mongoBearer.enforceTenantAudience: true`. Ensure
    both APISIX and executor pods reload the configuration during operator-gated
@@ -105,9 +116,11 @@ Scoped evidence covers chart profiles, audience/flag parity and overrides,
 invalid configuration rejection, unchanged API-key routes, managed staging
 route equality, BusyBox and APISIX/OpenShift identities. The two permitted
 baseline suites and source route/parity checks are rerun for this repair.
-Local results: Mongo chart 13/13, flow-audit 7/7, default umbrella baseline 1/1,
-source route/parity 5/5, staging/OpenShift scoped checks 2/2, and strict Helm
-lint for default, prod, staging, kind, airgap and OpenShift pass. The separate
+For this handoff repair, the Mongo chart and flow-audit suites pass, including
+the unchanged default umbrella and flow-audit baselines. Source route/parity
+passes 6/6 against the entry deployment head. Strict Helm lint passes for
+default, prod, staging and kind. The chart suite also covers airgap and
+APISIX/OpenShift identities. The separate
 Node numeric-identity suite requires the absent `yaml` package; its native run
 is deferred to CI. Mongo chart identity assertions pass without that dependency.
 LuaJIT is absent; its verifier matrix remains a required PR CI gate. Live kind
@@ -116,7 +129,7 @@ staging-infrastructure contracts and image builds/scans remain PR CI/release
 gates. Supplemental local checks never replace those gates.
 
 Both source `FALCONE_CHARTS_REF` pins equal the entry deployment head
-`ef5a926bcfadf3a2e6d9136dd44bda1db221eca6`.
+`13fcbfee738d2dd49da3928831871fa0da469ace`.
 Current state: **pin pending deployment repair**.
 After the single additional deployment commit, the next
 source maker must set both pins to that exact final head, update its baseline
