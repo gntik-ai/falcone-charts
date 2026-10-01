@@ -1398,7 +1398,7 @@ bootstrap:
             gateway.in-falcone.io/workspace-binding: required
             gateway.in-falcone.io/plan-capabilities: ""
             gateway.in-falcone.io/audit-required: "false"
-          # Mongo bearer traffic uses a separate, explicit issuer allow-list.
+          # Mongo bearer traffic trusts valid realms on the configured Keycloak host.
           plugins:
             issuer-jwks-auth: {}
             cors: *a1
@@ -1941,7 +1941,8 @@ apisix:
       APISIX_STAND_ALONE: "true"
   initContainers:
     - name: apisix-config-overlay
-      image: '{{ .Values.volumePermissions.image.repository }}:{{ .Values.volumePermissions.image.tag }}'
+      # Reuse the workload image so the overlay adds no image to promote.
+      image: '{{ include "component-wrapper.image" . }}'
       command: [/bin/sh, -ec, 'cp /config-src/config.yaml /apisix-config-overlay/config.yaml']
       volumeMounts:
         - name: apisix-config-source

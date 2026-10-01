@@ -59,6 +59,11 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     assert.match(config.data['config.yaml'], /- issuer-jwks-auth/)
     assert.match(config.data['config.yaml'], /extra_lua_path: \/usr\/local\/apisix\/falcone\/\?\.lua/)
     const mounts = gateway.spec.template.spec.containers[0].volumeMounts
+    if (name !== 'staging') {
+      const overlay = gateway.spec.template.spec.initContainers.find((container) => container.name === 'apisix-config-overlay')
+      assert.equal(overlay.image, gateway.spec.template.spec.containers[0].image,
+        `${name}: the config overlay must introduce no additional image reference`)
+    }
     assert.ok(mounts.some((mount) => mount.mountPath.endsWith('/apisix/plugins/issuer-jwks-auth.lua')))
     const volumes = new Set(gateway.spec.template.spec.volumes.map((volume) => volume.name))
     if (name === 'staging') {
@@ -94,6 +99,9 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   const { objects } = render(umbrellaChart, ['-f', `${repoRoot}/deploy/kind/values-kind.yaml`])
   const gateway = objects.find((object) => object.kind === 'Deployment' && /-apisix$/.test(object.metadata.name))
   const pod = gateway.spec.template.spec
+  const overlay = pod.initContainers.find((container) => container.name === 'apisix-config-overlay')
+  assert.equal(overlay.image, pod.containers[0].image,
+    'kind: the config overlay must introduce no additional image reference')
   const volumes = new Set(pod.volumes.map((volume) => volume.name))
   for (const required of ['standalone-config', 'apisix-config-source', 'apisix-config-overlay', 'issuer-jwks-auth']) {
     assert.ok(volumes.has(required), `missing kind APISIX volume ${required}`)
@@ -108,6 +116,19 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   assert.ok(mounts.includes('/usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua'))
   const config = objects.find((object) => object.kind === 'ConfigMap' && /-apisix-config-file$/.test(object.metadata.name))
   assert.match(config.data['config.yaml'], /- issuer-jwks-auth/)
+})
+
+test('config overlay follows APISIX image promotion and registry mirroring', () => {
+  const digest = `sha256:${'a'.repeat(64)}`
+  const { gateway } = rendered([
+    '--set-string', `apisix.image.digest=${digest}`,
+    '--set-string', 'global.imageRegistry=mirror.example.test',
+  ])
+  const pod = gateway.spec.template.spec
+  const overlay = pod.initContainers.find((container) => container.name === 'apisix-config-overlay')
+  assert.equal(pod.containers[0].image, `mirror.example.test/apache/apisix@${digest}`)
+  assert.equal(overlay.image, pod.containers[0].image,
+    'the overlay must use the same promoted image and mirror as APISIX')
 })
 
 test('staging standalone, bootstrap and executor use every configured verifier setting', () => {
