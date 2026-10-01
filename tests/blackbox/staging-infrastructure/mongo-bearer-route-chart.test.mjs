@@ -3,7 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { render, umbrellaChart, repoRoot, run, sha256, yamlDocuments } from './fixtures/blackbox.mjs'
+import { render, umbrellaChart, repoRoot, run, sha256, yamlDocuments } from '../fixtures/blackbox.mjs'
 
 function rendered(overlay = []) {
   const { objects, text } = render(umbrellaChart, overlay)
@@ -51,6 +51,10 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     const mounts = gateway.spec.template.spec.containers[0].volumeMounts
     assert.ok(mounts.some((mount) => mount.mountPath.endsWith('/apisix/plugins/issuer-jwks-auth.lua')))
     const volumes = new Set(gateway.spec.template.spec.volumes.map((volume) => volume.name))
+    if (name === 'staging') {
+      const verifierVolume = gateway.spec.template.spec.volumes.find((volume) => volume.name === 'issuer-jwks-auth')
+      assert.equal(verifierVolume.configMap.defaultMode, 420)
+    }
     for (const container of [...gateway.spec.template.spec.initContainers, ...gateway.spec.template.spec.containers]) {
       for (const mount of container.volumeMounts ?? []) {
         assert.ok(volumes.has(mount.name), `${name}: ${container.name} mounts missing volume ${mount.name}`)

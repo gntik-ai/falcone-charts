@@ -97,6 +97,7 @@ apisix:
     - name: issuer-jwks-auth
       configMap:
         name: falcone-issuer-jwks-auth
+        defaultMode: 420
   extraVolumeMounts:
     - name: standalone-config
       mountPath: /usr/local/apisix/conf/apisix.yaml

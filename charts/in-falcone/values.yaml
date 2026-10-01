@@ -1941,7 +1941,7 @@ apisix:
       APISIX_STAND_ALONE: "true"
   initContainers:
     - name: apisix-config-overlay
-      image: '{{ .Values.image.repository }}:{{ .Values.image.tag }}'
+      image: '{{ .Values.volumePermissions.image.repository }}:{{ .Values.volumePermissions.image.tag }}'
       command: [/bin/sh, -ec, 'cp /config-src/config.yaml /apisix-config-overlay/config.yaml']
       volumeMounts:
         - name: apisix-config-source

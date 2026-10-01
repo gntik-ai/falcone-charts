@@ -1054,7 +1054,7 @@ if pod_spec.get("volumes") != [
     {"configMap": {"defaultMode": 420, "name": "falcone-apisix-standalone"}, "name": "standalone-config"},
     {"configMap": {"defaultMode": 420, "name": "falcone-apisix-config-file"}, "name": "apisix-config-source"},
     {"emptyDir": {}, "name": "apisix-config-overlay"},
-    {"configMap": {"name": "falcone-issuer-jwks-auth"}, "name": "issuer-jwks-auth"},
+    {"configMap": {"defaultMode": 420, "name": "falcone-issuer-jwks-auth"}, "name": "issuer-jwks-auth"},
 ]:
     raise SystemExit(1)
 PY
@@ -1812,7 +1812,7 @@ validate_revision23_numeric_user_convergence() {
       "emptyDir": {}
     }, {
       "name": "issuer-jwks-auth",
-      "configMap": {"name": "falcone-issuer-jwks-auth"}
+      "configMap": {"name": "falcone-issuer-jwks-auth", "defaultMode": 420}
     }]' >/dev/null || return 1
   printf '%s' "$observability_json" | jq -e --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" '
     .apiVersion == "apps/v1" and .kind == "Deployment"

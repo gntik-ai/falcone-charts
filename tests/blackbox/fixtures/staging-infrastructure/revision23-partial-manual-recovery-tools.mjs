@@ -1633,6 +1633,12 @@ const liveApisixDeployment = () => {
       name: "apisix-config-overlay",
       mountPath: "/usr/local/apisix/conf/config.yaml",
       subPath: "config.yaml"
+    },
+    {
+      name: "issuer-jwks-auth",
+      mountPath: "/usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua",
+      subPath: "issuer-jwks-auth.lua",
+      readOnly: true
     }
   ];
   deployment.spec.template.spec.volumes = [
@@ -1644,7 +1650,11 @@ const liveApisixDeployment = () => {
       name: "apisix-config-source",
       configMap: { name: "falcone-apisix-config-file", defaultMode: 420 }
     },
-    { name: "apisix-config-overlay", emptyDir: {} }
+    { name: "apisix-config-overlay", emptyDir: {} },
+    {
+      name: "issuer-jwks-auth",
+      configMap: { name: "falcone-issuer-jwks-auth", defaultMode: 420 }
+    }
   ];
   return deployment;
 };
@@ -1921,6 +1931,10 @@ spec:
             - mountPath: /usr/local/apisix/conf/config.yaml
               name: apisix-config-overlay
               subPath: config.yaml
+            - mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
+              name: issuer-jwks-auth
+              readOnly: true
+              subPath: issuer-jwks-auth.lua
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -1940,7 +1954,11 @@ spec:
             name: falcone-apisix-config-file
           name: apisix-config-source
         - emptyDir: {}
-          name: apisix-config-overlay`;
+          name: apisix-config-overlay
+        - configMap:
+            defaultMode: 420
+            name: falcone-issuer-jwks-auth
+          name: issuer-jwks-auth`;
   if (fixture.renderedChartVariants.misplacedApisixContract) {
     apisixDocument = `---
 apiVersion: apps/v1
