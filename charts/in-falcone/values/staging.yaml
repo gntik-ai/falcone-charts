@@ -130,6 +130,7 @@ apisix:
           mountPath: /apisix-config-overlay
       securityContext:
         allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
         capabilities:
           drop:
             - ALL

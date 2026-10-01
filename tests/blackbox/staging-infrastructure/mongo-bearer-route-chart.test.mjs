@@ -69,6 +69,7 @@ for (const [name, overlay] of [['default', []], ['staging', ['-f', `${umbrellaCh
     const mounts = gateway.spec.template.spec.containers[0].volumeMounts
     const configOverlay = gateway.spec.template.spec.initContainers.find((container) => container.name === 'apisix-config-overlay')
     assert.equal(configOverlay.image, overlayImage, `${name}: the overlay must use the reviewed BusyBox digest`)
+    assert.equal(configOverlay.securityContext.readOnlyRootFilesystem, true, `${name}: config copy must use a read-only root filesystem`)
     assert.notEqual(configOverlay.image, gateway.spec.template.spec.containers[0].image)
     assert.ok(mounts.some((mount) => mount.mountPath.endsWith('/apisix/plugins/issuer-jwks-auth.lua')))
     const volumes = new Set(gateway.spec.template.spec.volumes.map((volume) => volume.name))
@@ -117,6 +118,7 @@ test('kind mounts the verifier, config overlay, and all init-container volumes',
   const pod = gateway.spec.template.spec
   const overlay = pod.initContainers.find((container) => container.name === 'apisix-config-overlay')
   assert.equal(overlay.image, overlayImage, 'kind: the overlay must use the reviewed BusyBox digest')
+  assert.equal(overlay.securityContext.readOnlyRootFilesystem, true)
   assert.notEqual(overlay.image, pod.containers[0].image)
   const volumes = new Set(pod.volumes.map((volume) => volume.name))
   for (const required of ['standalone-config', 'apisix-config-source', 'apisix-config-overlay', 'issuer-jwks-auth']) {
@@ -204,6 +206,7 @@ test('airgap mirrors the BusyBox overlay without changing its config copy or sec
   assert.equal(openshiftOverlay.securityContext.runAsUser, undefined)
   assert.equal(openshiftOverlay.securityContext.runAsGroup, undefined)
   assert.equal(openshiftOverlay.securityContext.runAsNonRoot, true)
+  assert.equal(openshiftOverlay.securityContext.readOnlyRootFilesystem, true)
 })
 
 test('APISIX numeric identities and OpenShift overlay retain the main contracts', () => {
@@ -226,6 +229,8 @@ test('APISIX numeric identities and OpenShift overlay retain the main contracts'
       assert.equal(container.securityContext?.runAsUser, undefined)
       assert.equal(container.securityContext?.runAsGroup, undefined)
     }
+    assert.equal(openshiftPod.initContainers.find((container) => container.name === 'apisix-config-overlay')
+      .securityContext.readOnlyRootFilesystem, true)
   }
 })
 

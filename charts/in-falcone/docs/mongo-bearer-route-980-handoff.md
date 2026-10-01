@@ -1,9 +1,9 @@
 # Mongo bearer route #980 deployment repair handoff
 
-This rollout handoff repair extends deployment head
-`13fcbfee738d2dd49da3928831871fa0da469ace` on assigned branch
+This KSV-0014 repair extends deployment head
+`19b9aa7bc25005be0d962dc7014394946e3a73e4` on assigned branch
 `agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6` and pairs with
-source repair `69337587783f5d706f5965882a554dcf1397a7c0`. The entry worktree was
+source repair `74f5ad25` (the supplied source maker result). The entry worktree was
 clean. The existing route,
 policy, managed ConfigMap, mounts and API-key protections are preserved.
 
@@ -41,27 +41,28 @@ ConfigMap must also use the custom value if kind overrides the default.
 
 ## Reviewed baseline changes
 
-The preceding addendum-12 commit changed only the two permitted render baselines;
-this handoff repair changes neither:
+This repair updates only the two permitted render baselines:
 
 - `tests/blackbox/fixtures/umbrella-default-render.sha256`: deployment entry
-  `f74e1c505429b9823f5a352488ffafa674aa4af0d48b85b88cead3154cdba4fa`,
-  repaired `5ca1986297dc0c39ebd98ce720d3d352ddb7b2bacc79555bc1c0c3eeb1d3579a`.
+  `5ca1986297dc0c39ebd98ce720d3d352ddb7b2bacc79555bc1c0c3eeb1d3579a`,
+  repaired `9208d166e3276b32638e21d6a6e8ccf36495e01167a8d0c72368f9af9f21f45f`.
 - `tests/flow-audit-chart.test.mjs`: deployment entry prior-object baseline
-  `362fb0be45c9d0cdbc6982367ce82a5319f4a43ae6c138e3aaf0a21069e38cca`,
-  repaired `11bba368262a4c704b0d2ebc84d14f8d316632e1af53bf5c8718c11601247034`.
+  `11bba368262a4c704b0d2ebc84d14f8d316632e1af53bf5c8718c11601247034`,
+  repaired `8c7bcb9137c9ab34847dc54a1e845da6173737cfcff31a38769ef488bf76399d`.
 
-A parsed default-render comparison in the preceding repair confirmed unchanged
-object inventory and exactly four changed objects: the Lua plugin ConfigMap,
-bootstrap route payload, executor JWT ConfigMap and executor Deployment.
-Their tenant-audience verifier/configuration additions require both hashes to
-change. Flow-audit objects, rules and assertions remain unchanged. No other
+A parsed default-render comparison confirms unchanged object inventory and
+exactly one added field: the APISIX config-copy init container's
+`securityContext.readOnlyRootFilesystem: true`. Removing that field reproduces
+both entry hashes and the exact entry APISIX Deployment. The umbrella baseline
+covers every rendered object; the flow-audit prior-object baseline includes this
+Deployment too, so both hashes must change. Flow-audit objects, rules and
+assertions remain unchanged. No other
 fixture is re-baselined. The pre-980 route fixture and canonical hash stay
 immutable; the snapshot check removes only the explicit audience fields,
 previously reviewed API-key header removals and Mongo upstream comment fix.
 The source maker must update its tasks/handoff baseline records to these final
-hashes when refreshing the paired pins; the earlier b19843c5/3abc15a2 records
-are superseded.
+hashes when refreshing the paired pins; all earlier baseline records are
+superseded.
 
 ## Preserved safety and release gates
 
@@ -69,6 +70,11 @@ APISIX container UID/GID 636, inherited fsGroup 1001, staging pod identity and
 OpenShift SCC behavior retain the main contracts. The previously reviewed
 BusyBox overlay digest, registry handling and airgap mirror are unchanged;
 release review still verifies mirror inventory. No image references change.
+The BusyBox config-copy init container now uses a read-only root filesystem in
+default (inherited by prod and kind), staging and airgap. Its only write remains
+the existing writable emptyDir at `/apisix-config-overlay`; its ConfigMap source
+stays read-only. OpenShift retains the new flag while stripping numeric IDs.
+The main APISIX process's filesystem contract remains unchanged.
 
 Staging issuer remains `https://iam.baas.musematic.ai` without `/auth`, with
 JWKS at `http://falcone-keycloak:8080`. Other `gatewayPolicy.oidc` settings stay
@@ -116,10 +122,13 @@ Scoped evidence covers chart profiles, audience/flag parity and overrides,
 invalid configuration rejection, unchanged API-key routes, managed staging
 route equality, BusyBox and APISIX/OpenShift identities. The two permitted
 baseline suites and source route/parity checks are rerun for this repair.
-For this handoff repair, the Mongo chart and flow-audit suites pass, including
-the unchanged default umbrella and flow-audit baselines. Source route/parity
-passes 6/6 against the entry deployment head. Strict Helm lint passes for
-default, prod, staging and kind. The chart suite also covers airgap and
+For this repair, the Mongo chart, flow-audit and APISIX metrics suites pass,
+including both updated baselines. Strict Helm lint passes for default, prod,
+staging and kind. Offline Trivy uses embedded checks and confirms no KSV-0014
+on the config-copy init container in default, prod, staging, kind and airgap;
+the default scan removes exactly that finding and introduces none. Existing
+findings on other containers remain platform baseline concerns. The chart
+suite also covers airgap and
 APISIX/OpenShift identities. The separate
 Node numeric-identity suite requires the absent `yaml` package; its native run
 is deferred to CI. Mongo chart identity assertions pass without that dependency.
@@ -129,7 +138,7 @@ staging-infrastructure contracts and image builds/scans remain PR CI/release
 gates. Supplemental local checks never replace those gates.
 
 Both source `FALCONE_CHARTS_REF` pins equal the entry deployment head
-`13fcbfee738d2dd49da3928831871fa0da469ace`.
+`19b9aa7bc25005be0d962dc7014394946e3a73e4`.
 Current state: **pin pending deployment repair**.
 After the single additional deployment commit, the next
 source maker must set both pins to that exact final head, update its baseline

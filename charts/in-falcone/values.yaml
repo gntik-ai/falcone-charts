@@ -1956,6 +1956,7 @@ apisix:
         runAsUser: 636
         runAsGroup: 636
         allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
         capabilities:
           drop: [ALL]
   volumePermissions:
