@@ -124,6 +124,17 @@ test('legacy topic name overrides cannot diverge from the executor topic', () =>
     'falcone.audit.flow-lifecycle')
 })
 
+test('chart-only upgrade waiver suppresses the applying grants job', () => {
+  const { objects } = render(umbrellaChart, [
+    '--set', 'global.gitops.upgradeSemantics=true',
+    '--set', 'deployment.upgrade.currentVersion=0.3.1',
+    '--set', 'global.webhookDatabase.migration.authorityReplayEnabled=false',
+    '--set-string', 'global.webhookDatabase.migration.waiverReference=flow-audit-test',
+  ])
+  assert.deepEqual(flowAuditObjects(objects).map(({ kind, metadata }) => `${kind}/${metadata.name}`),
+    ['Job/falcone-bbx-in-falcone-flow-audit-topic'])
+})
+
 test('operator rule renders only when its CRD is available and matches bundled Prometheus', () => {
   const { objects } = render(umbrellaChart, ['--api-versions', 'monitoring.coreos.com/v1/PrometheusRule'])
   const added = flowAuditObjects(objects)

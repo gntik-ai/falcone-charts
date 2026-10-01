@@ -4,7 +4,8 @@
 -- Safe to re-run after the runtime creates the table. Data-plane roles must
 -- never inherit access, including on installations with old blanket grants.
 -- psql supplies executor_role from the same secret used by the executor.
-SELECT set_config('flow_audit.executor_role', :'executor_role', false);
+-- \gset consumes the result without printing the Secret-sourced role in Job logs.
+SELECT set_config('flow_audit.executor_role', :'executor_role', false) \gset
 DO $$
 DECLARE
   data_role text;
@@ -25,7 +26,7 @@ BEGIN
   -- It owns the runtime-created table on fresh installs; this grant also
   -- reconciles an existing table owned by an administrator.
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = executor_role) THEN
-    RAISE EXCEPTION 'flow audit executor role % does not exist', executor_role;
+    RAISE EXCEPTION 'flow audit executor role does not exist';
   END IF;
   EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.flow_audit_outbox TO %I', executor_role);
 

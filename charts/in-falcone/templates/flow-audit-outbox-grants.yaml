@@ -1,4 +1,11 @@
 {{- $database := .Values.global.webhookDatabase -}}
+{{- $migration := $database.migration | default dict -}}
+{{- $authorityReplayEnabled := true -}}
+{{- if hasKey $migration "authorityReplayEnabled" -}}
+  {{- $authorityReplayEnabled = get $migration "authorityReplayEnabled" -}}
+{{- end -}}
+{{- /* A chart-only upgrade waiver must not apply this database migration. */ -}}
+{{- if or (ne (include "in-falcone.isUpgrade" .) "true") $authorityReplayEnabled -}}
 {{- $transport := .Values.global.transportSecurity | default dict -}}
 {{- $tls := $transport.enabled | default false -}}
 {{- $ca := and $tls (ne ($transport.caSecretName | default "") "") -}}
@@ -109,3 +116,4 @@ spec:
           secret:
             secretName: {{ $transport.caSecretName }}
         {{- end }}
+{{- end }}
