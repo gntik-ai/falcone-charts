@@ -123,6 +123,11 @@ data:
 {{- $_ := set $oidc "realm" $.Values.gatewayPolicy.oidc.realm -}}
 {{- $_ := set $oidc "ssl_verify" $.Values.gatewayPolicy.oidc.sslVerify -}}
 {{- end }}
+{{- if hasKey $plugins "issuer-jwks-auth" }}
+{{- $verifier := $.Values.gatewayPolicy.issuerJwksAuth -}}
+{{- if not $verifier.issuers }}{{- fail "gatewayPolicy.issuerJwksAuth.issuers must contain an explicit platform realm" -}}{{- end -}}
+{{- $_ := set $plugins "issuer-jwks-auth" (dict "issuers" $verifier.issuers "cache_ttl" $verifier.cache_ttl "cache_max_entries" $verifier.cache_max_entries "timeout" $verifier.timeout) -}}
+{{- end }}
 {{- if hasKey $plugins "cors" }}
 {{- $cors := index $plugins "cors" -}}
 {{- $_ := set $cors "allow_origins" (join "," $.Values.gatewayPolicy.cors.allowOrigins) -}}
@@ -198,7 +203,15 @@ data:
 {{- if or .upstream.dataPlane .upstream.requiresExecutor }}
 {{- $_ := set $rewriteHeaders "x-gateway-auth" "${{GATEWAY_SHARED_SECRET}}" -}}
 {{- end }}
+{{- if eq (toString .routeId) "2006" }}
+{{- $_ := set (index $plugins "proxy-rewrite") "headers" (dict "set" (dict
+  $.Values.gatewayPolicy.correlation.headerName (printf "$http_%s" (lower (replace "-" "_" $.Values.gatewayPolicy.correlation.headerName)))
+  $.Values.gatewayPolicy.correlation.requestIdHeader "$request_id"
+  "x-gateway-auth" "${{GATEWAY_SHARED_SECRET}}"
+) "remove" (list "x-tenant-id" "x-workspace-id" "x-auth-subject" "x-actor-roles")) -}}
+{{- else }}
 {{- $_ := set (index $plugins "proxy-rewrite") "headers" $rewriteHeaders -}}
+{{- end }}
 {{- end }}
 {{- if hasKey $plugins "authz-keycloak" }}
 {{- $authz := index $plugins "authz-keycloak" -}}

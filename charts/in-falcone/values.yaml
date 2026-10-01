@@ -1396,7 +1396,31 @@ bootstrap:
             gateway.in-falcone.io/workspace-binding: required
             gateway.in-falcone.io/plan-capabilities: ""
             gateway.in-falcone.io/audit-required: "false"
-          plugins: *a3w
+          # Mongo bearer traffic uses a separate, explicit issuer allow-list.
+          plugins:
+            issuer-jwks-auth: {}
+            cors: *a1
+            limit-count:
+              count: 120
+              time_window: 60
+              rejected_code: 429
+              key_type: var_combination
+              key: $http_x_tenant_id $http_x_workspace_id
+              allow_degradation: false
+            client-control:
+              max_body_size: 262144
+            request-validation: *a5
+            proxy-rewrite:
+              headers:
+                set:
+                  X-Correlation-Id: $http_x_correlation_id
+                  X-Request-Id: $request_id
+                  x-gateway-auth: "${{GATEWAY_SHARED_SECRET}}"
+                remove:
+                  - x-tenant-id
+                  - x-workspace-id
+                  - x-auth-subject
+                  - x-actor-roles
           upstream:
             component: controlPlane
             port: 8080
@@ -1876,7 +1900,10 @@ apisix:
     annotations: {}
   podAnnotations: {}
   podLabels: {}
-  podSecurityContext: {}
+  podSecurityContext:
+    runAsUser: 636
+    runAsGroup: 636
+    fsGroup: 636
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: false
@@ -1889,12 +1916,40 @@ apisix:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  extraVolumes: []
-  extraVolumeMounts: []
+  extraVolumes:
+    - name: apisix-config-source
+      configMap:
+        name: '{{ .Release.Name }}-apisix-config-file'
+    - name: apisix-config-overlay
+      emptyDir: {}
+    - name: issuer-jwks-plugin
+      configMap:
+        name: '{{ .Release.Name }}-issuer-jwks-auth'
+  extraVolumeMounts:
+    - name: apisix-config-overlay
+      mountPath: /usr/local/apisix/conf/config.yaml
+      subPath: config.yaml
+    - name: issuer-jwks-plugin
+      mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
+      subPath: issuer-jwks-auth.lua
+      readOnly: true
   config:
     inline:
       APISIX_STAND_ALONE: "true"
-  initContainers: []
+  initContainers:
+    - name: apisix-config-overlay
+      image: '{{ .Values.image.repository }}:{{ .Values.image.tag }}'
+      command: [/bin/sh, -ec, 'cp /config-src/config.yaml /apisix-config-overlay/config.yaml']
+      volumeMounts:
+        - name: apisix-config-source
+          mountPath: /config-src
+          readOnly: true
+        - name: apisix-config-overlay
+          mountPath: /apisix-config-overlay
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
   volumePermissions:
     enabled: false
     image:
@@ -3659,6 +3714,13 @@ controlPlaneExecutor:
   env:
     - name: CONTROL_PLANE_UPSTREAM
       value: "http://{{ .Release.Name }}-control-plane:8080"
+    # Always activate the executor's own JWT verifier for bearer data routes.
+    - name: KEYCLOAK_JWKS_URL
+      value: "http://{{ .Release.Name }}-keycloak:8080/realms/in-falcone-platform/protocol/openid-connect/certs"
+    - name: KEYCLOAK_ISSUER
+      value: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform
+    - name: KEYCLOAK_AUDIENCE
+      value: in-falcone
     - name: PGHOST
       value: "{{ .Release.Name }}-postgresql"
     - name: PGUSER
@@ -4057,6 +4119,16 @@ workflowWorker:
 
 gatewayPolicy:
   version: 2026-03-24
+  # Provision tenant entries from the authoritative realm configuration before
+  # their bearer tokens are accepted. No token field can expand this list.
+  issuerJwksAuth:
+    issuers:
+      - issuer: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform
+        jwks_uri: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform/protocol/openid-connect/certs
+        audiences: [in-falcone]
+    cache_ttl: 300
+    cache_max_entries: 128
+    timeout: 3
   oidc:
     enabled: true
     provider: keycloak

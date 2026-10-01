@@ -91,6 +91,9 @@ apisix:
         defaultMode: 420
     - name: apisix-config-overlay
       emptyDir: {}
+    - name: issuer-jwks-plugin
+      configMap:
+        name: falcone-issuer-jwks-auth
   extraVolumeMounts:
     - name: standalone-config
       mountPath: /usr/local/apisix/conf/apisix.yaml
@@ -98,6 +101,10 @@ apisix:
     - name: apisix-config-overlay
       mountPath: /usr/local/apisix/conf/config.yaml
       subPath: config.yaml
+    - name: issuer-jwks-plugin
+      mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
+      subPath: issuer-jwks-auth.lua
+      readOnly: true
   initContainers:
     - name: apisix-config-overlay
       image: docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
