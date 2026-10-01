@@ -1,11 +1,19 @@
 # Mongo bearer route #980 deployment repair handoff
 
-This KSV-0014 repair extends deployment head
-`19b9aa7bc25005be0d962dc7014394946e3a73e4` on assigned branch
+This render-contract continuation extends deployment head
+`c63c8617e23733e6ebfd633d1fd56cbbc13acc8e` on assigned branch
 `agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6` and pairs with
-source repair `74f5ad25` (the supplied source maker result). The entry worktree was
+source continuation `faacf562b73478aecab0e0378571db34a6b28937`
+(the supplied source maker result). The entry worktree was
 clean. The existing route,
 policy, managed ConfigMap, mounts and API-key protections are preserved.
+
+The checker-reproduced `APISIX_RENDER_CONVERGENCE_DRIFT reason=contract`
+occurred because the preceding repair made the config-copy root filesystem
+read-only without updating the migration's exact render expectation. This
+continuation adds that required field to the revision-20 render contract and
+the revision-23 synthetic render. The exact comparison remains fail-closed;
+no chart values, images, numeric identities or baselines change here.
 
 ## Tenant audience enforcement
 
@@ -41,7 +49,8 @@ ConfigMap must also use the custom value if kind overrides the default.
 
 ## Reviewed baseline changes
 
-This repair updates only the two permitted render baselines:
+The preceding KSV-0014 repair updated only the two permitted render baselines;
+this continuation retains those hashes:
 
 - `tests/blackbox/fixtures/umbrella-default-render.sha256`: deployment entry
   `5ca1986297dc0c39ebd98ce720d3d352ddb7b2bacc79555bc1c0c3eeb1d3579a`,
@@ -121,15 +130,25 @@ tenant data through the existing issuer/workspace binding.
 Scoped evidence covers chart profiles, audience/flag parity and overrides,
 invalid configuration rejection, unchanged API-key routes, managed staging
 route equality, BusyBox and APISIX/OpenShift identities. The two permitted
-baseline suites and source route/parity checks are rerun for this repair.
-For this repair, the Mongo chart, flow-audit and APISIX metrics suites pass,
-including both updated baselines. Strict Helm lint passes for default, prod,
-staging and kind. Offline Trivy uses embedded checks and confirms no KSV-0014
+baseline suites and source route/parity checks were rerun for this continuation.
+The Mongo chart, flow-audit and APISIX metrics suites pass all 22 tests,
+including both retained baselines. Strict Helm lint passes for default, prod,
+staging and kind. Bash and Node syntax checks pass for the changed migration
+and fixture respectively. Before the fix, both checker-targeted staging tests
+reproduced the render-contract failure; after the fix, both pass. The combined
+recovery run also passed all 20 cases in the revision-23 partial-recovery group,
+including rejection of rendered identity, cardinality and mount drift.
+The full staging suite passes 13 of 14 tests; its unchanged OpenBao reconciler
+shell syntax check times out after 30 seconds. The broader combined run exits
+124 at its 180-second bound and reports revision-24 fixture
+`REPAIR_PACKAGE_PULL_FAILED` errors before the changed render gate. These
+broader paths need CI revalidation; neither failing path changes here.
+
+The preceding repair's offline Trivy evidence used embedded checks and confirmed no KSV-0014
 on the config-copy init container in default, prod, staging, kind and airgap;
-the default scan removes exactly that finding and introduces none. Existing
+the default scan removed exactly that finding and introduced none. Existing
 findings on other containers remain platform baseline concerns. The chart
-suite also covers airgap and
-APISIX/OpenShift identities. The separate
+suite also covers airgap and APISIX/OpenShift identities. The separate
 Node numeric-identity suite requires the absent `yaml` package; its native run
 is deferred to CI. Mongo chart identity assertions pass without that dependency.
 LuaJIT is absent; its verifier matrix remains a required PR CI gate. Live kind
@@ -137,12 +156,16 @@ CRUD/isolation/API-key/429, frozen-dependency gateway-policy contracts, full
 staging-infrastructure contracts and image builds/scans remain PR CI/release
 gates. Supplemental local checks never replace those gates.
 
-Both source `FALCONE_CHARTS_REF` pins equal the entry deployment head
+Both source `FALCONE_CHARTS_REF` pins still equal the earlier deployment head
 `19b9aa7bc25005be0d962dc7014394946e3a73e4`.
-Current state: **pin pending deployment repair**.
-After the single additional deployment commit, the next
+At entry, source route parity passes five tests and fails only the pin check
+against `c63c8617e23733e6ebfd633d1fd56cbbc13acc8e`.
+Current state: **pin pending deployment repair** until this continuation is
+committed, then **pin refresh required against the final deployment head**.
+After this single additional deployment commit, the next
 source maker must set both pins to that exact final head, update its baseline
-records and rerun parity. This deployment-only work does not edit source files;
+and tasks.md gate records and rerun parity. The paired ChangeSet remains
+incomplete until that check passes. This deployment-only work does not edit source files;
 no extra deployment commit is needed to record the source pin refresh.
 The supplied addendum is truncated; release review retains that open question.
 

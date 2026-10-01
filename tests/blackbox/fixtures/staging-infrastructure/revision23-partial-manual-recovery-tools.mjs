@@ -1911,6 +1911,7 @@ spec:
             - cp /config-src/config.yaml /apisix-config-overlay/config.yaml
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL

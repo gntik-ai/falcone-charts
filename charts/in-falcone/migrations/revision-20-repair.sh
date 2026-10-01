@@ -1043,6 +1043,7 @@ if pod_spec.get("initContainers") != [{
     "securityContext": {
         "allowPrivilegeEscalation": False,
         "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
     },
     "volumeMounts": [
         {"mountPath": "/config-src", "name": "apisix-config-source", "readOnly": True},
