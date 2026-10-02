@@ -5,7 +5,8 @@ import test from 'node:test'
 
 import { render, repoRoot, sha256, umbrellaChart, yamlDocuments } from './blackbox/fixtures/blackbox.mjs'
 
-const priorBaseline = '26c5dc19ecbb5054fc3a8565852c89def7f2456793010fe320d0fa046e56087b'
+// #980: include tenant audience wiring and the read-only config-copy root filesystem, preserving main's pod identities.
+const priorBaseline = '8c7bcb9137c9ab34847dc54a1e845da6173737cfcff31a38769ef488bf76399d'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',

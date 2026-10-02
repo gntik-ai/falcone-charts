@@ -1,0 +1,19 @@
+{{- if .Values.apisix.manageStandaloneRoutes }}
+{{- $routes := .Files.Get "files/apisix/standalone/apisix.yaml" -}}
+{{- $routes = replace ".falcone.svc.cluster.local" (printf ".%s.svc.cluster.local" .Release.Namespace) $routes -}}
+{{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
+{{- $original := regexFind "(?m)^      issuer-jwks-auth:\n(?:        [^\n]*\n)+" $routes -}}
+{{- if not $original }}{{- fail "standalone route 2006 verifier configuration is missing" -}}{{- end -}}
+{{- $configured := printf "      issuer-jwks-auth:\n        issuer_base_url: %q\n        jwks_base_url: %q\n        platform_realm: %q\n        audience: %q\n        tenant_audience: %q\n        enforce_tenant_audience: %v\n        cache_ttl: %v\n        cache_max_entries: %v\n        timeout: %v\n" $verifier.issuer_base_url $verifier.jwks_base_url $verifier.platform_realm $verifier.audience $verifier.tenant_audience $verifier.enforce_tenant_audience $verifier.cache_ttl $verifier.cache_max_entries $verifier.timeout -}}
+{{- $routes = replace $original $configured $routes -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falcone-apisix-standalone
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: apisix
+data:
+  apisix.yaml: |
+{{ $routes | nindent 4 }}
+{{- end }}

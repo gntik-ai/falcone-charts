@@ -6,6 +6,8 @@
 #   containerd allows plain-HTTP localhost).
 # - Installs into namespace `falcone` (shared cluster; musematic untouched).
 global:
+  keycloakIssuerBaseUrl: http://falcone-keycloak:8080
+  keycloakJwksBaseUrl: http://falcone-keycloak:8080
   namespace: falcone
   createNamespace: false
   imagePullSecrets: []
@@ -16,6 +18,10 @@ global:
   # Use mode: external for administrator-owned Knative, or mode: disabled for
   # no Function/MCP serving dependency. The projected ConfigMap name defaults
   # to falcone-knative-runtime in this application namespace.
+gateway:
+  mongoBearer:
+    tenantAudience: falcone-data-api
+    enforceTenantAudience: true
 mcp:
   runtimeImage:
     repository: localhost:30500/in-falcone-mcp-runtime
@@ -77,10 +83,25 @@ apisix:
     - name: standalone-config
       configMap:
         name: falcone-apisix-standalone
+    - name: apisix-config-source
+      configMap:
+        name: '{{ .Release.Name }}-apisix-config-file'
+    - name: apisix-config-overlay
+      emptyDir: {}
+    - name: issuer-jwks-auth
+      configMap:
+        name: '{{ .Release.Name }}-issuer-jwks-auth'
   extraVolumeMounts:
     - name: standalone-config
       mountPath: /usr/local/apisix/conf/apisix.yaml
       subPath: apisix.yaml
+    - name: apisix-config-overlay
+      mountPath: /usr/local/apisix/conf/config.yaml
+      subPath: config.yaml
+    - name: issuer-jwks-auth
+      mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
+      subPath: issuer-jwks-auth.lua
+      readOnly: true
 postgresql:
   image:
     repository: docker.io/bitnamilegacy/postgresql

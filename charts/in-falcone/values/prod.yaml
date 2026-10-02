@@ -1,4 +1,8 @@
 global:
+  # Placeholders: the operator must supply production issuer and JWKS hosts before rollout.
+  # Keep explicit production values; never inherit the development issuer.
+  keycloakIssuerBaseUrl: https://iam.in-falcone.example.com/auth
+  keycloakJwksBaseUrl: "http://{{ .Release.Name }}-keycloak:8080"
   namespace: in-falcone
   environment: prod
 publicSurface:

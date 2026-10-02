@@ -1,0 +1,16 @@
+{{- if ne .Values.controlPlaneExecutor.enabled false }}
+{{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-executor-jwt-config
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: control-plane-executor
+data:
+  KEYCLOAK_ISSUER: {{ printf "%s/realms/%s" $verifier.issuer_base_url $verifier.platform_realm | quote }}
+  KEYCLOAK_JWKS_URL: {{ printf "%s/realms/%s/protocol/openid-connect/certs" $verifier.jwks_base_url $verifier.platform_realm | quote }}
+  KEYCLOAK_AUDIENCE: {{ $verifier.audience | quote }}
+  KEYCLOAK_TENANT_AUDIENCE: {{ $verifier.tenant_audience | quote }}
+  KEYCLOAK_ENFORCE_TENANT_AUDIENCE: {{ $verifier.enforce_tenant_audience | toString | quote }}
+{{- end }}

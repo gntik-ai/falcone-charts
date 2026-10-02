@@ -123,6 +123,9 @@ data:
 {{- $_ := set $oidc "realm" $.Values.gatewayPolicy.oidc.realm -}}
 {{- $_ := set $oidc "ssl_verify" $.Values.gatewayPolicy.oidc.sslVerify -}}
 {{- end }}
+{{- if hasKey $plugins "issuer-jwks-auth" }}
+{{- $_ := set $plugins "issuer-jwks-auth" (include "in-falcone.issuerJwksAuth" $ | fromJson) -}}
+{{- end }}
 {{- if hasKey $plugins "cors" }}
 {{- $cors := index $plugins "cors" -}}
 {{- $_ := set $cors "allow_origins" (join "," $.Values.gatewayPolicy.cors.allowOrigins) -}}
@@ -198,7 +201,13 @@ data:
 {{- if or .upstream.dataPlane .upstream.requiresExecutor }}
 {{- $_ := set $rewriteHeaders "x-gateway-auth" "${{GATEWAY_SHARED_SECRET}}" -}}
 {{- end }}
+{{- $routeHeaders := (index $plugins "proxy-rewrite").headers | default dict -}}
+{{- if hasKey $routeHeaders "remove" }}
+{{- $_ := set $routeHeaders.set "x-gateway-auth" "${{GATEWAY_SHARED_SECRET}}" -}}
+{{- $_ := set (index $plugins "proxy-rewrite") "headers" $routeHeaders -}}
+{{- else }}
 {{- $_ := set (index $plugins "proxy-rewrite") "headers" $rewriteHeaders -}}
+{{- end }}
 {{- end }}
 {{- if hasKey $plugins "authz-keycloak" }}
 {{- $authz := index $plugins "authz-keycloak" -}}

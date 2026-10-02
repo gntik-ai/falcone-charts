@@ -1032,6 +1032,7 @@ if container.get("securityContext") != {
 if container.get("volumeMounts") != [
     {"mountPath": "/usr/local/apisix/conf/apisix.yaml", "name": "standalone-config", "subPath": "apisix.yaml"},
     {"mountPath": "/usr/local/apisix/conf/config.yaml", "name": "apisix-config-overlay", "subPath": "config.yaml"},
+    {"mountPath": "/usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua", "name": "issuer-jwks-auth", "readOnly": True, "subPath": "issuer-jwks-auth.lua"},
 ]:
     raise SystemExit(1)
 if pod_spec.get("initContainers") != [{
@@ -1042,6 +1043,7 @@ if pod_spec.get("initContainers") != [{
     "securityContext": {
         "allowPrivilegeEscalation": False,
         "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
     },
     "volumeMounts": [
         {"mountPath": "/config-src", "name": "apisix-config-source", "readOnly": True},
@@ -1053,6 +1055,7 @@ if pod_spec.get("volumes") != [
     {"configMap": {"defaultMode": 420, "name": "falcone-apisix-standalone"}, "name": "standalone-config"},
     {"configMap": {"defaultMode": 420, "name": "falcone-apisix-config-file"}, "name": "apisix-config-source"},
     {"emptyDir": {}, "name": "apisix-config-overlay"},
+    {"configMap": {"defaultMode": 420, "name": "falcone-issuer-jwks-auth"}, "name": "issuer-jwks-auth"},
 ]:
     raise SystemExit(1)
 PY
@@ -1793,6 +1796,11 @@ validate_revision23_numeric_user_convergence() {
         "name": "apisix-config-overlay",
         "mountPath": "/usr/local/apisix/conf/config.yaml",
         "subPath": "config.yaml"
+      }, {
+        "name": "issuer-jwks-auth",
+        "mountPath": "/usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua",
+        "subPath": "issuer-jwks-auth.lua",
+        "readOnly": true
       }])] | length) == 1
     and (.spec.template.spec.volumes // []) == [{
       "name": "standalone-config",
@@ -1803,6 +1811,9 @@ validate_revision23_numeric_user_convergence() {
     }, {
       "name": "apisix-config-overlay",
       "emptyDir": {}
+    }, {
+      "name": "issuer-jwks-auth",
+      "configMap": {"name": "falcone-issuer-jwks-auth", "defaultMode": 420}
     }]' >/dev/null || return 1
   printf '%s' "$observability_json" | jq -e --arg namespace "$EXPECTED_NAMESPACE" --arg release "$EXPECTED_RELEASE" '
     .apiVersion == "apps/v1" and .kind == "Deployment"

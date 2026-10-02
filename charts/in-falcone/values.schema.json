@@ -1964,6 +1964,20 @@
       },
       "additionalProperties": true
     },
+    "gateway": {
+      "type": "object",
+      "required": ["mongoBearer"],
+      "properties": {
+        "mongoBearer": {
+          "type": "object",
+          "required": ["tenantAudience", "enforceTenantAudience"],
+          "properties": {
+            "tenantAudience": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "enforceTenantAudience": {"type": "boolean"}
+          }
+        }
+      }
+    },
     "gatewayPolicy": {
       "type": "object",
       "required": [

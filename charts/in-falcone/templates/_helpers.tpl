@@ -107,6 +107,43 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{- .Values.config.configMapNames.runtimeEnv | default "in-falcone-runtime-env" -}}
 {{- end -}}
 
+{{/* Helm --reuse-values retains old chart defaults. Only when BOTH new blocks
+     are absent, supply an enforced audience and use the stored OIDC issuer.
+     Explicit or partially migrated configuration still fails closed. */}}
+{{- define "in-falcone.issuerJwksSettings" -}}
+{{- $verifier := .Values.gatewayPolicy.issuerJwksAuth | default dict -}}
+{{- $mongo := dict -}}
+{{- if and (not (hasKey .Values "gateway")) (not (hasKey .Values.gatewayPolicy "issuerJwksAuth")) -}}
+{{- $oidc := .Values.gatewayPolicy.oidc -}}
+{{- $issuer := trimSuffix "/" $oidc.issuerUrl -}}
+{{- $realmSuffix := printf "/realms/%s" $oidc.realm -}}
+{{- if not (hasSuffix $realmSuffix $issuer) }}{{- fail "stored gatewayPolicy.oidc.issuerUrl must end in /realms/<realm>; configure gatewayPolicy.issuerJwksAuth explicitly" -}}{{- end -}}
+{{- $verifier = dict "issuerBaseUrl" (trimSuffix $realmSuffix $issuer) "jwksBaseUrl" (printf "http://%s-keycloak:8080" .Release.Name) "platformRealm" $oidc.realm "audience" "in-falcone" "cache_ttl" 300 "cache_max_entries" 128 "timeout" 3 -}}
+{{- $mongo = dict "tenantAudience" "falcone-data-api" "enforceTenantAudience" true -}}
+{{- else -}}
+{{- if not (hasKey .Values "gateway") }}{{- fail "gateway.mongoBearer is required with gatewayPolicy.issuerJwksAuth" -}}{{- end -}}
+{{- $mongo = .Values.gateway.mongoBearer -}}
+{{- end -}}
+{{- if not (kindIs "bool" $mongo.enforceTenantAudience) }}{{- fail "gateway.mongoBearer.enforceTenantAudience must be boolean" -}}{{- end -}}
+{{- if or (not (kindIs "string" $mongo.tenantAudience)) (not (trim $mongo.tenantAudience)) }}{{- fail "gateway.mongoBearer.tenantAudience must be non-empty" -}}{{- end -}}
+{{- range $key := list "issuerBaseUrl" "jwksBaseUrl" "platformRealm" "audience" "cache_ttl" "cache_max_entries" "timeout" -}}
+{{- if not (index $verifier $key) }}{{- fail (printf "gatewayPolicy.issuerJwksAuth.%s is required" $key) -}}{{- end -}}
+{{- end -}}
+{{- dict "verifier" $verifier "mongo" $mongo | toJson -}}
+{{- end -}}
+
+{{/* One verifier configuration for bootstrap payloads and standalone routes. */}}
+{{- define "in-falcone.issuerJwksAuth" -}}
+{{- $settings := include "in-falcone.issuerJwksSettings" . | fromJson -}}
+{{- $verifier := $settings.verifier -}}
+{{- $mongo := $settings.mongo -}}
+{{- $issuerBase := trimSuffix "/" (tpl (tpl $verifier.issuerBaseUrl .) .) -}}
+{{- $jwksBase := trimSuffix "/" (tpl (tpl $verifier.jwksBaseUrl .) .) -}}
+{{- if not $issuerBase }}{{- fail "gatewayPolicy.issuerJwksAuth.issuerBaseUrl is required" -}}{{- end -}}
+{{- if not $jwksBase }}{{- fail "gatewayPolicy.issuerJwksAuth.jwksBaseUrl is required" -}}{{- end -}}
+{{- dict "issuer_base_url" $issuerBase "jwks_base_url" $jwksBase "platform_realm" $verifier.platformRealm "audience" $verifier.audience "tenant_audience" $mongo.tenantAudience "enforce_tenant_audience" $mongo.enforceTenantAudience "cache_ttl" $verifier.cache_ttl "cache_max_entries" $verifier.cache_max_entries "timeout" $verifier.timeout | toJson -}}
+{{- end -}}
+
 {{- define "in-falcone.bootstrapOneShotHash" -}}
 {{- toJson (dict "keycloak" .Values.bootstrap.oneShot.keycloak "governanceCatalog" .Values.bootstrap.oneShot.governanceCatalog "internalNamespaces" .Values.bootstrap.oneShot.internalNamespaces) | sha256sum -}}
 {{- end -}}

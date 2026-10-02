@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-issuer-jwks-auth
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: apisix
+data:
+  issuer-jwks-auth.lua: |
+{{ .Files.Get "files/apisix/plugins/issuer-jwks-auth.lua" | nindent 4 }}

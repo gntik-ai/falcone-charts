@@ -1,4 +1,6 @@
 global:
+  keycloakIssuerBaseUrl: https://iam.baas.musematic.ai
+  keycloakJwksBaseUrl: http://falcone-keycloak:8080
   namespace: in-falcone-staging
   environment: staging
   # repair-staging-infrastructure-20260809: consume the administrator-owned External
@@ -10,6 +12,11 @@ global:
   externalSecrets:
     operatorNamespace: external-secrets
     operatorServiceAccount: external-secrets
+gateway:
+  mongoBearer:
+    tenantAudience: falcone-data-api
+    # Enable only in a follow-up values change after tenant mapper reconciliation.
+    enforceTenantAudience: false
 publicSurface:
   bindings:
     apiMetrics:
@@ -66,6 +73,7 @@ openbao:
       allowRecoveryRoot: false
       forceRecoveryRoot: false
 apisix:
+  manageStandaloneRoutes: true
   replicas: 3
   # The staging gateway predates this Helm release and consumes the separately
   # administered standalone route ConfigMap. Declare the live mount and numeric
@@ -91,6 +99,10 @@ apisix:
         defaultMode: 420
     - name: apisix-config-overlay
       emptyDir: {}
+    - name: issuer-jwks-auth
+      configMap:
+        name: falcone-issuer-jwks-auth
+        defaultMode: 420
   extraVolumeMounts:
     - name: standalone-config
       mountPath: /usr/local/apisix/conf/apisix.yaml
@@ -98,6 +110,10 @@ apisix:
     - name: apisix-config-overlay
       mountPath: /usr/local/apisix/conf/config.yaml
       subPath: config.yaml
+    - name: issuer-jwks-auth
+      mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
+      subPath: issuer-jwks-auth.lua
+      readOnly: true
   initContainers:
     - name: apisix-config-overlay
       image: docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
@@ -114,6 +130,7 @@ apisix:
           mountPath: /apisix-config-overlay
       securityContext:
         allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
         capabilities:
           drop:
             - ALL

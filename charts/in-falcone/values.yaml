@@ -1,4 +1,6 @@
 global:
+  keycloakIssuerBaseUrl: https://iam.dev.in-falcone.example.com/auth
+  keycloakJwksBaseUrl: "http://{{ .Release.Name }}-keycloak:8080"
   # Argo CD renders in install mode; true makes a GitOps render of an existing release use
   # Helm upgrade semantics (falcone-charts#47). Leave false for helm install/upgrade.
   gitops:
@@ -1396,7 +1398,34 @@ bootstrap:
             gateway.in-falcone.io/workspace-binding: required
             gateway.in-falcone.io/plan-capabilities: ""
             gateway.in-falcone.io/audit-required: "false"
-          plugins: *a3w
+          # Mongo bearer traffic trusts valid realms on the configured Keycloak host.
+          plugins:
+            issuer-jwks-auth: {}
+            cors: *a1
+            limit-count:
+              count: 120
+              time_window: 60
+              rejected_code: 429
+              key_type: var_combination
+              key: $http_x_tenant_id $http_x_workspace_id
+              allow_degradation: false
+            client-control:
+              max_body_size: 262144
+            request-validation: *a5
+            proxy-rewrite:
+              headers:
+                set:
+                  X-Correlation-Id: $http_x_correlation_id
+                  X-Request-Id: $request_id
+                  x-gateway-auth: "${{GATEWAY_SHARED_SECRET}}"
+                remove:
+                  # API-key credentials must use 2006-key and its per-key bucket.
+                  - apikey
+                  - x-api-key
+                  - x-tenant-id
+                  - x-workspace-id
+                  - x-auth-subject
+                  - x-actor-roles
           upstream:
             component: controlPlane
             port: 8080
@@ -1816,6 +1845,7 @@ bootstrap:
             component: keycloak
             port: 8080
 apisix:
+  manageStandaloneRoutes: false
   wrapper:
     componentId: apisix
     workload:
@@ -1889,12 +1919,46 @@ apisix:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  extraVolumes: []
-  extraVolumeMounts: []
+  extraVolumes:
+    - name: apisix-config-source
+      configMap:
+        name: '{{ .Release.Name }}-apisix-config-file'
+    - name: apisix-config-overlay
+      emptyDir: {}
+    - name: issuer-jwks-auth
+      configMap:
+        name: '{{ .Release.Name }}-issuer-jwks-auth'
+  extraVolumeMounts:
+    - name: apisix-config-overlay
+      mountPath: /usr/local/apisix/conf/config.yaml
+      subPath: config.yaml
+    - name: issuer-jwks-auth
+      mountPath: /usr/local/apisix/falcone/apisix/plugins/issuer-jwks-auth.lua
+      subPath: issuer-jwks-auth.lua
+      readOnly: true
   config:
     inline:
       APISIX_STAND_ALONE: "true"
-  initContainers: []
+  initContainers:
+    - name: apisix-config-overlay
+      # Match staging's separate, immutable BusyBox overlay image in every profile.
+      image: docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+      imagePullPolicy: IfNotPresent
+      command: [/bin/sh, -ec, 'cp /config-src/config.yaml /apisix-config-overlay/config.yaml']
+      volumeMounts:
+        - name: apisix-config-source
+          mountPath: /config-src
+          readOnly: true
+        - name: apisix-config-overlay
+          mountPath: /apisix-config-overlay
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 636
+        runAsGroup: 636
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
   volumePermissions:
     enabled: false
     image:
@@ -3659,6 +3723,32 @@ controlPlaneExecutor:
   env:
     - name: CONTROL_PLANE_UPSTREAM
       value: "http://{{ .Release.Name }}-control-plane:8080"
+    # Always activate the executor's own JWT verifier for bearer data routes.
+    - name: KEYCLOAK_JWKS_URL
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_JWKS_URL
+    - name: KEYCLOAK_ISSUER
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_ISSUER
+    - name: KEYCLOAK_AUDIENCE
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_AUDIENCE
+    - name: KEYCLOAK_TENANT_AUDIENCE
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_TENANT_AUDIENCE
+    - name: KEYCLOAK_ENFORCE_TENANT_AUDIENCE
+      valueFrom:
+        configMapKeyRef:
+          name: '{{ .Release.Name }}-executor-jwt-config'
+          key: KEYCLOAK_ENFORCE_TENANT_AUDIENCE
     - name: PGHOST
       value: "{{ .Release.Name }}-postgresql"
     - name: PGUSER
@@ -4055,8 +4145,22 @@ workflowWorker:
         drop:
           - ALL
 
+gateway:
+  mongoBearer:
+    tenantAudience: falcone-data-api
+    enforceTenantAudience: true
+
 gatewayPolicy:
   version: 2026-03-24
+  # Only realm names under the configured Keycloak host can select a JWKS URL.
+  issuerJwksAuth:
+    issuerBaseUrl: "{{ .Values.global.keycloakIssuerBaseUrl }}"
+    jwksBaseUrl: "{{ .Values.global.keycloakJwksBaseUrl }}"
+    platformRealm: in-falcone-platform
+    audience: in-falcone
+    cache_ttl: 300
+    cache_max_entries: 128
+    timeout: 3
   oidc:
     enabled: true
     provider: keycloak

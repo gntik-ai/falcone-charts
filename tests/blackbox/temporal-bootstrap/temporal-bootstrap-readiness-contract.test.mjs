@@ -2385,6 +2385,14 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  const executorJwt = exactDocuments.find((document) =>
+    document.kind === 'ConfigMap' && document.metadata.name === `${releaseName}-executor-jwt-config`);
+  assert.ok(executorJwt, 'historical reuse-values must configure executor verification');
+  assert.equal(executorJwt.data.KEYCLOAK_TENANT_AUDIENCE, 'falcone-data-api');
+  assert.equal(executorJwt.data.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'true');
+  assert.equal(executorJwt.data.KEYCLOAK_ISSUER, historical.gatewayPolicy.oidc.issuerUrl);
+  assert.equal(executorJwt.data.KEYCLOAK_JWKS_URL,
+    `http://${releaseName}-keycloak:8080/realms/${historical.gatewayPolicy.oidc.realm}/protocol/openid-connect/certs`);
   const jobImage = temporalBootstrapJob(exactDocuments).spec.template.spec.containers[0].image;
   assert.equal(jobImage, 'docker.io/temporalio/admin-tools:1.31.1');
   assert.equal(workflowGates(workflowConsumer(exactDocuments))[0].image, jobImage);

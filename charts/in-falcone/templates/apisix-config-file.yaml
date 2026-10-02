@@ -34,6 +34,90 @@ data:
           - name: admin
             key: ''
             role: admin
+    apisix:
+      extra_lua_path: /usr/local/apisix/falcone/?.lua
+    # Explicitly retain the APISIX 3.10 built-ins when enabling the custom
+    # plugin; setting plugins replaces the stock list rather than extending it.
+    plugins:
+      - real-ip
+      - ai
+      - client-control
+      - proxy-control
+      - request-id
+      - zipkin
+      - ext-plugin-pre-req
+      - fault-injection
+      - mocking
+      - serverless-pre-function
+      - cors
+      - issuer-jwks-auth
+      - ip-restriction
+      - ua-restriction
+      - referer-restriction
+      - csrf
+      - uri-blocker
+      - request-validation
+      - chaitin-waf
+      - openid-connect
+      - cas-auth
+      - authz-casbin
+      - authz-casdoor
+      - wolf-rbac
+      - ldap-auth
+      - hmac-auth
+      - basic-auth
+      - jwt-auth
+      - key-auth
+      - consumer-restriction
+      - forward-auth
+      - opa
+      - authz-keycloak
+      - proxy-cache
+      - body-transformer
+      - proxy-mirror
+      - proxy-rewrite
+      - workflow
+      - api-breaker
+      - limit-conn
+      - limit-count
+      - limit-req
+      - gzip
+      - traffic-split
+      - redirect
+      - response-rewrite
+      - degraphql
+      - kafka-proxy
+      - grpc-transcode
+      - grpc-web
+      - public-api
+      - prometheus
+      - datadog
+      - loki-logger
+      - elasticsearch-logger
+      - echo
+      - loggly
+      - http-logger
+      - splunk-hec-logging
+      - skywalking-logger
+      - google-cloud-logging
+      - sls-logger
+      - tcp-logger
+      - kafka-logger
+      - rocketmq-logger
+      - syslog
+      - udp-logger
+      - file-logger
+      - clickhouse-logger
+      - tencent-cloud-cls
+      - inspect
+      - example-plugin
+      - aws-lambda
+      - azure-functions
+      - openwhisk
+      - openfunction
+      - serverless-post-function
+      - ext-plugin-post-req
+      - ext-plugin-post-resp
     plugin_attr:
       prometheus:
         enable_export_server: false
