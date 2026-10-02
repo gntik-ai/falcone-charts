@@ -8,7 +8,6 @@
     "deployment",
     "platform",
     "gatewayPolicy",
-    "gateway",
     "config",
     "bootstrap",
     "apisix",

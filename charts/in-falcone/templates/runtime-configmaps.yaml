@@ -47,10 +47,11 @@ metadata:
 data:
   gateway-policy.json: |
 {{- $gatewayPolicy := deepCopy .Values.gatewayPolicy -}}
-{{- $issuerJwksAuth := $gatewayPolicy.issuerJwksAuth -}}
+{{- $issuerJwksAuth := (include "in-falcone.issuerJwksSettings" . | fromJson).verifier -}}
 {{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
 {{- $_ := set $issuerJwksAuth "issuerBaseUrl" $verifier.issuer_base_url -}}
 {{- $_ := set $issuerJwksAuth "jwksBaseUrl" $verifier.jwks_base_url -}}
+{{- $_ := set $gatewayPolicy "issuerJwksAuth" $issuerJwksAuth -}}
 {{ toPrettyJson $gatewayPolicy | nindent 4 }}
   enabled-apisix-routes.json: |
 {{- $mode := .Values.gatewayPolicy.passthrough.mode -}}

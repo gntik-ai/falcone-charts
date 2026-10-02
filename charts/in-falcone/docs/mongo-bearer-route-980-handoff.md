@@ -1,5 +1,77 @@
 # Mongo bearer route #980 deployment repair handoff
 
+## Validate repair on entry 74e073e (2026-10-02)
+
+This continuation starts from clean assigned deployment HEAD
+`74e073e156c710eea0e68ae5a9d6de8a31484810` on the branch recorded below,
+paired with source HEAD `f047ce888da07c2f5aac2f9ab7fd9ef9209a405e`.
+This section supersedes the entry identity and fresh validation claims below;
+earlier evidence remains attributed to its preceding continuation.
+
+The validate failure at `bbx-temporal-bootstrap-048` is caused by #980's new
+required top-level `gateway` schema property. Helm `--reuse-values` retains
+the stored chart defaults; revision `41922e9d` has neither `gateway` nor
+`gatewayPolicy.issuerJwksAuth`. Its schema failure precedes template rendering.
+Removing just that root requirement also exposes template accesses to the
+absent verifier configuration, so both layers need compatibility handling.
+
+The schema continues validating every explicit Mongo configuration block and
+requiring both audience fields. The shared settings helper supplies defaults
+only when **both** new blocks are absent: `falcone-data-api`, enforcement
+`true`, the stored OIDC issuer/realm, the release-local Keycloak JWKS host,
+and the existing bounded cache/timeouts. A malformed stored issuer fails
+closed. Explicit or partially migrated configuration never receives these
+defaults; absent/empty audiences, invalid flags and missing verifier settings
+still fail rendering. The runtime policy and executor ConfigMap use the same
+resolved settings. The existing historical upgrade test gains assertions for
+the rendered executor configuration, and the Mongo suite now rejects either
+missing block in an otherwise current configuration. No CI job or assertion
+is removed or narrowed.
+
+Fresh evidence:
+
+- Mongo chart and flow-audit suites pass **22/22**, using
+  `node --test --experimental-test-isolation=none` with their two existing
+  repository test paths. No supplemental dependency loader is needed.
+- Strict Helm lint passes for default, staging, prod and kind. Node syntax
+  checks for both edited tests and `git diff --check` pass.
+- The real `41922e9d` defaults, extracted from the assigned repository,
+  reproduce the entry schema failure. Rendering the repaired chart with those
+  defaults passes the upgrade backup/parity gates and produces audience
+  `falcone-data-api` with enforcement `true`. A stored custom issuer is
+  respected; a custom legacy Temporal image still fails closed with no output.
+  These are supplemental deterministic Helm renders, not a claim of a live
+  upgrade or of completing the original fake-API test.
+- Default Helm output is byte-identical to entry `74e073e`; the umbrella and
+  flow-audit baselines, APISIX identities, overlays, routes, images and all
+  environment values stay unchanged. No re-baseline is needed.
+- The original `bbx-temporal-bootstrap-048` command cannot complete here:
+  the pinned `yaml` dependency is absent, GNU tar extraction returns
+  `Function not implemented`, and a supplemental run using installed YAML
+  2.9.1 and BusyBox tar times out at archive extraction within 60 seconds.
+  The original test with frozen YAML 2.8.3 remains a required CI check.
+- The revision-24/packaged-recovery group was attempted with a 90-second
+  timeout; it could not complete in this sandbox. Archive extraction returns
+  `Function not implemented`, and recovery stops at `REPAIR_PACKAGE_PULL_FAILED`
+  before the expected assertions. These are unavailable sandbox prerequisites,
+  not reproduced chart regressions. Full recovery, LuaJIT verifier
+  tests (runtime absent), offline OCI/schema priming and full black-box CI,
+  image builds/scans and live rollout checks remain CI/release checks.
+
+Historical `--reuse-values` preserves historical component/route wiring.
+Operators must apply the reviewed environment values for the #980 rollout;
+the compatibility render does not prove installation of the new plugin mounts
+or route on an old release. Staging enforcement remains false until the
+documented reconciliation and later values revision. Prod hosts remain an
+operator release gate. The control-plane tenant verifier remains a follow-up.
+Addenda 14/15 defer the kind bearer round trip and integration PR trigger to
+#1051; the source kind round-trip task must stay unchecked.
+
+Both source pins currently match entry `74e073e`: **pin pending deployment
+repair** until this additional local commit is final. The next source maker
+must update both `FALCONE_CHARTS_REF` pins to the resulting deployment head.
+No source file, deployment, push, merge, credential or live cluster is touched.
+
 This deployment review extends the supplied deployment head
 `f8370ca13edd0117a70afa922278791964d29fb8` on assigned branch
 `agent/falcone/980/5fcefe28-5a92-5e96-a3cd-6b1369cd20d6` and pairs with

@@ -304,6 +304,36 @@ test('explicit enforcement off reaches both verifiers without changing the audie
   assert.equal(executorEnv(objects, executor).KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'false')
 })
 
+test('partial verifier migration rejects an absent configuration block', () => {
+  for (const setting of ['gateway=null', 'gatewayPolicy.issuerJwksAuth=null']) {
+    const result = run('helm', ['template', 'falcone-bbx', umbrellaChart, '--set', setting])
+    assert.notEqual(result.status, 0, `${setting} must fail closed`)
+    assert.match(result.stderr, /gateway\.mongoBearer|gatewayPolicy\.issuerJwksAuth/)
+  }
+})
+
+test('pre-verifier values resolve enforced defaults from the stored OIDC issuer', () => {
+  const { objects, route, executor } = rendered([
+    '--set', 'gateway=null',
+    '--set', 'gatewayPolicy.issuerJwksAuth=null',
+    '--set-string', 'gatewayPolicy.oidc.issuerUrl=https://issuer.example.test/realms/platform',
+    '--set-string', 'gatewayPolicy.oidc.realm=platform',
+  ])
+  const verifier = route.plugins['issuer-jwks-auth']
+  assert.equal(verifier.issuer_base_url, 'https://issuer.example.test')
+  assert.equal(verifier.jwks_base_url, 'http://falcone-bbx-keycloak:8080')
+  assert.equal(verifier.platform_realm, 'platform')
+  assert.equal(verifier.tenant_audience, 'falcone-data-api')
+  assert.equal(verifier.enforce_tenant_audience, true)
+  assert.equal(verifier.cache_max_entries, 128)
+  assert.equal(verifier.cache_ttl, 300)
+  assert.equal(verifier.timeout, 3)
+  const env = executorEnv(objects, executor)
+  assert.equal(env.KEYCLOAK_ISSUER, 'https://issuer.example.test/realms/platform')
+  assert.equal(env.KEYCLOAK_TENANT_AUDIENCE, verifier.tenant_audience)
+  assert.equal(env.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'true')
+})
+
 test('staging standalone routes preserve the recorded pre-980 routes except the reviewed Mongo repair', () => {
   const renderedStaging = run('helm', [
     'template', 'falcone', umbrellaChart, '--namespace', 'in-falcone-staging',
