@@ -31,6 +31,8 @@ Upgrades using `--reuse-values` retain stale `/auth` configuration. Operators mu
 
 Public `/admin` exposure is forbidden for Ingress and Route in this change. A leftover scalar `/` binding fails validation when no `paths` override is provided. LoadBalancer operates at L4 and still exposes the entire Keycloak HTTP port, including `/admin`; NOTES warns about this limitation. Failing closed for LoadBalancer is a follow-up release-review decision. Keycloak health and metrics use management port 9000 and are not exposed.
 
+Keycloak-backed bindings also reject repeated slashes and percent encoding in effective list or scalar paths. This prevents operator overrides from depending on proxy-specific slash or decoding normalization, including encoded traversal and double encoding; the default allowlist requires neither.
+
 Release notes: the API-host `/auth/*` identity alias was removed; clients must use the advertised identity host and root realm URLs.
 
 ## Delivery and Release Review

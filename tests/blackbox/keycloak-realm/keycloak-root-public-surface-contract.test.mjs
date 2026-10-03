@@ -166,6 +166,7 @@ for (const [profile, host] of profiles) {
       for (const paths of [
         ['/'], ['/admin'], ['/admin/'], ['/adm'], ['/admin/x'], ['/realms', '/admin/x'], ['/auth'], ['/authx'],
         ['/Admin'], ['/AUTH'], ['/realms/../admin'], ['/resources/./x'],
+        ['//admin'], ['/realms//x'], ['/%61dmin'], ['/%2561dmin'], ['/realms/%2e%2e/admin'], ['/realms%2F..%2Fadmin'],
       ]) {
         const result = run('helm', ['template', release, umbrellaChart, ...profileArgs, ...exposureArgs,
           '--set-json', `publicSurface.bindings.identity.paths=${JSON.stringify(paths)}`])
@@ -236,9 +237,10 @@ test('another Keycloak-backed binding cannot expose the admin console', () => {
   }
 })
 
-test('Keycloak-backed scalar paths reject case variants and dot segments for Ingress and Route', () => {
+test('Keycloak-backed scalar paths reject ambiguous paths for Ingress and Route', () => {
   for (const exposureArgs of [[], routeArgs]) {
-    for (const path of ['/Admin/x', '/Auth', '/realms/../admin', '/resources/./x']) {
+    for (const path of ['/Admin/x', '/Auth', '/realms/../admin', '/resources/./x',
+      '//admin', '/realms//x', '/%61dmin', '/%2561dmin', '/realms/%2e%2e/admin', '/realms%2F..%2Fadmin']) {
       for (const binding of ['identity', 'api']) {
         const args = binding === 'identity'
           ? ['--set', 'publicSurface.bindings.identity.paths=null']

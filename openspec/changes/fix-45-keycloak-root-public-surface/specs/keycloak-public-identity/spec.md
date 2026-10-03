@@ -53,7 +53,7 @@ Bindings SHALL accept optional nonempty unique `paths` lists, replacing scalar `
 
 #### Scenario: Unsafe identity overrides are rejected
 
-- **WHEN** identity or another Keycloak-backed public binding exposes `/`, `/admin`, a path under `/admin`, or any `/auth` prefix (including case variants), or contains a `.` or `..` path segment, via scalar `path` or effective `paths`
+- **WHEN** identity or another Keycloak-backed public binding exposes `/`, `/admin`, a path under `/admin`, or any `/auth` prefix (including case variants), or contains a `.` or `..` path segment, repeated slashes or percent encoding, via scalar `path` or effective `paths`
 - **THEN** Helm rendering fails with a diagnostic identifying `publicSurface.bindings.identity` or the offending Keycloak-backed binding
 - **AND** all migration, External Secrets/OpenBao and supply-chain gates remain intact
 
