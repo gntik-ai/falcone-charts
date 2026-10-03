@@ -681,8 +681,7 @@
               "required": [
                 "component",
                 "serviceName",
-                "servicePort",
-                "path"
+                "servicePort"
               ],
               "properties": {
                 "component": {
@@ -701,17 +700,38 @@
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "paths": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "minLength": 1
+                  }
                 }
               },
-              "additionalProperties": true
+              "additionalProperties": true,
+              "anyOf": [
+                {
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "required": [
+                    "paths"
+                  ]
+                }
+              ]
             },
             "identity": {
               "type": "object",
               "required": [
                 "component",
                 "serviceName",
-                "servicePort",
-                "path"
+                "servicePort"
               ],
               "properties": {
                 "component": {
@@ -730,17 +750,38 @@
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "paths": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "minLength": 1
+                  }
                 }
               },
-              "additionalProperties": true
+              "additionalProperties": true,
+              "anyOf": [
+                {
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "required": [
+                    "paths"
+                  ]
+                }
+              ]
             },
             "realtime": {
               "type": "object",
               "required": [
                 "component",
                 "serviceName",
-                "servicePort",
-                "path"
+                "servicePort"
               ],
               "properties": {
                 "component": {
@@ -759,17 +800,38 @@
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "paths": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "minLength": 1
+                  }
                 }
               },
-              "additionalProperties": true
+              "additionalProperties": true,
+              "anyOf": [
+                {
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "required": [
+                    "paths"
+                  ]
+                }
+              ]
             },
             "console": {
               "type": "object",
               "required": [
                 "component",
                 "serviceName",
-                "servicePort",
-                "path"
+                "servicePort"
               ],
               "properties": {
                 "component": {
@@ -788,9 +850,31 @@
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "paths": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "minLength": 1
+                  }
                 }
               },
-              "additionalProperties": true
+              "additionalProperties": true,
+              "anyOf": [
+                {
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "required": [
+                    "paths"
+                  ]
+                }
+              ]
             }
           },
           "additionalProperties": true

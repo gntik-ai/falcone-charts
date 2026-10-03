@@ -103,7 +103,12 @@ test('staging OIDC issuer and discovery point at iam.baas.musematic.ai', () => {
     .flatMap((ing) => ing?.spec?.rules ?? [])
     .filter((rule) => rule?.host === 'iam.baas.musematic.ai')
     .flatMap((rule) => rule?.http?.paths ?? [])
-  assert.deepEqual(identityPaths.map((entry) => [entry.path, entry.pathType]), [['/', 'Prefix']])
+  assert.deepEqual(identityPaths.map((entry) => [entry.path, entry.pathType]),
+    ['/realms', '/resources', '/js'].map((path) => [path, 'Prefix']))
+  for (const entry of identityPaths) {
+    assert.deepEqual(entry.backend.service, { name: 'falcone-bbx-keycloak', port: { name: 'http' } })
+    assert.ok(!'/admin'.startsWith(entry.path) && !'/admin/x'.startsWith(entry.path))
+  }
 })
 
 test('staging console CORS and Keycloak redirect URIs use the apex domain', () => {

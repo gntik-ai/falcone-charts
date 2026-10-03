@@ -25,13 +25,17 @@ spec:
     - host: {{ index $.Values.publicSurface.hostnames $surface }}
       http:
         paths:
-          - path: {{ $binding.path }}
+          {{- $paths := list $binding.path }}
+          {{- if hasKey $binding "paths" }}{{- $paths = $binding.paths }}{{- end }}
+          {{- range $path := $paths }}
+          - path: {{ $path }}
             pathType: Prefix
             backend:
               service:
                 name: {{ include "in-falcone.componentServiceName" (dict "root" $ "binding" $binding) }}
                 port:
                   name: {{ $binding.servicePort }}
+          {{- end }}
     {{- end }}
 {{- else if eq .Values.platform.network.exposureKind "LoadBalancer" }}
 {{- $loadBalancerAnnotations := default (dict) .Values.publicSurface.loadBalancer.annotations -}}
@@ -76,10 +80,18 @@ spec:
 {{- else if eq .Values.platform.network.exposureKind "Route" }}
 {{- $routeAnnotations := merge (default (dict) .Values.platform.routeAnnotations) (default (dict) .Values.publicSurface.route.annotations) -}}
 {{- range $surface, $binding := .Values.publicSurface.bindings }}
+{{- $paths := list $binding.path }}
+{{- if hasKey $binding "paths" }}{{- $paths = $binding.paths }}{{- end }}
+{{- range $path := $paths }}
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
+  {{- if gt (len $paths) 1 }}
+  {{- $namePrefix := regexReplaceAll "[^a-z0-9-]" (printf "%s-%s" (include "in-falcone.fullname" $) $surface | lower) "-" | trunc 54 | trimAll "-" }}
+  name: {{ printf "%s-%s" $namePrefix (printf "%s:%s" $surface $path | sha256sum | trunc 8) }}
+  {{- else }}
   name: {{ include "in-falcone.fullname" $ }}-{{ $surface }}
+  {{- end }}
   labels:
     {{- include "in-falcone.labels" $ | nindent 4 }}
   {{- if gt (len $routeAnnotations) 0 }}
@@ -88,7 +100,7 @@ metadata:
   {{- end }}
 spec:
   host: {{ index $.Values.publicSurface.hostnames $surface }}
-  path: {{ $binding.path }}
+  path: {{ $path }}
   to:
     kind: Service
     name: {{ include "in-falcone.componentServiceName" (dict "root" $ "binding" $binding) }}
@@ -100,5 +112,6 @@ spec:
     insecureEdgeTerminationPolicy: {{ .insecureEdgeTerminationPolicy | default "Redirect" }}
   {{- end }}
 ---
+{{- end }}
 {{- end }}
 {{- end }}

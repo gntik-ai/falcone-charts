@@ -214,7 +214,7 @@ publicSurface:
       component: keycloak
       serviceName: ""
       servicePort: http
-      path: /
+      paths: [/realms, /resources, /js]
     realtime:
       component: apisix
       serviceName: ""

@@ -17,9 +17,12 @@ Recommended values layering order:
 
 Public endpoints:
 - API: https://{{ .Values.publicSurface.hostnames.api }}{{ .Values.publicSurface.bindings.api.path }}
-- Identity: https://{{ .Values.publicSurface.hostnames.identity }}{{ .Values.publicSurface.bindings.identity.path }}
+- Identity: https://{{ .Values.publicSurface.hostnames.identity }}{{ if hasKey .Values.publicSurface.bindings.identity "paths" }} (public paths: {{ join ", " .Values.publicSurface.bindings.identity.paths }}){{ else }}{{ .Values.publicSurface.bindings.identity.path }}{{ end }}
 - Realtime: https://{{ .Values.publicSurface.hostnames.realtime }}{{ .Values.publicSurface.bindings.realtime.path }}
 - Console: https://{{ .Values.publicSurface.hostnames.console }}{{ .Values.publicSurface.bindings.console.path }}
+{{- if eq .Values.platform.network.exposureKind "LoadBalancer" }}
+WARNING: LoadBalancer exposes the entire Keycloak HTTP port, including /admin. Identity paths can only be filtered with Ingress or Route exposure.
+{{- end }}
 
 Bootstrap:
 - Hook job: {{ include "in-falcone.fullname" . }}-bootstrap
