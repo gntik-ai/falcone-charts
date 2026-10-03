@@ -2,7 +2,7 @@
 
 ### Requirement: Public identity SHALL match root-path Keycloak
 
-The default chart and dev, sandbox, staging and prod profiles SHALL expose only `/realms`, `/resources` and `/js` on `iam.<domain>`, using Ingress `pathType: Prefix` or one OpenShift Route per path, backed by the Keycloak service's `http` port. The flows e2e overlay SHALL inherit these paths while Keycloak continues serving at root. Chart values and rendered manifests SHALL contain no legacy `/auth/realms` URL or unused Keycloak inline public path.
+The default chart and dev, sandbox, staging and prod profiles SHALL expose only `/realms`, `/resources` and `/js` on `iam.<domain>`, using Ingress `pathType: Prefix` or one OpenShift Route per path, backed by the Keycloak service's `http` port. The flows e2e overlay SHALL explicitly set these same paths while Keycloak continues serving at root. Chart values and rendered manifests SHALL contain no legacy `/auth/realms` URL or unused Keycloak inline public path.
 
 #### Scenario: Default and environment profile identity routing
 

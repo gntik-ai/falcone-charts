@@ -252,13 +252,14 @@ test('Keycloak-backed scalar paths reject case variants and dot segments for Ing
   }
 })
 
-test('chart values and flows e2e keep the root identity binding without legacy realm URLs', () => {
+test('chart values and flows e2e keep the identity allowlist without legacy realm URLs', () => {
   const defaults = readYaml(resolve(umbrellaChart, 'values.yaml'))
   const e2e = readYaml(resolve(repoRoot, 'tests/e2e/values-flows-e2e.yaml'))
   assert.equal(defaults.publicSurface.routePrefixes.identity, '/')
   assert.deepEqual(defaults.publicSurface.bindings.identity.paths, identityPaths)
   assert.equal(defaults.publicSurface.bindings.identity.path, undefined)
-  assert.equal(e2e.publicSurface.bindings.identity.path, '/')
+  assert.deepEqual(e2e.publicSurface.bindings.identity.paths, identityPaths)
+  assert.equal(e2e.publicSurface.bindings.identity.path, undefined)
   assert.equal(defaults.keycloak.config?.inline?.publicPath, undefined)
   const standalone = readYaml(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'))
   assertRootKeycloakRoutes(standalone.routes, 'canonical standalone')
