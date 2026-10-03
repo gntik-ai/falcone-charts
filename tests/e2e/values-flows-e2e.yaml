@@ -214,7 +214,7 @@ publicSurface:
       component: keycloak
       serviceName: "falcone-keycloak"
       servicePort: http
-      path: /auth
+      path: /
     realtime:
       component: apisix
       serviceName: "falcone-control-plane"

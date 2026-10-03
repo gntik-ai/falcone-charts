@@ -1,4 +1,5 @@
 global:
+  keycloakIssuerBaseUrl: https://iam.sandbox.in-falcone.example.com
   namespace: in-falcone-sandbox
   environment: sandbox
 publicSurface:
@@ -46,5 +47,5 @@ gatewayPolicy:
     allowOrigins:
     - https://console.sandbox.in-falcone.example.com
   oidc:
-    issuerUrl: https://iam.sandbox.in-falcone.example.com/auth/realms/in-falcone-platform
-    discoveryUrl: https://iam.sandbox.in-falcone.example.com/auth/realms/in-falcone-platform/.well-known/openid-configuration
+    issuerUrl: https://iam.sandbox.in-falcone.example.com/realms/in-falcone-platform
+    discoveryUrl: https://iam.sandbox.in-falcone.example.com/realms/in-falcone-platform/.well-known/openid-configuration

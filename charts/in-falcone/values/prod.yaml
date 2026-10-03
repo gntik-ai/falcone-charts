@@ -1,7 +1,7 @@
 global:
   # Placeholders: the operator must supply production issuer and JWKS hosts before rollout.
   # Keep explicit production values; never inherit the development issuer.
-  keycloakIssuerBaseUrl: https://iam.in-falcone.example.com/auth
+  keycloakIssuerBaseUrl: https://iam.in-falcone.example.com
   keycloakJwksBaseUrl: "http://{{ .Release.Name }}-keycloak:8080"
   namespace: in-falcone
   environment: prod
@@ -66,5 +66,5 @@ gatewayPolicy:
     allowOrigins:
     - https://console.in-falcone.example.com
   oidc:
-    issuerUrl: https://iam.in-falcone.example.com/auth/realms/in-falcone-platform
-    discoveryUrl: https://iam.in-falcone.example.com/auth/realms/in-falcone-platform/.well-known/openid-configuration
+    issuerUrl: https://iam.in-falcone.example.com/realms/in-falcone-platform
+    discoveryUrl: https://iam.in-falcone.example.com/realms/in-falcone-platform/.well-known/openid-configuration

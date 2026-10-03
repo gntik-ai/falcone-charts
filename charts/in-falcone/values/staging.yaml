@@ -188,5 +188,5 @@ gatewayPolicy:
     allowOrigins:
     - https://baas.musematic.ai
   oidc:
-    issuerUrl: https://iam.baas.musematic.ai/auth/realms/in-falcone-platform
-    discoveryUrl: https://iam.baas.musematic.ai/auth/realms/in-falcone-platform/.well-known/openid-configuration
+    issuerUrl: https://iam.baas.musematic.ai/realms/in-falcone-platform
+    discoveryUrl: https://iam.baas.musematic.ai/realms/in-falcone-platform/.well-known/openid-configuration
