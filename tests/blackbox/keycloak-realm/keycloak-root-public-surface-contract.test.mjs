@@ -163,7 +163,10 @@ for (const [profile, host] of profiles) {
   for (const [exposure, exposureArgs] of [['Ingress', []], ['Route', routeArgs]]) {
     test(`${profile}: ${exposure} rejects unsafe identity path overrides at render time`, () => {
       const profileArgs = profile === 'default' ? [] : ['-f', resolve(umbrellaChart, `values/${profile}.yaml`)]
-      for (const paths of [['/'], ['/admin'], ['/admin/x'], ['/realms', '/admin/x'], ['/auth'], ['/authx']]) {
+      for (const paths of [
+        ['/'], ['/admin'], ['/admin/'], ['/adm'], ['/admin/x'], ['/realms', '/admin/x'], ['/auth'], ['/authx'],
+        ['/Admin'], ['/AUTH'], ['/realms/../admin'], ['/resources/./x'],
+      ]) {
         const result = run('helm', ['template', release, umbrellaChart, ...profileArgs, ...exposureArgs,
           '--set-json', `publicSurface.bindings.identity.paths=${JSON.stringify(paths)}`])
         assert.notEqual(result.status, 0, `${profile}/${exposure}: unsafe paths ${paths} must fail`)
@@ -230,6 +233,22 @@ test('another Keycloak-backed binding cannot expose the admin console', () => {
       '--set-string', 'publicSurface.bindings.api.path=/admin/x'])
     assert.notEqual(result.status, 0)
     assert.match(combined(result), /publicSurface\.bindings\.api/)
+  }
+})
+
+test('Keycloak-backed scalar paths reject case variants and dot segments for Ingress and Route', () => {
+  for (const exposureArgs of [[], routeArgs]) {
+    for (const path of ['/Admin/x', '/Auth', '/realms/../admin', '/resources/./x']) {
+      for (const binding of ['identity', 'api']) {
+        const args = binding === 'identity'
+          ? ['--set', 'publicSurface.bindings.identity.paths=null']
+          : ['--set-string', 'publicSurface.bindings.api.serviceName=falcone-keycloak']
+        const result = run('helm', ['template', release, umbrellaChart, ...exposureArgs, ...args,
+          '--set-string', `publicSurface.bindings.${binding}.path=${path}`])
+        assert.notEqual(result.status, 0, `${binding}: unsafe scalar path ${path} must fail`)
+        assert.ok(combined(result).includes(`publicSurface.bindings.${binding}`))
+      }
+    }
   }
 })
 

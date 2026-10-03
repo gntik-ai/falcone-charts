@@ -400,8 +400,10 @@
     {{- if hasKey $binding "paths" }}{{- $paths = $binding.paths }}{{- end -}}
     {{- range $path := $paths -}}
       {{- /* Route matching also exposes /admin through a shorter prefix such as /adm. */ -}}
-      {{- if or (hasPrefix $path "/admin") (hasPrefix "/admin/" $path) (hasPrefix "/auth" $path) -}}
-        {{- fail (printf "publicSurface.bindings.%s must not expose root, /admin or legacy /auth paths; use paths [/realms, /resources, /js]" $surface) -}}
+      {{- /* Reject case variants and dot segments rather than relying on proxy normalization. */ -}}
+      {{- $lowerPath := lower $path -}}
+      {{- if or (hasPrefix $lowerPath "/admin") (hasPrefix "/admin/" $lowerPath) (hasPrefix "/auth" $lowerPath) (regexMatch "(^|/)\\.{1,2}(/|$)" $path) -}}
+        {{- fail (printf "publicSurface.bindings.%s must not expose root, /admin or legacy /auth paths (including case variants), or contain dot segments; use paths [/realms, /resources, /js]" $surface) -}}
       {{- end -}}
     {{- end -}}
   {{- end -}}
