@@ -6,7 +6,8 @@ import test from 'node:test'
 import { render, repoRoot, sha256, umbrellaChart, yamlDocuments } from './blackbox/fixtures/blackbox.mjs'
 
 // #980: include tenant audience wiring and the read-only config-copy root filesystem, preserving main's pod identities.
-const priorBaseline = '8c7bcb9137c9ab34847dc54a1e845da6173737cfcff31a38769ef488bf76399d'
+// #45: include the reviewed root-path identity repair before subtracting only flow-audit additions.
+const priorBaseline = 'b137cfcd23e41538bed975ac7cf1567eb6dacc0be363b6a8d0df95d084fbaa13'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',
