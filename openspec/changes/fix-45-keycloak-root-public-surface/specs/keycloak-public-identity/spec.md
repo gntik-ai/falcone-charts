@@ -57,6 +57,13 @@ Bindings SHALL accept optional nonempty unique `paths` lists, replacing scalar `
 - **THEN** Helm rendering fails with a diagnostic identifying `publicSurface.bindings.identity` or the offending Keycloak-backed binding
 - **AND** all migration, External Secrets/OpenBao and supply-chain gates remain intact
 
+#### Scenario: Historical reuse-values upgrades require an explicit identity migration
+
+- **WHEN** the Temporal historical upgrade contract reuses the unchanged stored chart at `41922e9d`
+- **THEN** its stale identity binding fails before post-render with a `publicSurface.bindings.identity` diagnostic
+- **AND** explicitly setting the identity `paths` allowlist renders only `/realms`, `/resources` and `/js` with Keycloak's `http` backend
+- **AND** the existing Temporal default-image, custom-image drift, executor verification and read-only API assertions remain intact
+
 #### Scenario: LoadBalancer cannot filter HTTP paths
 
 - **WHEN** LoadBalancer exposure is selected

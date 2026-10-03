@@ -251,6 +251,7 @@ function waitForFile(target, timeoutMilliseconds = 5000) {
 function runReuseValuesUpgradeFromRevision({
   revision,
   legacyImage,
+  identityPaths,
 }) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'falcone-temporal-real-reuse-bbx-'));
   let server;
@@ -380,6 +381,9 @@ tee "$BBX_POST_RENDER_OUTPUT"
         '--set', 'global.webhookDatabase.migration.backupVerified=true',
         '--set', 'global.webhookDatabase.migration.parityVerified=true',
         '--set-string', 'global.webhookDatabase.migration.backupReference=bbx-temporal-backup',
+        ...(identityPaths === undefined ? [] : [
+          '--set-json', `publicSurface.bindings.identity.paths=${JSON.stringify(identityPaths)}`,
+        ]),
       ],
       {
         cwd: repoRoot,
@@ -2367,10 +2371,23 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     'the real stored chart defaults must predate global.temporalAdminToolsImage',
   );
   const historicalImage = structuredClone(historical.temporal.adminTools.image);
+  const identityPaths = ['/realms', '/resources', '/js'];
+  assert.equal(historical.publicSurface.bindings.identity.path, '/auth',
+    'the stored chart must retain its historical identity path');
+
+  // Reuse-values must explicitly migrate the public binding; keep the historical
+  // chart intact and prove the new gate rejects its stale path before post-render.
+  const staleIdentity = runReuseValuesUpgradeFromRevision({ revision: '41922e9d' });
+  assert.notEqual(staleIdentity.status, 0, 'unmigrated identity values must fail closed');
+  assert.equal(staleIdentity.renderedOutput.trim(), '',
+    'unsafe historical identity paths must fail before public post-render');
+  assert.match(staleIdentity.stderr, /publicSurface\.bindings\.identity/);
+  assert.doesNotMatch(staleIdentity.apiLog, /^(?:POST|PUT|PATCH|DELETE)\s/m);
 
   const exactDefault = runReuseValuesUpgradeFromRevision({
     revision: '41922e9d',
     legacyImage: undefined,
+    identityPaths,
   });
   assert.match(exactDefault.apiLog, /GET \/api\/v1\/namespaces\/temporal-readiness-bbx\/secrets/);
   assert.doesNotMatch(exactDefault.apiLog, /^(?:POST|PUT|PATCH|DELETE)\s/m);
@@ -2385,6 +2402,18 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  const identityRules = exactDocuments.filter((document) => document.kind === 'Ingress')
+    .flatMap((document) => document.spec.rules ?? [])
+    .filter((rule) => rule.host === historical.publicSurface.hostnames.identity)
+    .flatMap((rule) => rule.http.paths);
+  assert.deepEqual(identityRules.map((rule) => rule.path), identityPaths,
+    'the explicit migration must replace the stored /auth binding with the allowlist');
+  for (const rule of identityRules) {
+    assert.equal(rule.pathType, 'Prefix');
+    assert.deepEqual(rule.backend.service, {
+      name: `${releaseName}-keycloak`, port: { name: 'http' },
+    });
+  }
   const executorJwt = exactDocuments.find((document) =>
     document.kind === 'ConfigMap' && document.metadata.name === `${releaseName}-executor-jwt-config`);
   assert.ok(executorJwt, 'historical reuse-values must configure executor verification');
@@ -2399,6 +2428,7 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
 
   const customLegacy = runReuseValuesUpgradeFromRevision({
     revision: '41922e9d',
+    identityPaths,
     legacyImage: {
       ...historicalImage,
       repository: 'legacy.example.test/team/admin-tools',

@@ -45,4 +45,6 @@ Rollback restores the previous, already-broken public prefix; it does not restor
 
 Run scoped Helm lint/renders, the root identity and staging infrastructure blackbox contracts, and the Keycloak 26 login/import contract. Compare pre/post-render Keycloak args/env and image references for every profile. Environment-dependent checks remain with PR CI and the release gate.
 
+The Temporal historical `--reuse-values` contract retains the immutable stored chart at `41922e9d`. It explicitly passes the identity path allowlist for both the compatible image and custom-image drift cases, preserving all Temporal assertions. A separate unmigrated upgrade must fail before post-render with an identity-binding diagnostic; the migrated render must expose exactly the allowlist through Keycloak's `http` port. This models the required binding migration without weakening the new validation or changing historical defaults.
+
 After deployment, the human/control-plane must fetch `https://iam.<domain>/realms/in-falcone-platform/.well-known/openid-configuration`, require HTTP 200 JSON with issuer matching `gatewayPolicy.oidc.issuerUrl`, verify that `/admin` and `/admin/x` on the identity host return default-backend 404, and verify internal APISIX bearer-token validation and the gated native-admin passthrough.
