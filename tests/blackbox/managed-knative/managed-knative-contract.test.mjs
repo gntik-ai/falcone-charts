@@ -9,6 +9,7 @@ import { chmodSync, copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
+import { withPriorIdentityRule } from '../keycloak-realm/public-identity-snapshot.mjs'
 
 import {
   allContainers,
@@ -428,8 +429,9 @@ test('default umbrella stays at its approved baseline and explicit disabled adds
     const defaultCanonical = defaults.map((output) => JSON.stringify(canonical(output.objects)))
     const disabledCanonical = disabled.map((output) => JSON.stringify(canonical(output.objects)))
 
-    for (const rendered of defaultCanonical) {
-      assert.equal(sha256(rendered), baseline, 'default umbrella render drifted from the approved public baseline')
+    for (const output of defaults) {
+      assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(output.objects)))), baseline,
+        'default umbrella render drifted from the approved public baseline')
     }
     for (const rendered of disabledCanonical) {
       assert.equal(rendered, defaultCanonical[0], 'explicit disabled mode must remain identical to the default render')

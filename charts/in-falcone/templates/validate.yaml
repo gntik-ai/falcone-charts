@@ -393,6 +393,20 @@
   {{- if and (eq $.Values.platform.network.exposureKind "LoadBalancer") $binding.serviceName -}}
     {{- fail (printf "publicSurface.bindings.%s cannot use explicit serviceName when exposureKind=LoadBalancer" $surface) -}}
   {{- end -}}
+  {{- $serviceName := include "in-falcone.componentServiceName" (dict "root" $ "binding" $binding) -}}
+  {{- $keycloakService := include "in-falcone.componentServiceName" (dict "root" $ "binding" (dict "component" "keycloak")) -}}
+  {{- if or (eq $surface "identity") (eq $binding.component "keycloak") (eq $serviceName $keycloakService) -}}
+    {{- $paths := list $binding.path -}}
+    {{- if hasKey $binding "paths" }}{{- $paths = $binding.paths }}{{- end -}}
+    {{- range $path := $paths -}}
+      {{- /* Route matching also exposes /admin or /auth through shorter prefixes. */ -}}
+      {{- /* Reject ambiguous paths rather than relying on proxy normalization. */ -}}
+      {{- $lowerPath := lower $path -}}
+      {{- if or (hasPrefix $lowerPath "/admin") (hasPrefix "/admin/" $lowerPath) (hasPrefix $lowerPath "/auth") (hasPrefix "/auth" $lowerPath) (regexMatch "(^|/)\\.{1,2}(/|$)" $path) (contains "//" $path) (contains "%" $path) -}}
+        {{- fail (printf "publicSurface.bindings.%s must not expose root, /admin or legacy /auth paths (including case variants), or contain dot segments, repeated slashes or percent encoding; use paths [/realms, /resources, /js]" $surface) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 {{- if not (has "common" .Values.config.inheritanceOrder) -}}
   {{- fail "config.inheritanceOrder must include the common values layer" -}}

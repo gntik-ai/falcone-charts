@@ -86,12 +86,29 @@ test('staging public API Ingress exposes the APISIX metrics route from issue 986
 })
 
 test('staging OIDC issuer and discovery point at iam.baas.musematic.ai', () => {
-  const { text } = renderStaging()
+  const { objects, text } = renderStaging()
+  const runtime = objects.find((object) => object?.data?.oidcIssuerUrl)
+  assert.equal(runtime?.data?.oidcIssuerUrl,
+    'https://iam.baas.musematic.ai/realms/in-falcone-platform')
+  assert.equal(runtime?.data?.oidcDiscoveryUrl,
+    'https://iam.baas.musematic.ai/realms/in-falcone-platform/.well-known/openid-configuration')
   assert.match(
     text,
-    /https:\/\/iam\.baas\.musematic\.ai\/auth\/realms\/in-falcone-platform/,
+    /https:\/\/iam\.baas\.musematic\.ai\/realms\/in-falcone-platform/,
     'OIDC issuer/discovery must use the real identity host',
   )
+  assert.doesNotMatch(text, /\/auth\/realms/,
+    'staging must not advertise the legacy Keycloak prefix')
+  const identityPaths = ingressObjects(objects)
+    .flatMap((ing) => ing?.spec?.rules ?? [])
+    .filter((rule) => rule?.host === 'iam.baas.musematic.ai')
+    .flatMap((rule) => rule?.http?.paths ?? [])
+  assert.deepEqual(identityPaths.map((entry) => [entry.path, entry.pathType]),
+    ['/realms', '/resources', '/js'].map((path) => [path, 'Prefix']))
+  for (const entry of identityPaths) {
+    assert.deepEqual(entry.backend.service, { name: 'falcone-bbx-keycloak', port: { name: 'http' } })
+    assert.ok(!'/admin'.startsWith(entry.path) && !'/admin/x'.startsWith(entry.path))
+  }
 })
 
 test('staging console CORS and Keycloak redirect URIs use the apex domain', () => {

@@ -1,5 +1,5 @@
 global:
-  keycloakIssuerBaseUrl: https://iam.dev.in-falcone.example.com/auth
+  keycloakIssuerBaseUrl: https://iam.dev.in-falcone.example.com
   keycloakJwksBaseUrl: "http://{{ .Release.Name }}-keycloak:8080"
   # Argo CD renders in install mode; true makes a GitOps render of an existing release use
   # Helm upgrade semantics (falcone-charts#47). Leave false for helm install/upgrade.
@@ -186,7 +186,7 @@ global:
 publicSurface:
   routePrefixes:
     controlPlane: /control-plane
-    identity: /auth
+    identity: /
     realtime: /realtime
     console: /
   optionalWorkspaceSubdomains:
@@ -214,7 +214,7 @@ publicSurface:
       component: keycloak
       serviceName: ""
       servicePort: http
-      path: /auth
+      paths: [/realms, /resources, /js]
     realtime:
       component: apisix
       serviceName: ""
@@ -1159,7 +1159,7 @@ bootstrap:
             port: 8080
         - routeId: "1002"
           name: identity
-          uri: /auth/*
+          uri: /realms/*
           priority: 90
           upstream:
             component: keycloak
@@ -1221,7 +1221,7 @@ bootstrap:
             openid-connect: &a4
               bearer_only: false
               client_id: in-falcone-console
-              discovery: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform/.well-known/openid-configuration
+              discovery: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform/.well-known/openid-configuration
               realm: in-falcone-platform
               set_access_token_header: false
               set_id_token_header: false
@@ -1828,9 +1828,9 @@ bootstrap:
               headers: *a6
               regex_uri:
                 - ^/_native/keycloak/admin/(.*)
-                - /auth/admin/$1
+                - /admin/$1
             authz-keycloak:
-              discovery: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform/.well-known/openid-configuration
+              discovery: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform/.well-known/openid-configuration
               client_id: in-falcone-gateway
               policy_enforcement_mode: ENFORCING
               permissions:
@@ -2085,9 +2085,6 @@ keycloak:
   affinity: {}
   extraVolumes: []
   extraVolumeMounts: []
-  config:
-    inline:
-      publicPath: /auth
   # DB-init: idempotently create the dedicated `keycloak` database on the bundled
   # postgresql BEFORE Keycloak starts, so KC is self-sufficient under `helm install
   # --wait` (a post-install hook Job would deadlock — KC could never become Ready
@@ -3966,7 +3963,7 @@ webConsole:
         drop:
           - ALL
   auth:
-    issuerUrl: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform
+    issuerUrl: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform
     realm: in-falcone-platform
     clientId: in-falcone-console
     grantType: password
@@ -4165,8 +4162,8 @@ gatewayPolicy:
     enabled: true
     provider: keycloak
     realm: in-falcone-platform
-    issuerUrl: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform
-    discoveryUrl: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform/.well-known/openid-configuration
+    issuerUrl: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform
+    discoveryUrl: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform/.well-known/openid-configuration
     clientId: in-falcone-gateway
     bearerOnly: true
     sslVerify: true

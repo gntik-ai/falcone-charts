@@ -40,5 +40,5 @@ gatewayPolicy:
     allowOrigins:
     - https://console.dev.in-falcone.example.com
   oidc:
-    issuerUrl: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform
-    discoveryUrl: https://iam.dev.in-falcone.example.com/auth/realms/in-falcone-platform/.well-known/openid-configuration
+    issuerUrl: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform
+    discoveryUrl: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform/.well-known/openid-configuration

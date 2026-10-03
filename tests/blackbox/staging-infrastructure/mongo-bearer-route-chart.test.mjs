@@ -334,7 +334,7 @@ test('pre-verifier values resolve enforced defaults from the stored OIDC issuer'
   assert.equal(env.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'true')
 })
 
-test('staging standalone routes preserve the recorded pre-980 routes except the reviewed Mongo repair', () => {
+test('staging standalone routes preserve the recorded pre-980 routes except reviewed Mongo and Keycloak repairs', () => {
   const renderedStaging = run('helm', [
     'template', 'falcone', umbrellaChart, '--namespace', 'in-falcone-staging',
     '-f', `${umbrellaChart}/values/staging.yaml`,
@@ -354,11 +354,16 @@ test('staging standalone routes preserve the recorded pre-980 routes except the 
   const currentComment = '# falls through to the JWT route (Mongo -> executor).'
   const credentialRemoval = '            # API-key credentials must use 2006-key and its per-key bucket.\n            - apikey\n            - x-api-key\n'
   const tenantAudience = '        tenant_audience: "falcone-data-api"\n        enforce_tenant_audience: true\n'
+  const oldIdentity = '  - id: "1002"\n    uri: "/auth/*"\n    priority: 90\n    plugins:\n      proxy-rewrite:\n        regex_uri: ["^/auth/(.*)", "/$1"]\n'
+  const rootIdentity = '  - id: "1002"\n    uri: "/realms/*"\n    priority: 90\n'
   assert.ok(canonical.includes(credentialRemoval), 'reviewed API-key removal delta must be present')
   assert.ok(canonical.includes(currentComment), 'Mongo upstream comment must match the executor')
   assert.ok(canonical.includes(tenantAudience), 'canonical kind route must enforce the tenant audience')
-  assert.equal(sha256(canonical.replace(tenantAudience, '').replace(credentialRemoval, '').replace(currentComment, oldComment)), recordedHash,
-    'canonical snapshot permits only tenant audience settings, API-key removals and Mongo upstream comment correction')
+  assert.equal(canonical.split(rootIdentity).length, 2, 'canonical identity must use root realm paths exactly once')
+  assert.equal(baseline.split(oldIdentity).length, 2, 'recorded identity delta must be bounded to route 1002')
+  assert.equal(sha256(canonical.replace(tenantAudience, '').replace(credentialRemoval, '').replace(currentComment, oldComment)
+    .replace(rootIdentity, oldIdentity)), recordedHash,
+    'canonical snapshot permits only reviewed Mongo deltas and the root-path Keycloak route repair')
   const current = canonical
     .replaceAll('.falcone.svc.cluster.local', '.in-falcone-staging.svc.cluster.local')
     .replace('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai"')
@@ -369,6 +374,7 @@ test('staging standalone routes preserve the recorded pre-980 routes except the 
     return match[0]
   }
   const expected = baseline.replace(route2006(baseline), route2006(current)).replace(oldComment, currentComment)
+    .replace(oldIdentity, rootIdentity)
   assert.notEqual(route2006(baseline), route2006(current), 'route 2006 must change')
   assert.equal(config.data['apisix.yaml'].trim(), expected.trim())
   assert.doesNotMatch(config.data['apisix.yaml'], /llmwiki-s2-mongo-jwt/)
