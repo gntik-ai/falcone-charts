@@ -1159,7 +1159,7 @@ bootstrap:
             port: 8080
         - routeId: "1002"
           name: identity
-          uri: /auth/*
+          uri: /realms/*
           priority: 90
           upstream:
             component: keycloak
@@ -1828,7 +1828,7 @@ bootstrap:
               headers: *a6
               regex_uri:
                 - ^/_native/keycloak/admin/(.*)
-                - /auth/admin/$1
+                - /admin/$1
             authz-keycloak:
               discovery: https://iam.dev.in-falcone.example.com/realms/in-falcone-platform/.well-known/openid-configuration
               client_id: in-falcone-gateway

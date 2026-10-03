@@ -32,6 +32,29 @@ function renderProfile(profile, overrides = []) {
   return { text: result.stdout, objects: yamlDocuments(result.stdout) }
 }
 
+function assertRootKeycloakRoutes(routes, surface) {
+  const keycloakRoutes = routes.filter((route) => Object.keys(route.upstream?.nodes ?? {})
+    .some((node) => node.split(':')[0].split('.')[0] === `${release}-keycloak`))
+  assert.ok(keycloakRoutes.length > 0, `${surface}: Keycloak upstream routes must be present`)
+  for (const route of keycloakRoutes) {
+    const context = `${surface}: ${route.name ?? route.id}: Keycloak upstream`
+    const rewrite = route.plugins?.['proxy-rewrite'] ?? {}
+    for (const path of [route.uri, ...(route.uris ?? []), rewrite.uri, ...(rewrite.regex_uri ?? [])]) {
+      if (path === undefined) continue
+      assert.doesNotMatch(path, /(?:^|\^)\/auth(?:\/|$)/,
+        `${context} must not match or rewrite a legacy /auth prefix`)
+    }
+  }
+  const identity = keycloakRoutes.find((route) => route.name === 'identity' || String(route.id) === '1002')
+  assert.equal(identity?.uri, '/realms/*', `${surface}: identity route must forward root realm paths`)
+  const admin = keycloakRoutes.find((route) => route.name === 'native-keycloak-admin')
+  if (admin) {
+    assert.deepEqual(admin.plugins['proxy-rewrite'].regex_uri,
+      ['^/_native/keycloak/admin/(.*)', '/admin/$1'],
+      `${surface}: native admin must rewrite to the root admin API`)
+  }
+}
+
 function assertRootIdentity({ objects, text }, host) {
   const base = `https://${host}`
   const issuer = `${base}/realms/${realm}`
@@ -79,9 +102,12 @@ function assertRootIdentity({ objects, text }, host) {
   assert.ok(payload, 'bootstrap payload must be rendered')
   let discoveries = 0
   let verifiers = 0
+  const bootstrapRoutes = []
   for (const [name, value] of Object.entries(payload.data)) {
     if (!/^route-.*\.json$/.test(name)) continue
-    const { plugins = {} } = JSON.parse(value)
+    const route = JSON.parse(value)
+    bootstrapRoutes.push(route)
+    const { plugins = {} } = route
     for (const plugin of ['openid-connect', 'authz-keycloak']) {
       if (!plugins[plugin]) continue
       assert.equal(plugins[plugin].discovery, discovery, `${name}: identity discovery must use the public root`)
@@ -92,6 +118,10 @@ function assertRootIdentity({ objects, text }, host) {
       assert.equal(plugins['issuer-jwks-auth'].jwks_base_url, jwksBase)
       verifiers += 1
     }
+  }
+  assertRootKeycloakRoutes(bootstrapRoutes, 'bootstrap')
+  for (const config of objects.filter((object) => object?.kind === 'ConfigMap' && object.data?.['apisix.yaml'])) {
+    assertRootKeycloakRoutes(yamlDocuments(config.data['apisix.yaml'])[0].routes, 'standalone')
   }
   assert.ok(discoveries > 0, 'bootstrap must exercise OIDC discovery')
   assert.ok(verifiers > 0, 'bootstrap must exercise issuer/JWKS verification')
@@ -115,6 +145,8 @@ test('chart values and flows e2e keep the root identity binding without legacy r
   assert.equal(defaults.publicSurface.bindings.identity.path, '/')
   assert.equal(e2e.publicSurface.bindings.identity.path, '/')
   assert.equal(defaults.keycloak.config?.inline?.publicPath, undefined)
+  const standalone = readYaml(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'))
+  assertRootKeycloakRoutes(standalone.routes, 'canonical standalone')
   for (const [profile] of profiles) {
     const values = profile === 'default' ? defaults : readYaml(resolve(umbrellaChart, `values/${profile}.yaml`))
     assert.doesNotMatch(JSON.stringify(values), /\/auth\/realms/)
@@ -133,5 +165,21 @@ for (const [name, setting, diagnostic] of [
     if (name === 'Route binding') overrides.push(...routeArgs)
     const rendered = renderProfile('default', overrides)
     assert.throws(() => assertRootIdentity(rendered, profiles[0][1]), diagnostic)
+  })
+}
+
+for (const [name, change] of [
+  ['route match', (route) => { route.uri = '/auth/*' }],
+  ['direct rewrite', (route) => { route.plugins = { 'proxy-rewrite': { uri: '/auth/realms' } } }],
+  ['admin rewrite', (route) => { route.plugins['proxy-rewrite'].regex_uri[1] = '/auth/admin/$1' }],
+]) {
+  test(`consistency contract rejects a legacy /auth Keycloak upstream ${name}`, () => {
+    const routes = readYaml(resolve(umbrellaChart, 'values.yaml')).bootstrap.reconcile.apisix.routes
+    const target = routes.find((route) => route.name === (name === 'admin rewrite' ? 'native-keycloak-admin' : 'identity'))
+    change(target)
+    const rendered = renderProfile('default', [
+      '--set-json', `bootstrap.reconcile.apisix.routes=${JSON.stringify(routes)}`,
+    ])
+    assert.throws(() => assertRootIdentity(rendered, profiles[0][1]), /Keycloak upstream must not match or rewrite/)
   })
 }

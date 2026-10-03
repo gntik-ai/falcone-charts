@@ -10,6 +10,13 @@ The default chart and dev, sandbox, staging and prod profiles SHALL expose `iam.
 - **THEN** the identity Ingress has path `/`, pathType `Prefix` and the Keycloak `http` backend
 - **AND** selecting Route exposure renders the identity Route with path `/` and the same backend
 
+#### Scenario: APISIX forwards Keycloak root paths
+
+- **WHEN** bootstrap or standalone APISIX routes are rendered
+- **THEN** identity route 1002 matches `/realms/*` and forwards that path unchanged to Keycloak
+- **AND** the native-admin passthrough rewrites `/_native/keycloak/admin/(.*)` to `/admin/$1`, retaining its authorization plugins
+- **AND** no route upstreamed to Keycloak matches or rewrites a legacy `/auth` prefix
+
 ### Requirement: Public OIDC and internal JWKS SHALL remain consistent
 
 Runtime `oidcIssuerUrl` and `oidcDiscoveryUrl`, gateway policy and bootstrap plugin discovery SHALL use `https://iam.<domain>/realms/in-falcone-platform` and its `.well-known/openid-configuration` URL. The verifier's issuer base SHALL be `https://iam.<domain>` while its internal JWKS base remains the existing root-path Keycloak service URL. Keycloak container args/env and image references SHALL remain unchanged, and existing fail-closed issuer suffix validation and External Secrets/OpenBao gates SHALL remain intact.
@@ -22,7 +29,7 @@ Runtime `oidcIssuerUrl` and `oidcDiscoveryUrl`, gateway policy and bootstrap plu
 
 #### Scenario: A legacy prefix is reintroduced
 
-- **WHEN** an override reintroduces `/auth` in an identity binding, issuer, discovery URL or verifier issuer base while Keycloak serves at root
+- **WHEN** an override reintroduces `/auth` in an identity binding, issuer, discovery URL, verifier issuer base, or Keycloak upstream route match or rewrite while Keycloak serves at root
 - **THEN** the render consistency test fails and identifies the inconsistent surface
 
 #### Scenario: Public discovery is verified after deployment
