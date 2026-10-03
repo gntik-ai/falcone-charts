@@ -29,6 +29,12 @@ Upgrades using `--reuse-values` retain stale `/auth` configuration. Operators mu
 
 The root identity host also makes Keycloak's credential-protected `/admin` surface reachable. Limiting public paths to `/realms` and `/resources` requires a separate change to support multiple paths per binding.
 
+## Delivery and Release Review
+
+Publish and deliver the chart root-path change before the paired source change. Both source CI workflows must pin a published chart revision containing chart commit `85c4435c73fdb5e21ecc7f4392183fb86670f681`; if delivery rewrites that commit, update both pins to the resulting revision. The source kind standalone APISIX file must remain byte-identical to `charts/in-falcone/files/apisix/standalone/apisix.yaml`, and its deployment smoke contract must expect identity route `/realms/*`.
+
+Release review must explicitly accept the Keycloak rollout caused by removing the inline ConfigMap's `envFrom` reference and the public admin exposure described above. The API-host identity alias changes from `/auth/*` with prefix stripping to `/realms/*` passthrough; clients using the old alias must use the advertised root-path identity URL. These delivery checks belong to the control-plane and do not authorize deployment from this worktree.
+
 Rollback restores the previous, already-broken public prefix; it does not restore working public OIDC. No deployment or rollback is executed by this ChangeSet.
 
 ## Verification
