@@ -699,6 +699,7 @@
                 },
                 "path": {
                   "type": "string",
+                  "pattern": "^/",
                   "minLength": 1
                 },
                 "paths": {
@@ -749,6 +750,7 @@
                 },
                 "path": {
                   "type": "string",
+                  "pattern": "^/",
                   "minLength": 1
                 },
                 "paths": {
@@ -799,6 +801,7 @@
                 },
                 "path": {
                   "type": "string",
+                  "pattern": "^/",
                   "minLength": 1
                 },
                 "paths": {
@@ -849,6 +852,7 @@
                 },
                 "path": {
                   "type": "string",
+                  "pattern": "^/",
                   "minLength": 1
                 },
                 "paths": {

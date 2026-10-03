@@ -42,7 +42,7 @@ Runtime `oidcIssuerUrl` and `oidcDiscoveryUrl`, gateway policy and bootstrap plu
 
 ### Requirement: Multi-path bindings SHALL preserve compatibility and fail closed
 
-Bindings SHALL accept optional nonempty unique `paths` lists, replacing scalar `path` when set. The schema SHALL require `path` unless `paths` is present. Bindings without `paths` SHALL render byte-identically to base. Multi-path Route names SHALL be deterministic, unique and DNS-1123 valid; any single-path binding SHALL retain its existing Route name. The standalone APISIX file SHALL remain byte-identical to the paired source copy, and this extension SHALL NOT change APISIX routes or image references.
+Bindings SHALL accept optional nonempty unique `paths` lists, replacing scalar `path` when set. The schema SHALL require `path` unless `paths` is present, and both scalar paths and list entries SHALL start with `/`. Bindings without `paths` SHALL render byte-identically to base. Multi-path Route names SHALL be deterministic, unique and DNS-1123 valid; any single-path binding SHALL retain its existing Route name. The standalone APISIX file SHALL remain byte-identical to the paired source copy, and this extension SHALL NOT change APISIX routes or image references.
 
 #### Scenario: Optional paths replace the scalar binding
 
@@ -53,7 +53,7 @@ Bindings SHALL accept optional nonempty unique `paths` lists, replacing scalar `
 
 #### Scenario: Unsafe identity overrides are rejected
 
-- **WHEN** identity or another Keycloak-backed public binding exposes `/`, `/admin`, a path under `/admin`, or any `/auth` prefix (including case variants), or contains a `.` or `..` path segment, repeated slashes or percent encoding, via scalar `path` or effective `paths`
+- **WHEN** identity or another Keycloak-backed public binding exposes `/`, `/admin`, a path under `/admin`, or any `/auth` prefix (including case variants and shorter Route prefixes matching `/admin` or `/auth`), or contains a `.` or `..` path segment, repeated slashes or percent encoding, via scalar `path` or effective `paths`
 - **THEN** Helm rendering fails with a diagnostic identifying `publicSurface.bindings.identity` or the offending Keycloak-backed binding
 - **AND** all migration, External Secrets/OpenBao and supply-chain gates remain intact
 

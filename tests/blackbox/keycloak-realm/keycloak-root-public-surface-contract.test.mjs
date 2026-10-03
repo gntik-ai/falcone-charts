@@ -164,7 +164,7 @@ for (const [profile, host] of profiles) {
     test(`${profile}: ${exposure} rejects unsafe identity path overrides at render time`, () => {
       const profileArgs = profile === 'default' ? [] : ['-f', resolve(umbrellaChart, `values/${profile}.yaml`)]
       for (const paths of [
-        ['/'], ['/admin'], ['/admin/'], ['/adm'], ['/admin/x'], ['/realms', '/admin/x'], ['/auth'], ['/authx'],
+        ['/'], ['/admin'], ['/admin/'], ['/adm'], ['/admin/x'], ['/realms', '/admin/x'], ['/auth'], ['/authx'], ['/au'], ['/AUT'],
         ['/Admin'], ['/AUTH'], ['/realms/../admin'], ['/resources/./x'],
         ['//admin'], ['/realms//x'], ['/%61dmin'], ['/%2561dmin'], ['/realms/%2e%2e/admin'], ['/realms%2F..%2Fadmin'],
       ]) {
@@ -218,6 +218,8 @@ test('the binding schema rejects missing paths, empty lists, duplicates and rela
     ['--set-json', 'publicSurface.bindings.identity.paths=[]'],
     ['--set-json', 'publicSurface.bindings.identity.paths=["/realms","/realms"]'],
     ['--set-json', 'publicSurface.bindings.identity.paths=["realms"]'],
+    ['--set', 'publicSurface.bindings.identity.paths=null',
+      '--set-string', 'publicSurface.bindings.identity.path=admin'],
   ]) {
     const result = run('helm', ['template', release, umbrellaChart, ...args])
     assert.notEqual(result.status, 0, 'invalid identity path shape must fail schema validation')
@@ -239,7 +241,7 @@ test('another Keycloak-backed binding cannot expose the admin console', () => {
 
 test('Keycloak-backed scalar paths reject ambiguous paths for Ingress and Route', () => {
   for (const exposureArgs of [[], routeArgs]) {
-    for (const path of ['/Admin/x', '/Auth', '/realms/../admin', '/resources/./x',
+    for (const path of ['/Admin/x', '/Auth', '/au', '/AUT', '/realms/../admin', '/resources/./x',
       '//admin', '/realms//x', '/%61dmin', '/%2561dmin', '/realms/%2e%2e/admin', '/realms%2F..%2Fadmin']) {
       for (const binding of ['identity', 'api']) {
         const args = binding === 'identity'

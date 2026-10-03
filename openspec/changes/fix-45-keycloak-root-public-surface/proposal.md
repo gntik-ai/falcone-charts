@@ -33,6 +33,10 @@ Public `/admin` exposure is forbidden for Ingress and Route in this change. A le
 
 Keycloak-backed bindings also reject repeated slashes and percent encoding in effective list or scalar paths. This prevents operator overrides from depending on proxy-specific slash or decoding normalization, including encoded traversal and double encoding; the default allowlist requires neither.
 
+Scalar binding paths, like list entries, must begin with `/`. Keycloak-backed bindings also reject shorter prefixes such as `/au` that would match `/auth` under OpenShift Route string-prefix semantics.
+
+OpenShift's HAProxy router matches raw path prefixes. An unnormalized client request such as `/realms/../admin/` can match the `/realms` Route before downstream normalization. Configuration validation cannot prevent that request behavior; release review must probe traversal with path normalization disabled and verify the router/Keycloak combination does not serve the admin console. Ingress-nginx normalizes paths before matching.
+
 Release notes: the API-host `/auth/*` identity alias was removed; clients must use the advertised identity host and root realm URLs.
 
 ## Delivery and Release Review
@@ -50,3 +54,5 @@ Run scoped Helm lint/renders, the root identity and staging infrastructure black
 The Temporal historical `--reuse-values` contract retains the immutable stored chart at `41922e9d`. It explicitly passes the identity path allowlist for both the compatible image and custom-image drift cases, preserving all Temporal assertions. A separate unmigrated upgrade must fail before post-render with an identity-binding diagnostic; the migrated render must expose exactly the allowlist through Keycloak's `http` port. This models the required binding migration without weakening the new validation or changing historical defaults.
 
 After deployment, the human/control-plane must fetch `https://iam.<domain>/realms/in-falcone-platform/.well-known/openid-configuration`, require HTTP 200 JSON with issuer matching `gatewayPolicy.oidc.issuerUrl`, verify that `/admin` and `/admin/x` on the identity host return default-backend 404, and verify internal APISIX bearer-token validation and the gated native-admin passthrough.
+
+For OpenShift, also use `curl --path-as-is` to probe `/realms/../admin/`, `/resources/../admin/` and `/js/../admin/`, plus encoded traversal variants. Require that no admin console response is served; record actual normalization behavior as release evidence.
