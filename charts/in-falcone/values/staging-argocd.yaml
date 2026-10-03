@@ -26,12 +26,12 @@ controlPlaneExecutor:
     repository: ghcr.io/gntik-ai/in-falcone-control-plane-executor
 webConsole:
   image:
-    tag: sha-49f4a6e
+    tag: sha-483d3f7
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-web-console
 workflowWorker:
   image:
-    tag: sha-49f4a6e
+    tag: sha-483d3f7
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-workflow-worker
 mcp:
