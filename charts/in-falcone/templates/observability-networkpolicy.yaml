@@ -11,7 +11,11 @@
 {{- /* Match the aliased dependency context used by component-wrapper, including its
       name truncation and componentId fallback, rather than guessing the pod name. */ -}}
 {{- $prometheusContext := dict "Values" .Values.observability "Release" .Release "Chart" (dict "Name" "observability") -}}
-{{- if .Values.observability.networkPolicy.enabled }}
+{{- /* --reuse-values can omit these new maps. Default only missing enabled keys,
+      so historical releases stay isolated and explicit false is preserved. */ -}}
+{{- $prometheusPolicy := .Values.observability.networkPolicy | default dict -}}
+{{- $grafanaPolicy := .Values.grafana.networkPolicy | default dict -}}
+{{- if dig "enabled" true $prometheusPolicy }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -35,14 +39,14 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "component-wrapper.selectorLabels" $prometheusContext | nindent 14 }}
-        {{- with .Values.observability.networkPolicy.allowedFrom }}
+        {{- with $prometheusPolicy.allowedFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.observability.service.targetPort }}
 {{- end }}
-{{- if .Values.grafana.networkPolicy.enabled }}
+{{- if dig "enabled" true $grafanaPolicy }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -59,10 +63,10 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes:
     - Ingress
-  {{- if .Values.grafana.networkPolicy.allowedFrom }}
+  {{- if $grafanaPolicy.allowedFrom }}
   ingress:
     - from:
-        {{- toYaml .Values.grafana.networkPolicy.allowedFrom | nindent 8 }}
+        {{- toYaml $grafanaPolicy.allowedFrom | nindent 8 }}
       ports:
         - protocol: TCP
           port: 3000

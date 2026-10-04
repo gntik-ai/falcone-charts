@@ -92,6 +92,34 @@ test('anonymous access, org role and embedding require explicit values', () => {
   }
 })
 
+test('missing historical Grafana settings retain secure defaults', () => {
+  // Helm removes null-valued keys, matching the maps absent in stored old values.
+  for (const keys of [
+    ['grafana.auth', 'grafana.security', 'grafana.networkPolicy'],
+    ['grafana.auth.anonymous', 'grafana.security.allowEmbedding', 'grafana.networkPolicy.enabled'],
+    ['grafana.auth.anonymous.enabled', 'grafana.auth.anonymous.orgRole'],
+  ]) {
+    const { objects } = render(umbrellaChart, keys.flatMap((key) => ['--set', `${key}=null`]))
+    assert.deepEqual(objects, defaults.objects)
+  }
+})
+
+test('partially migrated Grafana settings preserve explicit opt-ins and policy opt-out', () => {
+  const { objects } = render(umbrellaChart, [
+    '--set', 'grafana.auth.anonymous.enabled=true',
+    '--set', 'grafana.auth.anonymous.orgRole=null',
+    '--set', 'grafana.security.allowEmbedding=true',
+    '--set', 'grafana.networkPolicy.enabled=false',
+    '--set', 'grafana.networkPolicy.allowedFrom=null',
+  ])
+  assert.equal(env(objects, 'GF_AUTH_ANONYMOUS_ENABLED'), 'true')
+  assert.equal(env(objects, 'GF_AUTH_ANONYMOUS_ORG_ROLE'), 'Viewer')
+  assert.equal(env(objects, 'GF_SECURITY_ALLOW_EMBEDDING'), 'true')
+  assert.equal(objects.find((object) => object.kind === 'NetworkPolicy'
+    && object.metadata.name === policyName('grafana')), undefined)
+  assert.deepEqual(policy(objects, 'observability'), policy(defaults.objects, 'observability'))
+})
+
 test('configured peers appear verbatim and only on the component target port', () => {
   const peers = [
     {
