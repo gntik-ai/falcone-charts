@@ -1,4 +1,7 @@
-{{- if .Values.kafka.networkPolicy.enabled }}
+{{- /* --reuse-values may retain chart defaults from before this map existed.
+      Default only missing keys, preserving explicit false and empty allow-lists. */ -}}
+{{- $np := .Values.kafka.networkPolicy | default dict -}}
+{{- if dig "enabled" true $np }}
 {{- /*
   Internal-only NetworkPolicy for the Kafka broker (falcone-charts#16).
 
@@ -12,7 +15,6 @@
   (Calico/Cilium/OVN-Kubernetes). kind's kindnet does NOT enforce NetworkPolicy,
   so on kind this manifest renders but has no effect (release CI must prove isolation).
 */ -}}
-{{- $np := .Values.kafka.networkPolicy -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -29,7 +31,7 @@ spec:
     - Ingress
   ingress:
     - from:
-        {{- range $np.allowedAppComponents }}
+        {{- range (dig "allowedAppComponents" (list "control-plane" "control-plane-executor") $np) }}
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: {{ . | quote }}

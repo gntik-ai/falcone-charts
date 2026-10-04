@@ -19,6 +19,8 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { yamlDocuments } from './blackbox/fixtures/blackbox.mjs';
 
@@ -257,6 +259,38 @@ check('disabling the Kafka policy removes only that manifest in every profile', 
       .join('');
     // Avoid printing the full render (which includes Secret objects) if this check fails.
     assert.ok(disabled === withoutPolicy, `${label}: disabling Kafka policy changed other rendered bytes`);
+  }
+});
+
+check('historical defaults without the Kafka policy map retain isolation and explicit overrides', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'falcone-kafka-historical-'));
+  try {
+    const historicalChart = resolve(directory, 'in-falcone');
+    cpSync(chart, historicalChart, { recursive: true });
+    const valuesPath = resolve(historicalChart, 'values.yaml');
+    const [values] = yamlDocuments(readFileSync(valuesPath, 'utf8'));
+    delete values.kafka.networkPolicy;
+    // Helm --reuse-values uses the stored chart's defaults rather than new defaults.
+    writeFileSync(valuesPath, JSON.stringify(values));
+    const cases = [
+      { args: [], expected: expectedKafkaSpec(['control-plane', 'control-plane-executor']) },
+      { args: ['--set', 'kafka.networkPolicy.enabled=false'], expected: null },
+      { args: ['--set', 'kafka.networkPolicy.enabled=true'],
+        expected: expectedKafkaSpec(['control-plane', 'control-plane-executor']) },
+      { args: ['--set-json', 'kafka.networkPolicy.allowedAppComponents=[]'],
+        expected: expectedKafkaSpec([]) },
+      { args: ['--set-json', 'kafka.networkPolicy.allowedAppComponents=["operator-client"]'],
+        expected: expectedKafkaSpec(['operator-client']) },
+    ];
+    for (const { args, expected } of cases) {
+      const policies = kafkaPolicies(yamlDocuments(run('helm', [
+        'template', 'falcone', historicalChart, '--namespace', 'falcone-test', ...args,
+      ])));
+      assert.equal(policies.length, expected === null ? 0 : 1, args.join(' '));
+      if (expected !== null) assert.deepEqual(policies[0].spec, expected, args.join(' '));
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

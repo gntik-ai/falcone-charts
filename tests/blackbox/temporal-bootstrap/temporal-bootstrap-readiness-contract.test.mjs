@@ -2402,6 +2402,24 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #16: stored defaults predate Kafka isolation; reuse-values must apply it too.
+  assert.equal(historical.kafka.networkPolicy, undefined);
+  const kafkaPolicies = exactDocuments.filter((document) => document.kind === 'NetworkPolicy'
+    && document.metadata.name === `${releaseName}-kafka-internal-only`);
+  assert.equal(kafkaPolicies.length, 1, 'historical reuse-values must isolate Kafka exactly once');
+  assert.deepEqual(kafkaPolicies[0].spec, {
+    podSelector: { matchLabels: { 'app.kubernetes.io/name': 'kafka' } },
+    policyTypes: ['Ingress'],
+    ingress: [{
+      from: [
+        { podSelector: { matchLabels: { 'app.kubernetes.io/name': 'control-plane' } } },
+        { podSelector: { matchLabels: { 'app.kubernetes.io/name': 'control-plane-executor' } } },
+        { podSelector: { matchLabels: { 'in-falcone.io/component': 'flow-audit-topic' } } },
+        { podSelector: { matchLabels: { 'app.kubernetes.io/name': 'kafka' } } },
+      ],
+      ports: [{ protocol: 'TCP', port: historical.kafka.service.port }],
+    }],
+  });
   // #17: stored defaults predate the observability access settings. A real
   // --reuse-values upgrade must still render both policies and require login.
   assert.equal(historical.observability.networkPolicy, undefined);
