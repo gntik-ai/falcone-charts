@@ -72,7 +72,7 @@ test('default policies select the actual release pods and admit only the intende
       { podSelector: policy(defaults.objects, 'grafana').spec.podSelector },
       { podSelector: policy(defaults.objects, 'observability').spec.podSelector },
     ],
-    ports: [{ protocol: 'TCP', port: service.spec.ports[0].port }],
+    ports: [{ protocol: 'TCP', port: service.spec.ports[0].targetPort }],
   }])
   assert.deepEqual(policy(defaults.objects, 'grafana').spec.ingress, [])
   assertRestricted(defaults.objects)
@@ -92,7 +92,7 @@ test('anonymous access, org role and embedding require explicit values', () => {
   }
 })
 
-test('configured peers appear verbatim and only on the component service port', () => {
+test('configured peers appear verbatim and only on the component target port', () => {
   const peers = [
     {
       namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'operators' } },
@@ -110,11 +110,32 @@ test('configured peers appear verbatim and only on the component service port', 
   assert.deepEqual(prometheusIngress[0].from, [
     ...policy(defaults.objects, 'observability').spec.ingress[0].from, ...peers,
   ])
-  assert.deepEqual(prometheusIngress[0].ports, [{ protocol: 'TCP', port: 9191 }])
+  const servicePort = resource(objects, 'Service', 'falcone-bbx-observability').spec.ports[0]
+  assert.equal(servicePort.port, 9191)
+  assert.equal(servicePort.targetPort, 9090)
+  assert.deepEqual(prometheusIngress[0].ports, [{ protocol: 'TCP', port: servicePort.targetPort }])
   assert.deepEqual(policy(objects, 'grafana').spec.ingress, [{
     from: peers, ports: [{ protocol: 'TCP', port: 3000 }],
   }])
   assertRestricted(objects)
+})
+
+test('Prometheus policy follows numeric and named Service targetPort overrides', () => {
+  for (const targetPort of [9091, 'http']) {
+    const args = ['--set', 'observability.service.port=9191',
+      '--set', `observability.service.targetPort=${targetPort}`]
+    if (typeof targetPort === 'number') {
+      args.push('--set', `observability.ports[0].containerPort=${targetPort}`)
+    }
+    const { objects } = render(umbrellaChart, args)
+    const servicePort = resource(objects, 'Service', 'falcone-bbx-observability').spec.ports[0]
+    assert.equal(servicePort.port, 9191)
+    assert.equal(servicePort.targetPort, targetPort)
+    assert.deepEqual(policy(objects, 'observability').spec.ingress[0].ports,
+      [{ protocol: 'TCP', port: servicePort.targetPort }])
+    const containerPort = container(objects, 'observability').ports[0]
+    assert.equal(typeof targetPort === 'number' ? containerPort.containerPort : containerPort.name, targetPort)
+  }
 })
 
 test('Prometheus policy and self-peer follow wrapper componentId overrides and name truncation', () => {

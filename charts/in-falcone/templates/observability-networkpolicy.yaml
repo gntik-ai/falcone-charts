@@ -40,7 +40,7 @@ spec:
         {{- end }}
       ports:
         - protocol: TCP
-          port: {{ .Values.observability.service.port }}
+          port: {{ .Values.observability.service.targetPort }}
 {{- end }}
 {{- if .Values.grafana.networkPolicy.enabled }}
 ---
