@@ -1,0 +1,51 @@
+{{- /* --reuse-values may retain chart defaults from before this map existed.
+      Default only missing keys, preserving explicit false and empty allow-lists. */ -}}
+{{- $np := .Values.kafka.networkPolicy | default dict -}}
+{{- if dig "enabled" true $np }}
+{{- /*
+  Internal-only NetworkPolicy for the Kafka broker (falcone-charts#16).
+
+  The component-wrapper pins `app.kubernetes.io/name: kafka` on the broker pods.
+  Ingress to the broker port is allowed only from the listed Falcone app pods,
+  the flow-audit-topic hook pods, other Kafka pods, and explicit extraIngressFrom
+  peers. Default peers select pods in the release namespace only. All other
+  ingress, including the KRaft CONTROLLER port (9093), is denied.
+
+  ENFORCEMENT CAVEAT: honored only under a policy-enforcing CNI
+  (Calico/Cilium/OVN-Kubernetes). kind's kindnet does NOT enforce NetworkPolicy,
+  so on kind this manifest renders but has no effect (release CI must prove isolation).
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-kafka-internal-only
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range (dig "allowedAppComponents" (list "control-plane" "control-plane-executor") $np) }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ . | quote }}
+        {{- end }}
+        - podSelector:
+            matchLabels:
+              in-falcone.io/component: flow-audit-topic
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+        {{- with $np.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.kafka.service.port }}
+{{- end }}

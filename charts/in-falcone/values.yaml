@@ -2763,8 +2763,8 @@ ferretdb:
         drop:
           - ALL
   # In-cluster MongoDB-protocol TLS (gateway -> client) is deferred to a follow-on
-  # mTLS/service-mesh change; the ClusterIP-only boundary makes plaintext acceptable
-  # initially. Backend (gateway -> postgres) TLS is enforced via sslmode=require in the
+  # mTLS/service-mesh change; the default-on NetworkPolicy enforces the client boundary
+  # only on a policy-enforcing CNI. Backend (gateway -> postgres) TLS uses sslmode=require in the
   # FERRETDB_POSTGRESQL_URL secret value. (add-ferretdb-gateway task 4.2 / design D6.)
   tls:
     enabled: false
@@ -2791,6 +2791,21 @@ flowAudit:
     pendingRows: 100
     relayStaleSeconds: 300
 kafka:
+  # The broker uses PLAINTEXT without authentication or topic ACLs. ClusterIP alone
+  # does not restrict in-cluster clients; the default-on NetworkPolicy enforces the
+  # network boundary on a policy-enforcing CNI. Allowed clients still rely on the
+  # application for cross-workspace isolation; broker authentication/ACLs are deferred.
+  # kind's kindnet does NOT enforce NetworkPolicy; release CI must verify isolation.
+  networkPolicy:
+    enabled: true
+    # Must match app.kubernetes.io/name labels pinned on the rendered pod templates.
+    allowedAppComponents:
+      - control-plane
+      - control-plane-executor
+    # Raw NetworkPolicy peers for operator-added clients (broker port only).
+    # Default peers are same-namespace only; namespaceSelector broadens that boundary.
+    # Disable this policy only for recovery: doing so removes the Kafka ingress boundary.
+    extraIngressFrom: []
   wrapper:
     componentId: kafka
     workload:

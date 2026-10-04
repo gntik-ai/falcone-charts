@@ -19,6 +19,8 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { yamlDocuments } from './blackbox/fixtures/blackbox.mjs';
 
@@ -34,7 +36,7 @@ function check(name, fn) {
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
-    cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options,
+    cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, ...options,
   });
   assert.equal(result.status, 0, `${command} ${args.join(' ')} failed:\n${result.stderr}`);
   return result.stdout;
@@ -141,10 +143,9 @@ function selectorSites(objects) {
 }
 
 const renders = PROFILES.map((profile) => {
-  const objects = yamlDocuments(
-    run('helm', ['template', 'falcone', chart, '--namespace', 'falcone-test', ...profile.args]),
-  );
-  return { ...profile, templates: podTemplateLabels(objects), sites: selectorSites(objects) };
+  const text = run('helm', ['template', 'falcone', chart, '--namespace', 'falcone-test', ...profile.args]);
+  const objects = yamlDocuments(text);
+  return { ...profile, text, objects, templates: podTemplateLabels(objects), sites: selectorSites(objects) };
 });
 
 const used = new Set();
@@ -201,6 +202,124 @@ check('the Temporal frontend admits the component that starts workflows', () => 
       + 'TEMPORAL_UNAVAILABLE (gntik-ai/falcone-charts#20, gntik-ai/falcone#997).',
     );
   }
+});
+
+function kafkaPolicies(objects) {
+  return objects.filter((object) => object?.kind === 'NetworkPolicy'
+    && object.spec?.podSelector?.matchLabels?.['app.kubernetes.io/name'] === 'kafka');
+}
+
+function appPeer(name) {
+  return { podSelector: { matchLabels: { 'app.kubernetes.io/name': name } } };
+}
+
+const auditPeer = { podSelector: { matchLabels: { 'in-falcone.io/component': 'flow-audit-topic' } } };
+
+function expectedKafkaSpec(appComponents, extraPeers = [], port = 9092) {
+  return {
+    podSelector: { matchLabels: { 'app.kubernetes.io/name': 'kafka' } },
+    policyTypes: ['Ingress'],
+    ingress: [{
+      from: [...appComponents.map(appPeer), auditPeer, appPeer('kafka'), ...extraPeers],
+      ports: [{ protocol: 'TCP', port }],
+    }],
+  };
+}
+
+check('Kafka admits only platform clients, the audit hook and Kafka on TCP 9092 in every profile', () => {
+  for (const { label, objects, templates } of renders) {
+    const policies = kafkaPolicies(objects);
+    assert.equal(policies.length, 1, `${label}: expected exactly one Kafka NetworkPolicy`);
+    const policy = policies[0];
+    assert.equal(policy.metadata.name, 'falcone-kafka-internal-only');
+    assert.equal(policy.metadata.namespace, 'falcone-test');
+    assert.equal(policy.metadata.labels['app.kubernetes.io/managed-by'], 'Helm');
+    // Exact structure also excludes wildcard/cross-namespace peers, port 9093 and egress rules.
+    assert.deepEqual(policy.spec, expectedKafkaSpec(['control-plane', 'control-plane-executor']), label);
+    const targets = matching(templates, policy.spec.podSelector.matchLabels);
+    assert.equal(targets.length, 1, `${label}: policy must select the Kafka StatefulSet`);
+    assert.equal(targets[0].kind, 'StatefulSet');
+    assert.equal(targets[0].name, 'falcone-kafka');
+    for (const peer of policy.spec.ingress[0].from) {
+      assert.ok(matching(templates, peer.podSelector.matchLabels).length,
+        `${label}: Kafka peer must select a rendered pod template`);
+    }
+  }
+});
+
+check('disabling the Kafka policy removes only that manifest in every profile', () => {
+  for (const { label, args, text } of renders) {
+    const disabled = run('helm', [
+      'template', 'falcone', chart, '--namespace', 'falcone-test', ...args,
+      '--set', 'kafka.networkPolicy.enabled=false',
+    ]);
+    assert.equal(kafkaPolicies(yamlDocuments(disabled)).length, 0, label);
+    const withoutPolicy = text.split(/(?=^---\n)/m)
+      .filter((document) => !document.includes('# Source: in-falcone/templates/kafka-networkpolicy.yaml\n'))
+      .join('');
+    // Avoid printing the full render (which includes Secret objects) if this check fails.
+    assert.ok(disabled === withoutPolicy, `${label}: disabling Kafka policy changed other rendered bytes`);
+  }
+});
+
+check('historical defaults without the Kafka policy map retain isolation and explicit overrides', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'falcone-kafka-historical-'));
+  try {
+    const historicalChart = resolve(directory, 'in-falcone');
+    cpSync(chart, historicalChart, { recursive: true });
+    const valuesPath = resolve(historicalChart, 'values.yaml');
+    const [values] = yamlDocuments(readFileSync(valuesPath, 'utf8'));
+    delete values.kafka.networkPolicy;
+    // Helm --reuse-values uses the stored chart's defaults rather than new defaults.
+    writeFileSync(valuesPath, JSON.stringify(values));
+    const cases = [
+      { args: [], expected: expectedKafkaSpec(['control-plane', 'control-plane-executor']) },
+      { args: ['--set', 'kafka.networkPolicy.enabled=false'], expected: null },
+      { args: ['--set', 'kafka.networkPolicy.enabled=true'],
+        expected: expectedKafkaSpec(['control-plane', 'control-plane-executor']) },
+      { args: ['--set-json', 'kafka.networkPolicy.allowedAppComponents=[]'],
+        expected: expectedKafkaSpec([]) },
+      { args: ['--set-json', 'kafka.networkPolicy.allowedAppComponents=["operator-client"]'],
+        expected: expectedKafkaSpec(['operator-client']) },
+    ];
+    for (const { args, expected } of cases) {
+      const policies = kafkaPolicies(yamlDocuments(run('helm', [
+        'template', 'falcone', historicalChart, '--namespace', 'falcone-test', ...args,
+      ])));
+      assert.equal(policies.length, expected === null ? 0 : 1, args.join(' '));
+      if (expected !== null) assert.deepEqual(policies[0].spec, expected, args.join(' '));
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+check('custom and empty Kafka allow-lists replace app peers without introducing wildcard peers', () => {
+  for (const appComponents of [['operator-client'], []]) {
+    const objects = yamlDocuments(run('helm', [
+      'template', 'falcone', chart, '--namespace', 'falcone-test',
+      '--set-json', `kafka.networkPolicy.allowedAppComponents=${JSON.stringify(appComponents)}`,
+    ]));
+    const policies = kafkaPolicies(objects);
+    assert.equal(policies.length, 1);
+    assert.deepEqual(policies[0].spec, expectedKafkaSpec(appComponents));
+  }
+});
+
+check('explicit Kafka operator peers and a custom broker port stay within the broker ingress rule', () => {
+  const extraPeers = [{
+    namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'operators' } },
+    podSelector: { matchLabels: { 'app.kubernetes.io/name': 'kafka-probe' } },
+  }];
+  const objects = yamlDocuments(run('helm', [
+    'template', 'falcone', chart, '--namespace', 'falcone-test',
+    '--set-json', `kafka.networkPolicy.extraIngressFrom=${JSON.stringify(extraPeers)}`,
+    '--set', 'kafka.service.port=19092',
+  ]));
+  const policies = kafkaPolicies(objects);
+  assert.equal(policies.length, 1);
+  assert.deepEqual(policies[0].spec,
+    expectedKafkaSpec(['control-plane', 'control-plane-executor'], extraPeers, 19092));
 });
 
 check('every runtime-created exemption is still needed', () => {
