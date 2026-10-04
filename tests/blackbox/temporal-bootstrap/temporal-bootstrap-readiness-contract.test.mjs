@@ -2402,6 +2402,47 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #17: stored defaults predate the observability access settings. A real
+  // --reuse-values upgrade must still render both policies and require login.
+  assert.equal(historical.observability.networkPolicy, undefined);
+  assert.equal(historical.grafana.auth, undefined);
+  assert.equal(historical.grafana.security, undefined);
+  assert.equal(historical.grafana.networkPolicy, undefined);
+  const grafanaDeployment = exactDocuments.find((document) =>
+    document.kind === 'Deployment' && document.metadata.name === `${releaseName}-grafana`);
+  assert.ok(grafanaDeployment, 'historical reuse-values must retain Grafana');
+  const grafanaEnv = grafanaDeployment.spec.template.spec.containers[0].env;
+  for (const [name, value] of Object.entries({
+    GF_AUTH_ANONYMOUS_ENABLED: 'false',
+    GF_AUTH_ANONYMOUS_ORG_ROLE: 'Viewer',
+    GF_SECURITY_ALLOW_EMBEDDING: 'false',
+  })) {
+    assert.equal(grafanaEnv.find((entry) => entry.name === name)?.value, value);
+  }
+  const telemetryPolicies = {};
+  for (const component of ['observability', 'grafana']) {
+    const deployment = exactDocuments.find((document) =>
+      document.kind === 'Deployment' && document.metadata.name === `${releaseName}-${component}`);
+    const policy = exactDocuments.find((document) => document.kind === 'NetworkPolicy'
+      && document.metadata.name === `${releaseName}-${component}-internal-only`);
+    assert.ok(deployment);
+    assert.ok(policy, `historical reuse-values must isolate ${component}`);
+    assert.deepEqual(policy.spec.podSelector.matchLabels, deployment.spec.selector.matchLabels);
+    assert.deepEqual(policy.spec.policyTypes, ['Ingress']);
+    assert.equal(policy.spec.egress, undefined);
+    telemetryPolicies[component] = policy;
+  }
+  assert.deepEqual(telemetryPolicies.grafana.spec.ingress, []);
+  const prometheusService = exactDocuments.find((document) =>
+    document.kind === 'Service' && document.metadata.name === `${releaseName}-observability`);
+  assert.ok(prometheusService);
+  assert.deepEqual(telemetryPolicies.observability.spec.ingress, [{
+    from: [
+      { podSelector: telemetryPolicies.grafana.spec.podSelector },
+      { podSelector: telemetryPolicies.observability.spec.podSelector },
+    ],
+    ports: [{ protocol: 'TCP', port: prometheusService.spec.ports[0].targetPort }],
+  }]);
   const webName = `${releaseName}-temporal-web`;
   const webDeployment = exactDocuments.find((document) =>
     document.kind === 'Deployment' && document.metadata.name === webName);

@@ -6,6 +6,9 @@
 */}}
 {{- $fullname := .Release.Name -}}
 {{- $ns := .Release.Namespace -}}
+{{- /* Historical --reuse-values releases lack these maps; keep the secure defaults. */ -}}
+{{- $anonymous := (.Values.grafana.auth | default dict).anonymous | default dict -}}
+{{- $security := .Values.grafana.security | default dict -}}
 {{- $promUrl := printf "http://%s.%s.svc.cluster.local:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "observability")) $ns (.Values.observability.service.port | default 9090) -}}
 apiVersion: v1
 kind: ConfigMap
@@ -86,9 +89,9 @@ spec:
           securityContext: {{- toYaml .Values.grafana.securityContext | nindent 12 }}
           ports: [{name: http, containerPort: 3000}]
           env:
-            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
-            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Viewer"}
-            - {name: GF_SECURITY_ALLOW_EMBEDDING, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: {{ dig "enabled" false $anonymous | quote }}}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: {{ dig "orgRole" "Viewer" $anonymous | quote }}}
+            - {name: GF_SECURITY_ALLOW_EMBEDDING, value: {{ dig "allowEmbedding" false $security | quote }}}
             - {name: GF_USERS_DEFAULT_THEME, value: "light"}
           readinessProbe: {httpGet: {path: /api/health, port: http}, initialDelaySeconds: 10, periodSeconds: 10}
           resources: {{- toYaml .Values.grafana.resources | nindent 12 }}

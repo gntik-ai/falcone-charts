@@ -1,0 +1,76 @@
+{{- /*
+  Restrict the bundled observability plane to intended clients (#17).
+  Prometheus admits this release's Grafana and Prometheus pods plus explicit peers.
+  Grafana denies ingress unless peers are explicitly configured. Ingress-only policies
+  leave kubelet probes, Kubernetes discovery, DNS and scrape egress working.
+
+  ENFORCEMENT CAVEAT: honored only under a policy-enforcing CNI
+  (Calico/Cilium/OVN-Kubernetes). kind's kindnet does NOT enforce NetworkPolicy;
+  isolation evidence must come from a policy-enforcing staging/OpenShift cluster.
+*/ -}}
+{{- /* Match the aliased dependency context used by component-wrapper, including its
+      name truncation and componentId fallback, rather than guessing the pod name. */ -}}
+{{- $prometheusContext := dict "Values" .Values.observability "Release" .Release "Chart" (dict "Name" "observability") -}}
+{{- /* --reuse-values can omit these new maps. Default only missing enabled keys,
+      so historical releases stay isolated and explicit false is preserved. */ -}}
+{{- $prometheusPolicy := .Values.observability.networkPolicy | default dict -}}
+{{- $grafanaPolicy := .Values.grafana.networkPolicy | default dict -}}
+{{- if dig "enabled" true $prometheusPolicy }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-observability-internal-only
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observability
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "component-wrapper.selectorLabels" $prometheusContext | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        - podSelector:
+            matchLabels:
+              {{- include "component-wrapper.selectorLabels" $prometheusContext | nindent 14 }}
+        {{- with $prometheusPolicy.allowedFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.observability.service.targetPort }}
+{{- end }}
+{{- if dig "enabled" true $grafanaPolicy }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-grafana-internal-only
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  {{- if $grafanaPolicy.allowedFrom }}
+  ingress:
+    - from:
+        {{- toYaml $grafanaPolicy.allowedFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 3000
+  {{- else }}
+  ingress: []
+  {{- end }}
+{{- end }}
