@@ -59,4 +59,29 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $t.frontend.grpcPort }}
+{{- if $t.ui.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "in-falcone.temporal.roleName" (dict "root" $root "role" "web") }}
+  labels:
+    {{- include "in-falcone.temporal.roleLabels" (dict "root" $root "role" "web") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "in-falcone.temporal.roleSelectorLabels" (dict "root" $root "role" "web") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if $t.ui.networkPolicy.allowedFrom }}
+  ingress:
+    - from:
+        {{- toYaml $t.ui.networkPolicy.allowedFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $t.ui.service.targetPort }}
+  {{- else }}
+  ingress: []
+  {{- end }}
 {{- end }}
+{{- end -}}

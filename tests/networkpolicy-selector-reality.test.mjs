@@ -20,6 +20,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
+import { yamlDocuments } from './blackbox/fixtures/blackbox.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const chart = resolve(root, 'charts/in-falcone');
@@ -39,23 +40,13 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
-// Same decoding path the black-box fixtures use — helm output is real YAML, and selector
-// comparison needs structure rather than string matching.
-function yamlDocuments(text) {
-  const script = [
-    'import json, sys, yaml',
-    'docs = [d for d in yaml.safe_load_all(sys.stdin.read()) if d is not None]',
-    'json.dump(docs, sys.stdout, default=str)',
-  ].join('; ');
-  return JSON.parse(run('python3', ['-c', script], { input: text }));
-}
-
 // Every values profile this repo ships. A selector must resolve in the profile that renders it —
 // "it resolves in some other profile" is exactly how #20 survived: tests/e2e stamps `flows-api`
 // on its control plane, so the only suite exercising the path patched the label instead of
 // catching the bug.
 const PROFILES = [
   { label: 'chart defaults', args: [] },
+  { label: 'Temporal UI disabled', args: ['--set', 'temporal.ui.enabled=false'] },
   { label: 'staging', args: ['-f', 'charts/in-falcone/values/staging.yaml'] },
   { label: 'prod', args: ['-f', 'charts/in-falcone/values/prod.yaml'] },
   { label: 'kind', args: ['-f', 'deploy/kind/values-kind.yaml'] },
