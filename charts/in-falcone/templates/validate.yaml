@@ -246,15 +246,7 @@
 {{- if and (kindIs "map" .Values.controlPlane.functionExecutor) (hasKey .Values.controlPlane.functionExecutor "enabled") -}}
   {{- fail "controlPlane.functionExecutor.enabled is no longer supported: function executor RBAC is core" -}}
 {{- end -}}
-{{- $temporalUI := .Values.temporal.ui -}}
-{{- if not (kindIs "map" $temporalUI) -}}
-  {{- fail "temporal.ui must be an object with boolean enabled and disableWriteActions settings" -}}
-{{- end -}}
-{{- range $key := list "enabled" "disableWriteActions" -}}
-  {{- if or (not (hasKey $temporalUI $key)) (not (kindIs "bool" (index $temporalUI $key))) -}}
-    {{- fail (printf "temporal.ui.%s must be a boolean (true or false)" $key) -}}
-  {{- end -}}
-{{- end -}}
+{{- $temporalUI := include "in-falcone.temporal.uiSettings" . | fromJson -}}
 {{- if not (kindIs "bool" .Values.temporal.networkPolicy.enabled) -}}
   {{- fail "temporal.networkPolicy.enabled must be a boolean (true or false)" -}}
 {{- end -}}

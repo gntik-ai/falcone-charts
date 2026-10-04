@@ -53,6 +53,47 @@ test('write actions can be opted into while keeping the default-deny UI policy',
   assert.deepEqual(web(objects, 'NetworkPolicy'), web(defaults.objects, 'NetworkPolicy'))
 })
 
+test('historical values without UI settings retain the secure defaults', () => {
+  // null removes these keys during Helm coalescing, matching old --reuse-values defaults.
+  const { objects } = render(umbrellaChart, [
+    '--set', 'temporal.ui.enabled=null',
+    '--set', 'temporal.ui.disableWriteActions=null',
+    '--set', 'temporal.ui.networkPolicy=null',
+  ])
+  for (const kind of ['Deployment', 'Service', 'NetworkPolicy']) {
+    assert.deepEqual(web(objects, kind), web(defaults.objects, kind))
+  }
+})
+
+test('partially migrated UI settings preserve explicit false values', () => {
+  const writable = render(umbrellaChart, [
+    '--set', 'temporal.ui.enabled=null',
+    '--set', 'temporal.ui.disableWriteActions=false',
+    '--set', 'temporal.ui.networkPolicy=null',
+  ])
+  assert.equal(writeActionsValue(writable.objects), 'false')
+  assert.deepEqual(web(writable.objects, 'NetworkPolicy'), web(defaults.objects, 'NetworkPolicy'))
+
+  const disabled = render(umbrellaChart, [
+    '--set', 'temporal.ui.enabled=false',
+    '--set', 'temporal.ui.disableWriteActions=null',
+    '--set', 'temporal.ui.networkPolicy=null',
+  ])
+  for (const kind of ['Deployment', 'Service', 'NetworkPolicy']) {
+    assert.equal(web(disabled.objects, kind), undefined)
+  }
+  assert.deepEqual(otherTemporalDocuments(disabled.text), otherTemporalDocuments(defaults.text))
+})
+
+test('historical UI settings cannot bypass the write-action safety gate', () => {
+  const result = run('helm', ['template', 'falcone-bbx', umbrellaChart,
+    '--set', 'temporal.ui.enabled=null',
+    '--set', 'temporal.ui.disableWriteActions=false',
+    '--set', 'temporal.networkPolicy.enabled=false'])
+  assertFailure(result, 'historical write-enabled UI without NetworkPolicy')
+  assert.match(combined(result), /write actions require the UI to be NetworkPolicy-restricted/)
+})
+
 test('allowedFrom admits only the configured peers on the UI target port', () => {
   const peers = [{
     namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'operators' } },

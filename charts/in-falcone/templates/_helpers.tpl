@@ -184,6 +184,31 @@ app.kubernetes.io/name: temporal-{{ .role }}
 temporal.io/role: {{ .role }}
 {{- end -}}
 
+{{/* Helm --reuse-values keeps historical defaults without the new UI keys.
+     Default only absent keys, preserving explicit false and rejecting invalid types. */}}
+{{- define "in-falcone.temporal.uiSettings" -}}
+{{- $ui := .Values.temporal.ui -}}
+{{- if not (kindIs "map" $ui) -}}
+  {{- fail "temporal.ui must be an object with boolean enabled and disableWriteActions settings" -}}
+{{- end -}}
+{{- $ui = deepCopy $ui -}}
+{{- range $key := list "enabled" "disableWriteActions" -}}
+  {{- if hasKey $ui $key -}}
+    {{- if not (kindIs "bool" (index $ui $key)) -}}
+      {{- fail (printf "temporal.ui.%s must be a boolean (true or false)" $key) -}}
+    {{- end -}}
+  {{- else -}}
+    {{- $_ := set $ui $key true -}}
+  {{- end -}}
+{{- end -}}
+{{- if not (hasKey $ui "networkPolicy") -}}
+  {{- $_ := set $ui "networkPolicy" (dict "allowedFrom" (list)) -}}
+{{- else if not (kindIs "map" $ui.networkPolicy) -}}
+  {{- fail "temporal.ui.networkPolicy must be an object with an allowedFrom peer list" -}}
+{{- end -}}
+{{- $ui | toJson -}}
+{{- end -}}
+
 {{- define "in-falcone.normalizeRepository" -}}
 {{- $repository := .repository -}}
 {{- $globalRegistry := trimSuffix "/" (default "" .Values.global.imageRegistry) -}}

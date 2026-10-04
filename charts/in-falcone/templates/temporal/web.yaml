@@ -1,6 +1,6 @@
 {{- $root := . -}}
 {{- $t := .Values.temporal -}}
-{{- $ui := $t.ui -}}
+{{- $ui := include "in-falcone.temporal.uiSettings" . | fromJson -}}
 {{- if $ui.enabled -}}
 {{- $webPodSecurity := deepCopy (default (dict) $t.podSecurityContext) -}}
 {{- $webContainerSecurity := deepCopy (default (dict) $t.securityContext) -}}

@@ -1,5 +1,6 @@
 {{- $root := . -}}
 {{- $t := .Values.temporal -}}
+{{- $ui := include "in-falcone.temporal.uiSettings" . | fromJson -}}
 {{- /*
   ClusterIP-only Services for every Temporal role + the Web UI. NO LoadBalancer or
   NodePort type is ever set, and no nodePort is pinned — Temporal is internal-only
@@ -34,7 +35,7 @@ spec:
       targetPort: {{ $s.membership }}
       protocol: TCP
 {{- end }}
-{{- if $t.ui.enabled }}
+{{- if $ui.enabled }}
 ---
 apiVersion: v1
 kind: Service

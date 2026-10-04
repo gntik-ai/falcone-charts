@@ -2402,6 +2402,25 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  const webName = `${releaseName}-temporal-web`;
+  const webDeployment = exactDocuments.find((document) =>
+    document.kind === 'Deployment' && document.metadata.name === webName);
+  assert.ok(webDeployment, 'historical reuse-values must keep the UI enabled by default');
+  const webContainer = webDeployment.spec.template.spec.containers.find((container) =>
+    container.name === 'temporal-web');
+  assert.equal(webContainer.env.find((entry) =>
+    entry.name === 'TEMPORAL_DISABLE_WRITE_ACTIONS').value, 'true');
+  assert.ok(exactDocuments.some((document) =>
+    document.kind === 'Service' && document.metadata.name === webName));
+  const webPolicy = exactDocuments.find((document) =>
+    document.kind === 'NetworkPolicy' && document.metadata.name === webName);
+  assert.ok(webPolicy, 'historical reuse-values must default to restricted UI ingress');
+  assert.deepEqual(webPolicy.spec.policyTypes, ['Ingress']);
+  assert.deepEqual(webPolicy.spec.ingress, []);
+  assert.deepEqual(webPolicy.spec.podSelector.matchLabels, webDeployment.spec.selector.matchLabels);
+  for (const [key, value] of Object.entries(webPolicy.spec.podSelector.matchLabels)) {
+    assert.equal(webDeployment.spec.template.metadata.labels[key], value);
+  }
   const identityRules = exactDocuments.filter((document) => document.kind === 'Ingress')
     .flatMap((document) => document.spec.rules ?? [])
     .filter((rule) => rule.host === historical.publicSurface.hostnames.identity)
