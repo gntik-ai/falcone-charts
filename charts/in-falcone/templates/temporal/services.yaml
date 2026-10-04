@@ -1,5 +1,6 @@
 {{- $root := . -}}
 {{- $t := .Values.temporal -}}
+{{- $ui := include "in-falcone.temporal.uiSettings" . | fromJson -}}
 {{- /*
   ClusterIP-only Services for every Temporal role + the Web UI. NO LoadBalancer or
   NodePort type is ever set, and no nodePort is pinned — Temporal is internal-only
@@ -34,6 +35,7 @@ spec:
       targetPort: {{ $s.membership }}
       protocol: TCP
 {{- end }}
+{{- if $ui.enabled }}
 ---
 apiVersion: v1
 kind: Service
@@ -42,7 +44,8 @@ metadata:
   labels:
     {{- include "in-falcone.temporal.roleLabels" (dict "root" $root "role" "web") | nindent 4 }}
 spec:
-  # ClusterIP-only: operator access is via `kubectl port-forward svc/<release>-temporal-web 8080:8080`.
+  # NetworkPolicy restricts UI ingress; ClusterIP alone does not limit pod access.
+  # Operators can use `kubectl port-forward svc/<release>-temporal-web 8080:8080`.
   type: ClusterIP
   selector:
     {{- include "in-falcone.temporal.roleSelectorLabels" (dict "root" $root "role" "web") | nindent 4 }}
@@ -51,3 +54,4 @@ spec:
       port: {{ $t.ui.service.port }}
       targetPort: {{ $t.ui.service.targetPort }}
       protocol: TCP
+{{- end -}}

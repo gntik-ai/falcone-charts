@@ -2266,10 +2266,22 @@
           "type": "object",
           "properties": {
             "enabled": {
-              "type": "boolean",
-              "enum": [
-                true
-              ]
+              "type": "boolean"
+            },
+            "disableWriteActions": {
+              "type": "boolean"
+            },
+            "networkPolicy": {
+              "type": "object",
+              "properties": {
+                "allowedFrom": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              },
+              "additionalProperties": true
             }
           },
           "additionalProperties": true

@@ -5035,8 +5035,8 @@ openbao:
 # ---------------------------------------------------------------------------
 # Temporal — durable workflow (flows) engine. INTERNAL-ONLY platform component.
 # ADR-11: shared namespace + custom search attributes for tenancy; PostgreSQL SQL
-# visibility (NO Elasticsearch); Web UI operator-only (kubectl port-forward, never
-# tenant-exposed). Always installed as part of the core baseline.
+# visibility (NO Elasticsearch); Web UI ingress is denied by default by NetworkPolicy
+# for operator port-forward access. Server roles are part of the core baseline.
 #
 # NOTE ON RENDERING (deviation from the original design.md component-wrapper sketch):
 # Temporal is a four-role server (frontend/history/matching/worker) plus a Web UI,
@@ -5045,7 +5045,8 @@ openbao:
 # release alias and therefore cannot express four role Deployments. Temporal is
 # instead rendered by first-class umbrella templates under
 # templates/temporal/** (the same approach used by the platform bootstrap Job),
-# rendered unconditionally. Image references still flow through the shared
+# server roles rendered unconditionally; the Web UI can be disabled. Image references
+# still flow through the shared
 # `component-wrapper.normalizeRepository` helper so `global.imageRegistry` (Harbor)
 # rewriting and the airgap path keep working.
 temporal:
@@ -5081,8 +5082,16 @@ temporal:
       tag: "1.31.1"
       pullPolicy: IfNotPresent
 
-  # Web UI image — deployed but NEVER exposed externally (operator port-forward only).
+  # Web UI: NetworkPolicy denies ingress by default; ClusterIP alone does not restrict
+  # access. Operators use port-forward or explicitly admit trusted peers below.
   ui:
+    enabled: true
+    # Enabling writes requires temporal.networkPolicy.enabled=true.
+    disableWriteActions: true
+    networkPolicy:
+      # Kubernetes NetworkPolicy peers (podSelector and/or namespaceSelector), e.g.
+      # an authenticated operator proxy. Admitted peers have unauthenticated read access.
+      allowedFrom: []
     image:
       repository: docker.io/temporalio/ui
       tag: "2.51.0"
