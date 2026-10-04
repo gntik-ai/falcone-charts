@@ -86,9 +86,9 @@ spec:
           securityContext: {{- toYaml .Values.grafana.securityContext | nindent 12 }}
           ports: [{name: http, containerPort: 3000}]
           env:
-            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
-            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Viewer"}
-            - {name: GF_SECURITY_ALLOW_EMBEDDING, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: {{ .Values.grafana.auth.anonymous.enabled | quote }}}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: {{ .Values.grafana.auth.anonymous.orgRole | quote }}}
+            - {name: GF_SECURITY_ALLOW_EMBEDDING, value: {{ .Values.grafana.security.allowEmbedding | quote }}}
             - {name: GF_USERS_DEFAULT_THEME, value: "light"}
           readinessProbe: {httpGet: {path: /api/health, port: http}, initialDelaySeconds: 10, periodSeconds: 10}
           resources: {{- toYaml .Values.grafana.resources | nindent 12 }}

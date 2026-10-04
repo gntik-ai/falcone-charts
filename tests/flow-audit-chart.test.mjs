@@ -9,7 +9,8 @@ import { withPriorTemporalWeb } from './blackbox/fixtures/temporal-web-snapshot.
 
 // #980: include tenant audience wiring and the read-only config-copy root filesystem, preserving main's pod identities.
 // #45: include the reviewed root-path identity repair before subtracting only flow-audit additions.
-const priorBaseline = 'b137cfcd23e41538bed975ac7cf1567eb6dacc0be363b6a8d0df95d084fbaa13'
+// #17: retain the secured observability defaults when subtracting flow-audit additions.
+const priorBaseline = 'ec907929ac41d1e4c8d5baa578edb889ba63140f48db28906d71e2e19cebeb39'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',

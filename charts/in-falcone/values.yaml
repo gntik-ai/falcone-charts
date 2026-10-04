@@ -3256,6 +3256,18 @@ gatewaySharedSecret:
 grafana:
   # Grafana for Falcone dashboards (#499). Provisioned with a Prometheus datasource (the
   # observability service) + the Falcone dashboards in templates/grafana.yaml.
+  auth:
+    anonymous:
+      # Anonymous access requires an explicit opt-in; operators must log in by default.
+      enabled: false
+      orgRole: Viewer
+  security:
+    allowEmbedding: false
+  networkPolicy:
+    # Ingress only; kindnet does not enforce NetworkPolicy. Use a policy-enforcing CNI.
+    enabled: true
+    # Kubernetes NetworkPolicy peers for trusted clients. Empty means deny all ingress.
+    allowedFrom: []
   image:
     repository: docker.io/grafana/grafana
     tag: 11.4.0
@@ -3277,6 +3289,11 @@ grafana:
     limits: { cpu: 500m, memory: 512Mi }
 
 observability:
+  networkPolicy:
+    # Ingress only; scrape and DNS egress stay unrestricted. kindnet does not enforce this.
+    enabled: true
+    # Additional Kubernetes peers besides this release's Grafana and Prometheus pods.
+    allowedFrom: []
   wrapper:
     componentId: observability
     workload:
@@ -3293,7 +3310,6 @@ observability:
     - --config.file=/etc/prometheus/prometheus.yml
     - --storage.tsdb.path=/prometheus
     - --storage.tsdb.retention.time=15d
-    - --web.enable-lifecycle
   serviceAccount:
     create: true
     name: ""
