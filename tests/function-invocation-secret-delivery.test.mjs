@@ -52,7 +52,7 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
           const entries = env.filter((entry) => entry.name === name);
           assert.equal(entries.length, 1, name);
           assert.deepEqual(entries[0], { name, valueFrom: {
-            secretKeyRef: { name: secretName, key, optional: false },
+            secretKeyRef: { name: secretName, key, optional: true },
           } });
         }
       } else {
@@ -74,7 +74,7 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   }
 }
 
-test('signer delivery is control-plane-only in every shipped profile', () => {
+test('signer delivery is control-plane-only and missing keys permit startup in every shipped profile', () => {
   const profiles = [
     { args: [] }, { args: ['--set', 'temporal.ui.enabled=false'] },
     { args: ['-f', 'charts/in-falcone/values/staging.yaml'], managed: false },

@@ -65,11 +65,20 @@ the new target Secret; no pre-created Secret or inline-key fallback is needed.
 It follows existing post-install/post-upgrade hook ordering with bundled ESO,
 and is an ordinary tracked resource with an administrator-owned ESO controller.
 Confirm reconciliation using status only, without retrieving Secret contents.
-The control-plane application's three required Secret references populate
+The control-plane application's three optional Secret references populate
 `FN_INVOCATION_PRIVATE_KEY`, `FN_INVOCATION_KEY_ID` and `FN_INVOCATION_JWKS`.
 No other chart container, init container, shared ConfigMap or function pod
-receives this Secret. Missing provisioning prevents control-plane startup;
-it never disables runtime enforcement or permits unsigned invocations.
+receives this Secret. Missing provisioning or reconciliation leaves the signer
+environment absent and allows the control plane's other APIs to start, including
+profiles without functions/Knative. Function deploys are rejected and invocations
+return 503 until signing is configured; runtime enforcement remains enabled.
+Optional references avoid a Helm `--wait` deadlock before the managed ESO
+post-install/post-upgrade hooks run. The chart does not seed this OpenBao record;
+signer provisioning remains a prerequisite for function availability.
+
+After ESO has reconciled, restart the control plane through the approved rollout
+to populate its environment before deploying or re-rolling functions. Check ESO
+reconciliation and rollout status without retrieving Secret contents.
 
 Secret-backed environment variables do not refresh in running containers.
 For rotation, publish overlapping old/new public keys first, restart the control

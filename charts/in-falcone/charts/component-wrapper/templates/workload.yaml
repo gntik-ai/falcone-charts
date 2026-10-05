@@ -343,13 +343,16 @@ spec:
           {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer }}
           env:
             {{- if $isFunctionSigner }}
+            {{- /* ESO reconciles after Helm --wait in managed mode. Missing signer
+                   keys must not block control-plane startup; the application
+                   rejects function deploy/invoke until signing is configured. */}}
             {{- range $entry := list (dict "name" "FN_INVOCATION_PRIVATE_KEY" "key" "private-key") (dict "name" "FN_INVOCATION_KEY_ID" "key" "key-id") (dict "name" "FN_INVOCATION_JWKS" "key" "jwks") }}
             - name: {{ $entry.name }}
               valueFrom:
                 secretKeyRef:
                   name: {{ $functionInvocationSecret | quote }}
                   key: {{ $entry.key | quote }}
-                  optional: false
+                  optional: true
             {{- end }}
             {{- end }}
             {{- if $isControlPlane }}

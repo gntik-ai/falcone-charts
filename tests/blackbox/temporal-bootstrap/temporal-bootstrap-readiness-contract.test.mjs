@@ -2419,7 +2419,7 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     const entries = signerContainer.env.filter((entry) => entry.name === name);
     assert.equal(entries.length, 1);
     assert.deepEqual(entries[0].valueFrom.secretKeyRef,
-      { name: 'in-falcone-function-invocation', key, optional: false });
+      { name: 'in-falcone-function-invocation', key, optional: true });
   }
   // #972: real stored values predate function isolation; upgrades still render it.
   assert.equal(historical.functions, undefined);
