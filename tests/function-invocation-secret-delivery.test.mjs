@@ -21,7 +21,9 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   const external = externals[0];
   assert.deepEqual(external.spec.secretStoreRef, { name: 'openbao-backend', kind: 'ClusterSecretStore' });
   assert.equal(external.spec.target.name, secretName);
-  assert.equal(external.spec.target.creationPolicy, 'Owner');
+  assert.equal(external.spec.target.creationPolicy, 'Orphan',
+    'replacing a managed ESO hook must not garbage-collect the signer Secret');
+  assert.equal(external.spec.target.deletionPolicy, 'Retain');
   assert.equal(external.spec.target.immutable, false);
   assert.equal(external.spec.refreshInterval, '1h');
   assert.deepEqual(external.spec.data, Object.values(bindings).map((key) => ({
@@ -98,6 +100,15 @@ test('adopted ESO keeps signer ExternalSecret tracked without hooks', () => {
     '--set', 'global.externalSecrets.operatorNamespace=external-eso',
     '--set', 'global.externalSecrets.operatorServiceAccount=external-secrets',
   ]).objects, { managed: false });
+});
+
+test('managed ESO upgrade hooks retain the signer Secret without an ownerReference', () => {
+  verify(render(umbrellaChart, [
+    '--is-upgrade', '--set', 'deployment.upgrade.currentVersion=0.3.1',
+    '--set', 'global.webhookDatabase.migration.backupVerified=true',
+    '--set', 'global.webhookDatabase.migration.parityVerified=true',
+    '--set', 'global.webhookDatabase.migration.backupReference=bbx-function-signer',
+  ]).objects);
 });
 
 test('network policy rollback does not disable signer delivery', () => {

@@ -72,8 +72,11 @@ Never put these contents in Helm values, Git, logs or function definitions.
 values use the same defaults during `helm upgrade --reuse-values`.
 
 The chart's `platform-function-invocation` ExternalSecret uses the existing
-`openbao-backend` ClusterSecretStore and ESO refresh interval. ESO owns and creates
-the new target Secret; no pre-created Secret or inline-key fallback is needed.
+`openbao-backend` ClusterSecretStore and ESO refresh interval. ESO creates and
+refreshes the target Secret with `creationPolicy: Orphan` and
+`deletionPolicy: Retain`; no pre-created Secret or inline-key fallback is needed.
+The target has no ExternalSecret owner reference, so replacing the managed hook
+on upgrades cannot garbage-collect signing keys during a control-plane rollout.
 It follows existing post-install/post-upgrade hook ordering with bundled ESO,
 and is an ordinary tracked resource with an administrator-owned ESO controller.
 Confirm reconciliation using status only, without retrieving Secret contents.

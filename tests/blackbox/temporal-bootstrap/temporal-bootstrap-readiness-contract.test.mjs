@@ -2408,6 +2408,9 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     && document.metadata.name === 'platform-function-invocation');
   assert.ok(signerExternal, 'historical reuse-values must deliver invocation keys through ESO');
   assert.equal(signerExternal.spec.target.name, 'in-falcone-function-invocation');
+  assert.equal(signerExternal.spec.target.creationPolicy, 'Orphan',
+    'reuse-values hook replacement must preserve the signer Secret');
+  assert.equal(signerExternal.spec.target.deletionPolicy, 'Retain');
   const signerSeed = exactDocuments.find((document) => document.kind === 'Job'
     && document.metadata.name === 'openbao-function-invocation-seed');
   assert.ok(signerSeed, 'historical reuse-values must provision the missing signer before ESO');

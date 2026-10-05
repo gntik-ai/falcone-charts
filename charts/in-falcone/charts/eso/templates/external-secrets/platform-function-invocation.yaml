@@ -19,8 +19,9 @@ spec:
   secretStoreRef: { name: openbao-backend, kind: ClusterSecretStore }
   target:
     name: {{ $invocation.secretName | default "in-falcone-function-invocation" | quote }}
-    # This is a new ESO-owned Secret; Merge would require a pre-existing target.
-    creationPolicy: Owner
+    # ESO creates the target without an ownerReference so replacing this hook on
+    # upgrades cannot garbage-collect the signer Secret during a rollout.
+    creationPolicy: Orphan
     deletionPolicy: Retain
     immutable: false
   data:
