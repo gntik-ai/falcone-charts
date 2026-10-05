@@ -90,6 +90,11 @@
 {{- $webhookDatabaseCredentials := default (dict) $webhookDatabase.credentials -}}
 {{- $webhookDatabasePrincipals := default (dict) $webhookDatabase.principals -}}
 {{- $isControlPlane := and (eq (.Values.wrapper.componentId | default "") "control-plane") (gt (len $webhookKey) 0) -}}
+{{- /* #972: signer configuration is never shared through envFrom or runtime
+       ConfigMaps. Defaults also cover Helm releases predating this contract. */ -}}
+{{- $isFunctionSigner := eq (.Values.wrapper.componentId | default "") "control-plane" -}}
+{{- $functionInvocation := default (dict) .Values.global.functionInvocation -}}
+{{- $functionInvocationSecret := $functionInvocation.secretName | default "in-falcone-function-invocation" -}}
 {{- $databaseGateSecurityContext := deepCopy (default (dict) $webhookDatabase.securityContext) -}}
 {{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
   {{- $_ := unset $databaseGateSecurityContext "runAsUser" -}}
@@ -335,8 +340,18 @@ spec:
           ports:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $knativeRuntimeConsumer }}
+          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer }}
           env:
+            {{- if $isFunctionSigner }}
+            {{- range $entry := list (dict "name" "FN_INVOCATION_PRIVATE_KEY" "key" "private-key") (dict "name" "FN_INVOCATION_KEY_ID" "key" "key-id") (dict "name" "FN_INVOCATION_JWKS" "key" "jwks") }}
+            - name: {{ $entry.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $functionInvocationSecret | quote }}
+                  key: {{ $entry.key | quote }}
+                  optional: false
+            {{- end }}
+            {{- end }}
             {{- if $isControlPlane }}
             - name: WEBHOOK_SIGNING_KEY
               valueFrom:

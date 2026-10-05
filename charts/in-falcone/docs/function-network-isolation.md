@@ -47,3 +47,34 @@ function host and A's activation total remains zero. A legitimate public-API
 invocation must succeed from cold start and write exactly one activation. A
 direct unauthenticated POST to the caller's own function must be denied by the
 network or return 401. Repository render tests do not establish this live evidence.
+
+## Invocation signer delivery
+
+Before releasing the paired source, provision the OpenBao KV v2 record
+`secret/platform/functions/invocation` through the approved credential workflow.
+Its properties are `private-key` (Ed25519 PKCS#8 PEM), `key-id` (the active signing
+key's `kid`) and `jwks` (a JSON public-only Ed25519 JWKS containing that `kid`).
+Never put these contents in Helm values, Git, logs or function definitions.
+`global.functionInvocation.remoteKey` changes the KV path within `platform/`;
+`global.functionInvocation.secretName` changes the target Secret name. Missing
+values use the same defaults during `helm upgrade --reuse-values`.
+
+The chart's `platform-function-invocation` ExternalSecret uses the existing
+`openbao-backend` ClusterSecretStore and ESO refresh interval. ESO owns and creates
+the new target Secret; no pre-created Secret or inline-key fallback is needed.
+It follows existing post-install/post-upgrade hook ordering with bundled ESO,
+and is an ordinary tracked resource with an administrator-owned ESO controller.
+Confirm reconciliation using status only, without retrieving Secret contents.
+The control-plane application's three required Secret references populate
+`FN_INVOCATION_PRIVATE_KEY`, `FN_INVOCATION_KEY_ID` and `FN_INVOCATION_JWKS`.
+No other chart container, init container, shared ConfigMap or function pod
+receives this Secret. Missing provisioning prevents control-plane startup;
+it never disables runtime enforcement or permits unsigned invocations.
+
+Secret-backed environment variables do not refresh in running containers.
+For rotation, publish overlapping old/new public keys first, restart the control
+plane through the approved rollout and re-roll owned function revisions through
+the existing PATCH flow. Then switch the active private key and `key-id`, restart
+the control plane, and retain the previous public key until old revisions and
+in-flight invocations have drained. Runtime image publication and promotion,
+signer provisioning and live cold-start/CNI evidence remain release gates.

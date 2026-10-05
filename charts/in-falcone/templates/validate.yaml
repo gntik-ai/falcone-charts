@@ -67,6 +67,40 @@
   {{- end -}}
 {{- end -}}
 {{- $components := list "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" -}}
+{{- $functionInvocation := .Values.global.functionInvocation | default dict -}}
+{{- range $key, $_ := $functionInvocation -}}
+  {{- if not (has $key (list "secretName" "remoteKey")) -}}
+    {{- fail "global.functionInvocation accepts Secret/OpenBao references only, never key material" -}}
+  {{- end -}}
+{{- end -}}
+{{- $functionSecretName := $functionInvocation.secretName | default "in-falcone-function-invocation" -}}
+{{- if or (gt (len $functionSecretName) 253) (not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $functionSecretName)) -}}
+  {{- fail "global.functionInvocation.secretName must be a DNS subdomain name" -}}
+{{- end -}}
+{{- $functionRemoteKey := $functionInvocation.remoteKey | default "platform/functions/invocation" -}}
+{{- if not (regexMatch "^platform/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$" $functionRemoteKey) -}}
+  {{- fail "global.functionInvocation.remoteKey must be a platform OpenBao KV path" -}}
+{{- end -}}
+{{- $functionEnvNames := list "FN_INVOCATION_PRIVATE_KEY" "FN_INVOCATION_KEY_ID" "FN_INVOCATION_JWKS" -}}
+{{- range $componentName := $components -}}
+  {{- $component := index $.Values $componentName | default dict -}}
+  {{- range $entry := ($component.env | default list) -}}
+    {{- if has ($entry.name | default "") $functionEnvNames -}}
+      {{- fail "component env must not override reserved FN_INVOCATION entries; configure global.functionInvocation references only" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $inline := dig "config" "inline" dict $component -}}
+  {{- range $name := $functionEnvNames -}}
+    {{- if hasKey $inline $name -}}
+      {{- fail "component config.inline must not define reserved FN_INVOCATION entries; configure global.functionInvocation references only" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- range $entry := (dig "transportSecurity" "env" list .Values.global) -}}
+  {{- if has ($entry.name | default "") $functionEnvNames -}}
+    {{- fail "global.transportSecurity.env must not define reserved FN_INVOCATION entries; configure global.functionInvocation references only" -}}
+  {{- end -}}
+{{- end -}}
 {{- $coreServiceAliases := list "bootstrap" "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "seaweedfs" "grafana" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" "eso" "openbao" "temporal" "mcp" -}}
 {{- $supportedExposureKinds := list "Ingress" "LoadBalancer" "Route" -}}
 {{- $webhookKey := .Values.global.webhookSigningKey -}}

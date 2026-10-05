@@ -32,6 +32,13 @@ global:
     # Exact controller ServiceAccount used only for TokenRequest in externally
     # managed mode. Falcone never creates or mutates this identity.
     operatorServiceAccount: ""
+  # References only: provision an Ed25519 private-key (PKCS#8 PEM), key-id,
+  # and public-only jwks in OpenBao KV v2 before enabling the paired source.
+  # ESO delivers all three atomically; only the control-plane container consumes
+  # this Secret. Function revisions receive only the public JWKS from that app.
+  functionInvocation:
+    secretName: in-falcone-function-invocation
+    remoteKey: platform/functions/invocation
   # One immutable SeaweedFS image contract is inherited by the vendored
   # data-plane workloads and by control-plane-created IAM Jobs.
   seaweedfs:

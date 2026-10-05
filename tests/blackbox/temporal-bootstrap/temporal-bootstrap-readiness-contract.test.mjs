@@ -2402,6 +2402,25 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #972: signer references must also survive real pre-contract stored values.
+  assert.equal(historical.global.functionInvocation, undefined);
+  const signerExternal = exactDocuments.find((document) => document.kind === 'ExternalSecret'
+    && document.metadata.name === 'platform-function-invocation');
+  assert.ok(signerExternal, 'historical reuse-values must deliver invocation keys through ESO');
+  assert.equal(signerExternal.spec.target.name, 'in-falcone-function-invocation');
+  const signerDeployment = exactDocuments.find((document) => document.kind === 'Deployment'
+    && document.metadata.name === `${releaseName}-control-plane`);
+  const signerContainer = signerDeployment?.spec.template.spec.containers
+    .find((container) => container.name === 'control-plane');
+  assert.ok(signerContainer, 'historical reuse-values must retain the function signer');
+  for (const [name, key] of Object.entries({
+    FN_INVOCATION_PRIVATE_KEY: 'private-key', FN_INVOCATION_KEY_ID: 'key-id', FN_INVOCATION_JWKS: 'jwks',
+  })) {
+    const entries = signerContainer.env.filter((entry) => entry.name === name);
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0].valueFrom.secretKeyRef,
+      { name: 'in-falcone-function-invocation', key, optional: false });
+  }
   // #972: real stored values predate function isolation; upgrades still render it.
   assert.equal(historical.functions, undefined);
   const functionPolicies = exactDocuments.filter((document) => document.kind === 'NetworkPolicy'
