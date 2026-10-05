@@ -251,6 +251,7 @@ test('staging standalone, bootstrap and executor use every configured verifier s
   const standalone = yamlDocuments(config.data['apisix.yaml'])[0]
   const verifier = route.plugins['issuer-jwks-auth']
   assert.deepEqual(standalone.routes.find((entry) => String(entry.id) === '2006').plugins['issuer-jwks-auth'], verifier)
+  assert.deepEqual(standalone.routes.find((entry) => String(entry.id) === '2005-data').plugins['issuer-jwks-auth'], verifier)
   assert.deepEqual(verifier, {
     issuer_base_url: 'https://iam.example.test/auth', jwks_base_url: 'http://keycloak.internal:8080',
     platform_realm: 'custom-platform', audience: 'custom-api', tenant_audience: 'custom-data-api',
@@ -268,7 +269,7 @@ test('staging standalone, bootstrap and executor use every configured verifier s
   assert.equal(policyVerifier.jwksBaseUrl, verifier.jwks_base_url)
 
   const canonical = yamlDocuments(readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8'))[0]
-  const withoutBearerRoute = (routes) => routes.filter((entry) => String(entry.id) !== '2006')
+  const withoutBearerRoute = (routes) => routes.filter((entry) => !['2006', '2005-data'].includes(String(entry.id)))
   assert.deepEqual(withoutBearerRoute(standalone.routes), withoutBearerRoute(canonical.routes.map((entry) =>
     JSON.parse(JSON.stringify(entry).replaceAll('.falcone.svc.cluster.local', '.falcone-bbx.svc.cluster.local')))))
 })
@@ -334,7 +335,7 @@ test('pre-verifier values resolve enforced defaults from the stored OIDC issuer'
   assert.equal(env.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'true')
 })
 
-test('staging standalone routes preserve the recorded pre-980 routes except reviewed Mongo and Keycloak repairs', () => {
+test('staging standalone routes preserve the recorded pre-980 routes except reviewed Mongo, Postgres and Keycloak repairs', () => {
   const renderedStaging = run('helm', [
     'template', 'falcone', umbrellaChart, '--namespace', 'in-falcone-staging',
     '-f', `${umbrellaChart}/values/staging.yaml`,
@@ -349,6 +350,9 @@ test('staging standalone routes preserve the recorded pre-980 routes except revi
   // The operator reports that the live ConfigMap is this kind route table plus
   // the hand-applied llmwiki route. That live-only route is deliberately absent.
   const canonical = readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8')
+  const postgresData = canonical.match(/^  - id: "2005-data"\n[\s\S]*?(?=^  - id: "2006"\n)/gm)
+  assert.equal(postgresData?.length, 1, 'only one reviewed Postgres data route may be added')
+  const withoutPostgresData = canonical.replace(postgresData[0], '')
   const recordedHash = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/mongo-staging-routes.sha256'), 'utf8').split(' ')[0]
   const oldComment = '# falls through to the JWT route -> control-plane.'
   const currentComment = '# falls through to the JWT route (Mongo -> executor).'
@@ -361,13 +365,13 @@ test('staging standalone routes preserve the recorded pre-980 routes except revi
   assert.ok(canonical.includes(tenantAudience), 'canonical kind route must enforce the tenant audience')
   assert.equal(canonical.split(rootIdentity).length, 2, 'canonical identity must use root realm paths exactly once')
   assert.equal(baseline.split(oldIdentity).length, 2, 'recorded identity delta must be bounded to route 1002')
-  assert.equal(sha256(canonical.replace(tenantAudience, '').replace(credentialRemoval, '').replace(currentComment, oldComment)
+  assert.equal(sha256(withoutPostgresData.replace(tenantAudience, '').replace(credentialRemoval, '').replace(currentComment, oldComment)
     .replace(rootIdentity, oldIdentity)), recordedHash,
-    'canonical snapshot permits only reviewed Mongo deltas and the root-path Keycloak route repair')
+    'canonical snapshot permits only reviewed Mongo deltas, Postgres data route and root-path Keycloak repair')
   const current = canonical
     .replaceAll('.falcone.svc.cluster.local', '.in-falcone-staging.svc.cluster.local')
-    .replace('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai"')
-    .replace('enforce_tenant_audience: true', 'enforce_tenant_audience: false')
+    .replaceAll('issuer_base_url: "http://falcone-keycloak:8080"', 'issuer_base_url: "https://iam.baas.musematic.ai"')
+    .replaceAll('enforce_tenant_audience: true', 'enforce_tenant_audience: false')
   const route2006 = (routes) => {
     const match = routes.match(/^  - id: "2006"\n[\s\S]*?(?=^  - id: "2007")/m)
     assert.ok(match, 'route 2006 must be bounded by route 2007')
@@ -375,6 +379,7 @@ test('staging standalone routes preserve the recorded pre-980 routes except revi
   }
   const expected = baseline.replace(route2006(baseline), route2006(current)).replace(oldComment, currentComment)
     .replace(oldIdentity, rootIdentity)
+    .replace('  - id: "2006"\n', current.match(/^  - id: "2005-data"\n[\s\S]*?(?=^  - id: "2006"\n)/m)[0] + '  - id: "2006"\n')
   assert.notEqual(route2006(baseline), route2006(current), 'route 2006 must change')
   assert.equal(config.data['apisix.yaml'].trim(), expected.trim())
   assert.doesNotMatch(config.data['apisix.yaml'], /llmwiki-s2-mongo-jwt/)
