@@ -63,18 +63,37 @@ for (const [profile, overlay] of [
     assert.ok(bearer.priority < routeById(table, '2005-key').priority)
     for (const [method, suffix] of operations) {
       const uri = `${tablePath}/${suffix}`
-      for (const headers of [{}, { authorization: 'Bearer invalid' }, { 'x-api-key': 'flc_test_only' }]) {
+      for (const headers of [{}, { authorization: 'Bearer test-token' }, { authorization: 'Bearer invalid' },
+        { apikey: 'noncanonical-test-key' }, { 'x-api-key': 'flc_test_only' }]) {
         assert.equal(selectRoute(table, method, uri, headers)?.id, '2005-data', `${method} ${suffix}`)
       }
-      assert.equal(selectRoute(table, method, uri, { apikey: 'flc_test_only' })?.id, '2005-key')
+      assert.equal(selectRoute(table, method, uri, {
+        apikey: 'flc_test_only', authorization: 'Bearer test-token',
+      })?.id, '2005-key')
     }
-    for (const uri of [
-      `${tablePath}/exports`, `${tablePath}/imports`, `${tablePath}/rows/extra`,
+    const controlPlanePaths = [
+      ['POST', `${tablePath}/exports`], ['POST', `${tablePath}/imports`],
+      ['GET', '/v1/postgres/databases'],
+      ['GET', '/v1/postgres/databases/database-example/schemas'],
+      ['GET', '/v1/postgres/databases/database-example/schemas/public/tables'],
+      ...['columns', 'indexes', 'policies', 'security'].map((suffix) => [
+        'GET', `/v1/postgres/databases/database-example/schemas/public/tables/table-example/${suffix}`,
+      ]),
+      ...['views', 'materialized-views'].map((suffix) => [
+        'GET', `/v1/postgres/databases/database-example/schemas/public/${suffix}`,
+      ]),
+    ]
+    const unsupportedPaths = [
+      ...['rows', 'rows/by-primary-key', 'bulk/insert', 'rows/bulk/insert', 'search', 'embedding-mapping']
+        .flatMap((suffix) => [`${tablePath}/${suffix}/extra`, `${tablePath}/${suffix}/`]),
       `${tablePath}/bulk/update`, `${tablePath}/bulk/delete`,
-      '/v1/postgres/databases/database-example/schemas',
       '/v1/postgres/data/database-example/schemas/public/tables/table-example/rows',
-    ]) {
-      assert.equal(selectRoute(table, 'GET', uri)?.id, '2005', uri)
+      '/v1/postgres/workspaces//data/database-example/schemas/public/tables/table-example/rows',
+    ]
+    for (const [method, uri] of [...controlPlanePaths, ...unsupportedPaths.map((uri) => ['POST', uri])]) {
+      const selected = selectRoute(table, method, uri, { authorization: 'Bearer test-token' })
+      assert.equal(selected?.id, '2005', `${method} ${uri}`)
+      assert.match(Object.keys(selected.upstream.nodes)[0], /-control-plane\.falcone\.svc\.cluster\.local:8080$/)
     }
     const headers = bearer.plugins['proxy-rewrite'].headers
     assert.equal(headers.set['x-gateway-auth'], '${{GATEWAY_SHARED_SECRET}}')
