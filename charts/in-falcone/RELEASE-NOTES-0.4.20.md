@@ -5,9 +5,10 @@
 #980 moved the executor JWT configuration to five reference-only entries in
 `{release}-executor-jwt-config`. An existing Deployment with literal JWT env
 can reject an apply that retains both `value` and `valueFrom`. Use the one-time
-atomic env patch below before retrying a rejected delivery. It also supports
-preparing a literal-env release before delivery; on migrated staging it is a
-no-op. Fresh installs need no transition.
+atomic env patch below before retrying a rejected delivery, after normal gated
+Helm delivery has reconciled the target executor JWT ConfigMap. The helper cannot
+prepare a pre-#980 release before that ConfigMap exists. On migrated staging it
+is a no-op. Fresh installs need no transition.
 
 The chosen mechanism changes only the five executor JWT env entries in one
 resourceVersion-fenced JSON Patch. It preserves non-JWT env, HPA-managed replicas,
@@ -52,14 +53,22 @@ or bearer round trip. Live outcomes are pending CI, not claimed from this sandbo
    of appending duplicate env names. The production transport overlay's effective
    HTTPS JWKS endpoint on port 8443 is preserved; its stored ConfigMap value changes
    from the verifier's HTTP default to the previously effective TLS literal.
+   Release review must explicitly acknowledge this ConfigMap representation change;
+   the effective runtime endpoint is unchanged.
    Verify the resolved executor endpoint (scheme, host, port and path) for the exact
    ordered values before rollout. Gateway verifier settings and other components'
    TLS env remain unchanged. Without executor transport TLS, verifier values still
    supply the executor ConfigMap defaults.
 3. Use a clean checkout of the full target deployment Git revision and the same
    tracked values layers in the same order as the gated delivery. Include reviewed
-   host/evidence overrides in that revision; local defaults and `--reuse-values`
-   are not substitutes for reviewed #980 configuration. Retain a protected rollback
+   host/evidence overrides in that revision. Historical `--reuse-values` remains
+   supported: shared TLS JWT literals are retained unless the component already
+   supplies a same-name `valueFrom` entry. Offline regression cases coalesce
+   `433be51` prod-TLS and kind-TLS values, including installed issuer/audience
+   literals, and verify their effective JWT env remains present and unique.
+   Reusing those values preserves historical wiring; installing all five #980
+   references still requires the reviewed target values. Render those exact layers
+   for the helper and delivery. Retain a protected rollback
    render from `433be51` with the actual old release values and live replicas/
    annotations; never copy configuration/env payloads into release evidence.
 4. Let the normal gated Helm delivery reconcile `{release}-executor-jwt-config`

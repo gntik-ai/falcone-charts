@@ -42,14 +42,20 @@
 {{- $ts := default (dict) .Values.global.transportSecurity -}}
 {{- $tsOn := and .Values.transportSecurityClient ($ts.enabled | default false) -}}
 {{- $tsEnv := ternary (default (list) $ts.env) (list) $tsOn -}}
-{{- /* #1053: executor JWT env is owned by executor-jwt-config. Shared TLS
-       literals must not append duplicate names beside its ConfigMap references.
-       The umbrella copies these TLS literals into that ConfigMap to retain the
-       effective executor configuration without changing the gateway verifier. */ -}}
+{{- /* #1053: suppress shared TLS JWT literals only beside same-name component
+       references. Reused pre-#980 values lack those references and must retain
+       their literal configuration. The umbrella copies TLS literals into the
+       ConfigMap for the reviewed target values without changing the gateway. */ -}}
 {{- if eq (.Values.wrapper.componentId | default "") "control-plane-executor" -}}
+  {{- $jwtRefs := dict -}}
+  {{- range (.Values.env | default (list)) -}}
+    {{- if and (has (.name | default "") (list "KEYCLOAK_JWKS_URL" "KEYCLOAK_ISSUER" "KEYCLOAK_AUDIENCE" "KEYCLOAK_TENANT_AUDIENCE" "KEYCLOAK_ENFORCE_TENANT_AUDIENCE")) (hasKey . "valueFrom") -}}
+      {{- $_ := set $jwtRefs .name true -}}
+    {{- end -}}
+  {{- end -}}
   {{- $filteredTsEnv := list -}}
   {{- range $tsEnv -}}
-    {{- if not (has .name (list "KEYCLOAK_JWKS_URL" "KEYCLOAK_ISSUER" "KEYCLOAK_AUDIENCE" "KEYCLOAK_TENANT_AUDIENCE" "KEYCLOAK_ENFORCE_TENANT_AUDIENCE")) -}}
+    {{- if not (hasKey $jwtRefs (.name | default "")) -}}
       {{- $filteredTsEnv = append $filteredTsEnv . -}}
     {{- end -}}
   {{- end -}}

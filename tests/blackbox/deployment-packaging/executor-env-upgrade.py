@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -90,6 +91,61 @@ def resolved_jwt(objects, deployment):
 
 
 class Offline(unittest.TestCase):
+    def test_reused_historical_tls_values_preserve_jwt_env(self):
+        # Model stored, coalesced values without adding current umbrella defaults.
+        # This complements the real fake-API Helm reuse-values test (bbx-048).
+        def merge_values(target, override):
+            for key, value in override.items():
+                if isinstance(value, dict) and isinstance(target.get(key), dict):
+                    merge_values(target[key], value)
+                else:
+                    target[key] = copy.deepcopy(value)
+
+        with tempfile.TemporaryDirectory(prefix="executor-reuse-") as folder:
+            sandbox = Path(folder)
+            old, base, current = (sandbox / name for name in ("old", "base", "current"))
+            historical_checkout(old)
+            historical_checkout(base, "93ee9371fdbd029ff49909ff1fb5c03eeff0ddae")
+            shutil.copytree(ROOT / "charts/in-falcone", current / "charts/in-falcone")
+            for profile in ("prod-tls", "kind-tls"):
+                stored = yaml.safe_load((old / "charts/in-falcone/values.yaml").read_text())
+                for layer in LAYERS[profile]:
+                    merge_values(stored, yaml.safe_load((old / layer).read_text()))
+                # Preserve the existing identity-path migration gate, as bbx-048
+                # does; the obsolete /auth path must not bypass validation.
+                stored["publicSurface"]["bindings"]["identity"]["paths"] = ["/realms", "/resources", "/js"]
+                self.assertFalse(any("valueFrom" in entry and entry["name"] in migration.JWT_NAMES
+                                     for entry in stored["controlPlaneExecutor"].get("env", [])),
+                                 "historical values must lack the new JWT references")
+                for configured_literals in (False, True):
+                    with self.subTest(profile=profile, configured_literals=configured_literals):
+                        values = copy.deepcopy(stored)
+                        if configured_literals:
+                            # Preserve an installed release's issuer/audience too, without
+                            # duplicating the JWKS literal supplied by the TLS overlay.
+                            fixture = yaml.safe_load((ROOT / "tests/blackbox/fixtures/executor-env-before-980.yaml").read_text())
+                            values["controlPlaneExecutor"].setdefault("env", []).extend(
+                                entry for entry in fixture["controlPlaneExecutor"]["env"]
+                                if entry["name"] != "KEYCLOAK_JWKS_URL")
+                        for root in (base, current):
+                            (root / "charts/in-falcone/values.yaml").write_text(yaml.safe_dump(values))
+                        before, after = render(base), render(current)
+                        previous = select(before, "Deployment", NAME)
+                        target = select(after, "Deployment", NAME)
+                        previous_jwt = resolved_jwt(before, previous)
+                        self.assertIn("KEYCLOAK_JWKS_URL", previous_jwt)
+                        self.assertTrue(previous_jwt == resolved_jwt(after, target),
+                                        "reuse-values must retain effective JWT configuration")
+                        for entry in env(target):
+                            self.assertFalse("value" in entry and "valueFrom" in entry,
+                                             "reused env must never contain both fields")
+                        for key in previous_jwt:
+                            entries = [entry for entry in env(target) if entry["name"] == key]
+                            self.assertEqual(len(entries), 1, "inherited JWT env must remain unique")
+                            self.assertIn("value", entries[0], "inherited JWT literals must remain wired")
+                        if configured_literals:
+                            self.assertTrue(all(key in previous_jwt for key in migration.JWT_NAMES[:3]))
+
     def test_tls_effective_jwt_and_gateway_preserved(self):
         with tempfile.TemporaryDirectory(prefix="executor-base-") as folder:
             base = Path(folder)
