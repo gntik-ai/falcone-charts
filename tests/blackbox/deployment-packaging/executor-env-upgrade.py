@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -38,8 +39,8 @@ def command(args, **kwargs):
     return result.stdout
 
 
-def historical_checkout(directory):
-    result = subprocess.run(GIT + ["archive", "433be51", "charts/in-falcone", "deploy/kind"],
+def historical_checkout(directory, revision="433be51"):
+    result = subprocess.run(GIT + ["archive", revision, "charts/in-falcone", "deploy/kind"],
                             capture_output=True, timeout=60)
     if result.returncode:
         raise AssertionError("historical revision unavailable")
@@ -73,7 +74,69 @@ def env(deployment):
                 if item["name"] == "control-plane-executor")["env"]
 
 
+def resolved_jwt(objects, deployment):
+    # Resolve only credential-free JWT ConfigMap references internally; never print payloads.
+    result = {}
+    for entry in env(deployment):
+        if entry["name"] not in migration.JWT_NAMES:
+            continue
+        if "valueFrom" in entry:
+            ref = entry["valueFrom"]["configMapKeyRef"]
+            value = select(objects, "ConfigMap", ref["name"])["data"][ref["key"]]
+        else:
+            value = entry["value"]
+        result[entry["name"]] = value  # historical Kubernetes last-entry-wins behavior
+    return result
+
+
 class Offline(unittest.TestCase):
+    def test_tls_effective_jwt_and_gateway_preserved(self):
+        with tempfile.TemporaryDirectory(prefix="executor-base-") as folder:
+            base = Path(folder)
+            historical_checkout(base, "93ee9371fdbd029ff49909ff1fb5c03eeff0ddae")
+            for profile in ("prod-tls", "kind-tls"):
+                before, after = render(base, profile), render(ROOT, profile)
+                old_deployment = select(before, "Deployment", NAME)
+                new_deployment = select(after, "Deployment", NAME)
+                migration.validate_env(env(new_deployment), CONFIG)
+                old_jwt = resolved_jwt(before, old_deployment)
+                new_jwt = resolved_jwt(after, new_deployment)
+                self.assertTrue(old_jwt == new_jwt, "TLS effective JWT configuration must be preserved")
+                old_url = urlsplit(old_jwt["KEYCLOAK_JWKS_URL"])
+                new_url = urlsplit(new_jwt["KEYCLOAK_JWKS_URL"])
+                self.assertTrue((new_url.scheme, new_url.hostname, new_url.port, new_url.path)
+                                == (old_url.scheme, old_url.hostname, old_url.port, old_url.path),
+                                "TLS JWKS scheme, host, port and path must be preserved")
+                self.assertTrue(new_url.scheme == "https" and new_url.port == 8443,
+                                "TLS JWKS must remain HTTPS on port 8443")
+                def gateway(objects):
+                    return [item for item in objects if item["kind"] == "ApisixRoute"
+                            or (item["kind"] == "ConfigMap"
+                                and item["metadata"]["name"].endswith("-gateway-policy"))]
+                self.assertTrue(gateway(before) == gateway(after), "gateway verifier must remain unchanged")
+                old_control = select(before, "Deployment", RELEASE + "-control-plane")
+                new_control = select(after, "Deployment", RELEASE + "-control-plane")
+                self.assertTrue(old_control == new_control, "control-plane TLS configuration must be preserved")
+
+    def test_tls_jwt_source_rejects_ambiguous_entries(self):
+        overlay = ROOT / "deploy/kind/values-production.yaml"
+        tls_env = yaml.safe_load(overlay.read_text())["global"]["transportSecurity"]["env"]
+        non_jwt = [entry for entry in tls_env if entry["name"] not in migration.JWT_NAMES]
+        with tempfile.TemporaryDirectory(prefix="executor-invalid-") as folder:
+            values = Path(folder) / "invalid.yaml"
+            for entries in (
+                [{"name": "KEYCLOAK_JWKS_URL", "value": "https://test"}] * 2,
+                [{"name": "KEYCLOAK_JWKS_URL", "valueFrom": {"configMapKeyRef": {"name": "test", "key": "test"}}}],
+                [{"name": "KEYCLOAK_JWKS_URL", "value": ""}],
+            ):
+                values.write_text(yaml.safe_dump({"global": {"transportSecurity": {"env": non_jwt + entries}}}))
+                result = subprocess.run([
+                    "helm", "template", RELEASE, str(ROOT / "charts/in-falcone"),
+                    "-f", str(overlay), "-f", str(values),
+                ], capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0, "ambiguous executor JWT source must fail rendering")
+                self.assertIn("executor TLS JWT env must contain unique nonempty literals", result.stderr)
+
     def test_historical_and_current_profiles(self):
         with tempfile.TemporaryDirectory(prefix="executor-old-") as folder:
             old = Path(folder)

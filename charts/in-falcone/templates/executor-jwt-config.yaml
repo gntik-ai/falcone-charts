@@ -1,5 +1,26 @@
 {{- if ne .Values.controlPlaneExecutor.enabled false }}
 {{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
+{{- $jwt := dict
+      "KEYCLOAK_ISSUER" (printf "%s/realms/%s" $verifier.issuer_base_url $verifier.platform_realm)
+      "KEYCLOAK_JWKS_URL" (printf "%s/realms/%s/protocol/openid-connect/certs" $verifier.jwks_base_url $verifier.platform_realm)
+      "KEYCLOAK_AUDIENCE" $verifier.audience
+      "KEYCLOAK_TENANT_AUDIENCE" $verifier.tenant_audience
+      "KEYCLOAK_ENFORCE_TENANT_AUDIENCE" ($verifier.enforce_tenant_audience | toString) -}}
+{{- /* #1053: preserve the previously effective appended TLS literals in the
+       executor's reference source, without changing the gateway verifier. */ -}}
+{{- $ts := default (dict) .Values.global.transportSecurity -}}
+{{- if and (.Values.controlPlaneExecutor.transportSecurityClient | default false) ($ts.enabled | default false) -}}
+  {{- $seen := dict -}}
+  {{- range ($ts.env | default (list)) -}}
+    {{- if hasKey $jwt .name -}}
+      {{- if or (hasKey $seen .name) (hasKey . "valueFrom") (not (hasKey . "value")) (not (kindIs "string" .value)) (not .value) -}}
+        {{- fail "executor TLS JWT env must contain unique nonempty literals for its ConfigMap source" -}}
+      {{- end -}}
+      {{- $_ := set $seen .name true -}}
+      {{- $_ := set $jwt .name .value -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,9 +29,9 @@ metadata:
     {{- include "in-falcone.labels" . | nindent 4 }}
     in-falcone.io/component: control-plane-executor
 data:
-  KEYCLOAK_ISSUER: {{ printf "%s/realms/%s" $verifier.issuer_base_url $verifier.platform_realm | quote }}
-  KEYCLOAK_JWKS_URL: {{ printf "%s/realms/%s/protocol/openid-connect/certs" $verifier.jwks_base_url $verifier.platform_realm | quote }}
-  KEYCLOAK_AUDIENCE: {{ $verifier.audience | quote }}
-  KEYCLOAK_TENANT_AUDIENCE: {{ $verifier.tenant_audience | quote }}
-  KEYCLOAK_ENFORCE_TENANT_AUDIENCE: {{ $verifier.enforce_tenant_audience | toString | quote }}
+  KEYCLOAK_ISSUER: {{ $jwt.KEYCLOAK_ISSUER | quote }}
+  KEYCLOAK_JWKS_URL: {{ $jwt.KEYCLOAK_JWKS_URL | quote }}
+  KEYCLOAK_AUDIENCE: {{ $jwt.KEYCLOAK_AUDIENCE | quote }}
+  KEYCLOAK_TENANT_AUDIENCE: {{ $jwt.KEYCLOAK_TENANT_AUDIENCE | quote }}
+  KEYCLOAK_ENFORCE_TENANT_AUDIENCE: {{ $jwt.KEYCLOAK_ENFORCE_TENANT_AUDIENCE | quote }}
 {{- end }}

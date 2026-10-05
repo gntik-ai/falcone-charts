@@ -47,11 +47,15 @@ or bearer round trip. Live outcomes are pending CI, not claimed from this sandbo
    Retain every existing backup, migration, ownership, parity and validation gate.
 2. Confirm **real production issuer/JWKS hosts** in the exact ordered values.
    `https://iam.in-falcone.example.com` is a placeholder; staging's
-   `https://iam.baas.musematic.ai` is not a prod host. This repair changes no issuer
-   or ConfigMap values. Review the TLS JWKS endpoint through the existing
-   `global.keycloakJwksBaseUrl` / verifier values: shared TLS env no longer appends
-   literal JWT names to the executor and cannot override its ConfigMap references.
-   Other components retain their TLS env.
+   `https://iam.baas.musematic.ai` is not a prod host. With executor transport TLS
+   enabled, shared TLS JWT literals now populate the executor ConfigMap instead
+   of appending duplicate env names. The production transport overlay's effective
+   HTTPS JWKS endpoint on port 8443 is preserved; its stored ConfigMap value changes
+   from the verifier's HTTP default to the previously effective TLS literal.
+   Verify the resolved executor endpoint (scheme, host, port and path) for the exact
+   ordered values before rollout. Gateway verifier settings and other components'
+   TLS env remain unchanged. Without executor transport TLS, verifier values still
+   supply the executor ConfigMap defaults.
 3. Use a clean checkout of the full target deployment Git revision and the same
    tracked values layers in the same order as the gated delivery. Include reviewed
    host/evidence overrides in that revision; local defaults and `--reuse-values`

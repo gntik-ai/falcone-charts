@@ -44,7 +44,8 @@
 {{- $tsEnv := ternary (default (list) $ts.env) (list) $tsOn -}}
 {{- /* #1053: executor JWT env is owned by executor-jwt-config. Shared TLS
        literals must not append duplicate names beside its ConfigMap references.
-       Configure its JWKS endpoint through the existing verifier values instead. */ -}}
+       The umbrella copies these TLS literals into that ConfigMap to retain the
+       effective executor configuration without changing the gateway verifier. */ -}}
 {{- if eq (.Values.wrapper.componentId | default "") "control-plane-executor" -}}
   {{- $filteredTsEnv := list -}}
   {{- range $tsEnv -}}

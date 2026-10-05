@@ -213,8 +213,11 @@ tenant data through the existing issuer/workspace binding.
    every existing backup, parity, migration and ESO/OpenBao gate.
 2. Confirm **real production issuer/JWKS hosts** in the exact reviewed values.
    `https://iam.in-falcone.example.com` is a placeholder; `https://iam.baas.musematic.ai`
-   is staging only. Prod hosts are not changed by this repair. Review TLS JWKS via
-   existing verifier values: shared TLS env cannot override executor references.
+   is staging only. Prod hosts are not changed by this repair. Shared TLS JWT
+   literals now populate the executor ConfigMap instead of duplicate env names:
+   the transport overlay retains its effective HTTPS JWKS endpoint on port 8443,
+   replacing the stored HTTP default. Verify the resolved executor scheme, host,
+   port and path for the exact ordered values. The gateway verifier is unchanged.
 3. From the clean exact target revision, use the one-time atomic executor JWT
    env step in [0.4.20 release notes](../RELEASE-NOTES-0.4.20.md). Run its dry-run
    and `--apply` with explicit context/release namespace and every ordered values
@@ -238,16 +241,23 @@ the reported-state regression explicitly layers the credential-free
 `tests/blackbox/fixtures/executor-env-before-980.yaml` over that historical chart.
 The live test isolates JWT env in a disposable readiness probe; it does not claim
 a full platform install. No default fixture is re-baselined: the template change
-only filters shared TLS JWT literals for the executor. Published notes are intact;
-shipping version and actual prod JWKS endpoint remain release-review questions.
+filters shared TLS JWT literals for the executor and moves their effective values
+into its ConfigMap source. Prod-TLS and kind-TLS resolved endpoint comparisons
+against deployment base `93ee9371` preserve HTTPS/8443 and gateway configuration.
+Published notes are intact; shipping version and actual prod JWKS endpoint
+remain release-review questions.
 Hermes must set both source workflow pins to the final local deployment HEAD and
 rerun `tests/blackbox/mongo-gateway-route.test.mjs` after this commit.
 
-Bounded local #1053 evidence: historical/default/staging/prod/prod-TLS/kind-TLS
-render checks, duplicate/dual-field negatives and fake-client atomic/precondition
-checks pass. The existing Mongo chart suite passes 15/15, strict Helm lint passes
-default/staging/prod/kind/kind-TLS, and the unchanged Argo equivalence command
-prints `OK`. Python/Node syntax and diff hygiene pass. The required
+Bounded local #1053 follow-up evidence: all six offline upgrade contracts pass,
+including historical/default/staging/prod/prod-TLS/kind-TLS renders, base-to-target
+resolved TLS JWT equality, HTTPS/8443, unchanged gateway/control-plane resources,
+invalid TLS JWT source rejection and fake-client atomic/precondition checks.
+The existing Mongo chart suite passes 15/15, strict Helm lint passes all six
+default/staging/prod/kind/prod-TLS/kind-TLS profiles, and the unchanged Argo
+equivalence command prints `OK`. Source Mongo route parity passes 6/6 at the
+entry deployment HEAD `700bc42`; Hermes must refresh pins and rerun it against
+the final follow-up commit. Diff hygiene passes. The required
 `bbx-temporal-bootstrap-048` command was attempted but cannot import the pinned
 Node `yaml` package; frozen dependency installation and that check remain PR CI
 requirements. Kind is absent locally, so live outcomes remain the dedicated CI
