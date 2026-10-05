@@ -51,6 +51,16 @@ def migration_patch(live, target, config_name):
     ]
 
 
+def validate_config(live, target):
+    # Compare credential-free JWT configuration only in memory; never print data.
+    expected = target.get("data", {})
+    actual = live.get("data", {})
+    if not all(expected.get(key) and actual.get(key) for key in JWT_NAMES):
+        raise ValueError("EXECUTOR_UPGRADE_CONFIG_NOT_READY")
+    if actual != expected:
+        raise ValueError("EXECUTOR_UPGRADE_CONFIG_MISMATCH")
+
+
 def run(args, **kwargs):
     result = subprocess.run(args, capture_output=True, text=True, timeout=360, **kwargs)
     if result.returncode:
@@ -92,11 +102,16 @@ def main():
     if len(targets) != 1:
         raise ValueError("EXECUTOR_UPGRADE_TARGET_INVALID")
     config_name = f"{args.release}-executor-jwt-config"
+    configs = [item for item in objects if item and item.get("kind") == "ConfigMap"
+               and item["metadata"]["name"] == config_name]
+    if len(configs) != 1:
+        raise ValueError("EXECUTOR_UPGRADE_TARGET_CONFIG_INVALID")
+    validate_env(next(item for item in targets[0]["spec"]["template"]["spec"]["containers"]
+                      if item["name"] == "control-plane-executor")["env"], config_name)
     kube = ["kubectl", "--context", args.context, "--namespace", args.namespace]
-    # Only print a boolean from the ConfigMap; never retrieve its payload into evidence.
-    checks = "".join('{{if not (index .data "' + key + '")}}MISSING{{end}}' for key in JWT_NAMES)
-    if run(kube + ["get", "configmap", config_name, "-o", "go-template=" + checks]).strip():
-        raise ValueError("EXECUTOR_UPGRADE_CONFIG_NOT_READY")
+    # A stale TLS ConfigMap can have every key yet resolve to the wrong endpoint.
+    # Fail before any patch/rollout, including dry-runs and already-migrated env.
+    validate_config(json.loads(run(kube + ["get", "configmap", config_name, "-o", "json"])), configs[0])
     live = json.loads(run(kube + ["get", "deployment", name, "-o", "json"]))
     patch = migration_patch(live, targets[0], config_name)
     if patch:
@@ -105,17 +120,21 @@ def main():
             command += ["--dry-run=server"]
         run(command, input=json.dumps(patch))
     if args.apply:
-        run(kube + ["rollout", "status", f"deployment/{name}", "--timeout=300s"])
+        # A paused Deployment cannot roll out. Verify the atomic env now; the
+        # operator resumes only after gated delivery and a second env check.
+        if not live["spec"].get("paused", False):
+            run(kube + ["rollout", "status", f"deployment/{name}", "--timeout=300s"])
         after = json.loads(run(kube + ["get", "deployment", name, "-o", "json"]))
         if migration_patch(after, targets[0], config_name):
             raise ValueError("EXECUTOR_UPGRADE_VERIFY_FAILED")
-        if after["spec"].get("replicas") != live["spec"].get("replicas") or any(
+        if after["spec"].get("paused", False) != live["spec"].get("paused", False) or after["spec"].get("replicas") != live["spec"].get("replicas") or any(
             after["metadata"].get("annotations", {}).get(key) != value
             for key, value in live["metadata"].get("annotations", {}).items()
             if key != "deployment.kubernetes.io/revision"
         ) or after["spec"]["template"]["metadata"].get("annotations", {}) != live["spec"]["template"]["metadata"].get("annotations", {}):
             raise ValueError("EXECUTOR_UPGRADE_LIVE_STATE_CHANGED")
-    print("EXECUTOR_UPGRADE_" + ("UNCHANGED" if not patch else "APPLIED" if args.apply else "DRY_RUN_OK"))
+    print("EXECUTOR_UPGRADE_" + ("UNCHANGED" if not patch else "APPLIED" if args.apply else "DRY_RUN_OK")
+          + ("_PAUSED" if args.apply and live["spec"].get("paused", False) else ""))
 
 
 if __name__ == "__main__":

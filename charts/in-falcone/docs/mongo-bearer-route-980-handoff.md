@@ -221,18 +221,32 @@ tenant data through the existing issuer/workspace binding.
    the ConfigMap representation change while retaining the effective TLS endpoint.
    The gateway verifier is unchanged.
 3. From the clean exact target revision, use the one-time atomic executor JWT
-   env step in [0.4.20 release notes](../RELEASE-NOTES-0.4.20.md). Run its dry-run
-   and `--apply` with explicit context/release namespace and every ordered values
-   layer after normal gated delivery reconciles the target executor ConfigMap.
-   The helper cannot prepare a pre-#980 release before that ConfigMap exists.
-   It checks all five keys without printing payloads, removes literals while
-   adding references atomically, and preserves replicas/annotations/Service/
-   ConfigMap. It is a no-op on migrated staging. Use the same step for affected
-   Helm and Argo paths, then retry normal delivery. Never force the whole release.
+   env step in [0.4.20 release notes](../RELEASE-NOTES-0.4.20.md). **Before delivering
+   the target executor Deployment**, pause only that Deployment and reconcile
+   only its target ConfigMap through the gated Helm adapter, holding the installed
+   executor template unchanged. Keep serving old pods and preserve the pause.
+   Pre-#980 needs ConfigMap creation; existing #980 prod-TLS/kind-TLS needs the
+   target data reconciled before replacing duplicate JWT entries. Never prepare
+   with full-release delivery: an untreated merge may drop JWKS even if accepted.
+   If preparation cannot be isolated, stop for release review.
+   Then run the helper's dry-run and `--apply` with explicit context/release
+   namespace and every ordered values layer. It compares live ConfigMap data
+   with the exact target render in-process, rejects missing/empty/mismatched data
+   before patch or rollout even for no-op env, and prints no payloads.
+   It removes literals while adding references atomically and preserves
+   replicas/annotations/Service/ConfigMap. It is a no-op on migrated staging.
+   Deliver the target while paused for Helm and Argo paths, confirm the pause
+   remains, and rerun the helper to verify or atomically repair the merged env.
+   Only then resume the executor Deployment and wait for Available. The helper
+   verifies a paused apply without waiting for rollout or resuming; Helm's stored
+   duplicate manifest cannot create an unsafe ReplicaSet during delivery.
    Install prerequisites are `python3` with PyYAML, `helm`, and `kubectl`.
-   Include existing #980 prod-TLS/kind-TLS releases: their duplicate JWKS merge
-   may be rejected or may drop the entry despite a successful delivery. Repair
-   missing/duplicate JWT env with this same step after ConfigMap reconciliation.
+   PR CI isolates untreated negative experiments and fails the positive sequence
+   if any new executor ReplicaSet, including a superseded one, lacks a required
+   JWT env, duplicates a JWT name, or contains both value and valueFrom.
+   An HPA scale during rollout can cause post-patch verification to fail; check
+   the HPA count, JWT env and Available, then rerun without resetting replicas.
+   The patch is not reverted by that failure; keep delivery/resume gated.
    If Helm 4 retry conflicts on HPA-owned replicas, align only the executor's
    `controlPlaneExecutor.replicas` in the reviewed target values with the current
    HPA count and retry with the same layers as the helper. Matching values avoid
@@ -246,7 +260,7 @@ tenant data through the existing issuer/workspace binding.
    atomic and retain the Service and ConfigMap.
 
 The dedicated CI `executor-env-upgrade-evidence` artifact records independent
-Helm 3 client, Argo client and Helm 4 server results, atomic-step/retry outcomes
+Helm 3 client, Argo client and Helm 4 server results, atomic-step/delivery outcomes
 and revision/fixture hashes. Live evidence is required before release and not
 claimed locally. Untouched `433be51` defaults lack direct issuer/audience env;
 the reported-state regression explicitly layers the credential-free
@@ -269,11 +283,28 @@ API rejection from accepted delivery with missing/duplicate JWT env and cites
 each outcome in its mechanism justification. Before release, append all six
 observed outcomes and the artifact SHA256 to this handoff and the unpublished
 notes. The probe deliberately omits replicas; it verifies HPA count and
-annotations after retry without claiming full-chart SSA ownership compatibility.
+annotations after guarded delivery without claiming full-chart SSA ownership
+compatibility. Positive and negative experiments use separate disposable
+namespaces; every new executor ReplicaSet must retain valid JWT env.
 Hermes must set both source workflow pins to the final local deployment HEAD and
 rerun `tests/blackbox/mongo-gateway-route.test.mjs` after this commit.
 
-Bounded local #1053 checker follow-up evidence: all eight offline upgrade contracts pass,
+Bounded local #1053 repair evidence (2026-10-05, on top of `2dac50ec`):
+all eleven offline contracts pass, including stale/missing/empty/extra ConfigMap
+rejection before patch or rollout, dry-run/apply/no-op mismatch cases, paused
+atomic repair, and missing/duplicate/dual-field superseded ReplicaSet rejection.
+Historical reuse-values/TLS equality cases remain passing. The executor Node
+contract and Mongo chart suite pass using the available out-of-tree YAML 2.9.1
+reader; the locked 2.8.3 reader is absent locally. Strict Helm lint passes all six
+profiles and the unchanged Argo equivalence command prints `OK`. Source Mongo
+route parity passes 6/6 against entry HEAD `2dac50ec`; Hermes must refresh both
+pins to this repair's final HEAD and rerun parity. The required live kind matrix
+is skipped locally because kind/Helm 3 are absent. The required
+`bbx-temporal-bootstrap-048` check was attempted: locked dependencies are absent,
+and a supplemental YAML resolver reaches historical extraction but sandbox tar
+fails with Function not implemented. Both checks remain mandatory in PR CI.
+
+Earlier local #1053 evidence at `f929e895`: all eight offline upgrade contracts pass,
 including historical/default/staging/prod/prod-TLS/kind-TLS renders, base-to-target
 resolved TLS JWT equality, HTTPS/8443, unchanged gateway/control-plane resources,
 invalid TLS JWT source rejection and fake-client atomic/precondition checks. The

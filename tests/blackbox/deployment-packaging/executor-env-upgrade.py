@@ -76,6 +76,18 @@ def env(deployment):
                 if item["name"] == "control-plane-executor")["env"]
 
 
+def validate_new_replicasets(items, baseline, deployment_uid):
+    created = []
+    for item in items:
+        if not any(owner.get("uid") == deployment_uid and owner.get("controller")
+                   for owner in item["metadata"].get("ownerReferences", [])):
+            continue
+        if item["metadata"]["uid"] not in baseline:
+            migration.validate_env(env(item), CONFIG)
+            created.append(item["metadata"]["uid"])
+    return set(created)
+
+
 def resolved_jwt(objects, deployment):
     # Resolve only credential-free JWT ConfigMap references internally; never print payloads.
     result = {}
@@ -281,13 +293,15 @@ class Offline(unittest.TestCase):
         self.assertEqual(live["metadata"]["annotations"]["other-manager"], "keep")
 
     def test_helper_preconditions_with_fake_clients(self):
-        target = select(render(ROOT), "Deployment", NAME)
+        objects = render(ROOT, "prod-tls")
+        target = select(objects, "Deployment", NAME)
+        config = select(objects, "ConfigMap", CONFIG)
         live = copy.deepcopy(target)
         live["metadata"]["resourceVersion"] = "42"
         env(live)[:] = [{"name": key, "value": "old"} for key in migration.JWT_NAMES[:3]]
         original_run, original_argv = migration.run, list(migration.sys.argv)
         revision = "a" * 40
-        for failure in ("revision", "dirty", "config", "none"):
+        for failure in ("revision", "dirty", "config", "stale", "empty", "extra", "none"):
             calls = []
             def fake(args, **kwargs):
                 calls.append(args)
@@ -296,9 +310,16 @@ class Offline(unittest.TestCase):
                 if "status" in args:
                     return " M charts/in-falcone/values.yaml" if failure == "dirty" else ""
                 if args[0] == "helm":
-                    return yaml.safe_dump(target)
+                    return yaml.safe_dump_all([target, config])
                 if "configmap" in args:
-                    return "MISSING" if failure == "config" else ""
+                    actual = copy.deepcopy(config)
+                    if failure == "config":
+                        del actual["data"]["KEYCLOAK_JWKS_URL"]
+                    if failure in ("stale", "empty"):
+                        actual["data"]["KEYCLOAK_JWKS_URL"] = "http://stale.invalid:8080/jwks" if failure == "stale" else ""
+                    if failure == "extra":
+                        actual["data"]["unexpected"] = "unexpected"
+                    return json.dumps(actual)
                 if "get" in args:
                     return json.dumps(live)
                 if "patch" in args:
@@ -317,8 +338,116 @@ class Offline(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         migration.main()
                     self.assertFalse(any("patch" in call for call in calls))
+                    self.assertFalse(any("rollout" in call for call in calls))
             finally:
                 migration.run, migration.sys.argv = original_run, original_argv
+
+    def test_stale_config_blocks_dry_run_apply_and_noop_without_payload_output(self):
+        objects = render(ROOT, "prod-tls")
+        target = select(objects, "Deployment", NAME)
+        config = select(objects, "ConfigMap", CONFIG)
+        stale = copy.deepcopy(config)
+        stale["data"]["KEYCLOAK_JWKS_URL"] = "http://stale.invalid:8080/jwks"
+        original_run, original_argv = migration.run, list(migration.sys.argv)
+        revision = "a" * 40
+        try:
+            for apply in (False, True):
+                for migrated in (False, True):
+                    with self.subTest(apply=apply, migrated=migrated):
+                        live = copy.deepcopy(target)
+                        live["metadata"]["resourceVersion"] = "42"
+                        if not migrated:
+                            env(live)[:] = [{"name": key, "value": "old"} for key in migration.JWT_NAMES[:3]]
+                        calls = []
+                        def fake(args, **kwargs):
+                            calls.append(args)
+                            if "rev-parse" in args:
+                                return revision
+                            if "status" in args:
+                                return ""
+                            if args[0] == "helm":
+                                return yaml.safe_dump_all([target, config])
+                            if "configmap" in args:
+                                return json.dumps(stale)
+                            if "get" in args:
+                                return json.dumps(live)
+                            raise AssertionError("stale data must fail before mutation or rollout")
+                        migration.run = fake
+                        migration.sys.argv = [str(HELPER), "--revision", revision, "--release", RELEASE,
+                                              "--namespace", "disposable", "--context", "kind-test"] + (["--apply"] if apply else [])
+                        from contextlib import redirect_stdout, redirect_stderr
+                        output = io.StringIO()
+                        with redirect_stdout(output), redirect_stderr(output):
+                            with self.assertRaisesRegex(ValueError, "^EXECUTOR_UPGRADE_CONFIG_MISMATCH$"):
+                                migration.main()
+                        self.assertEqual(output.getvalue(), "")
+                        self.assertFalse(any("patch" in call or "rollout" in call for call in calls))
+        finally:
+            migration.run, migration.sys.argv = original_run, original_argv
+
+    def test_all_new_replicaset_templates_fail_on_missing_duplicate_or_dual_fields(self):
+        target = select(render(ROOT), "Deployment", NAME)
+        target["metadata"].update(uid="new", ownerReferences=[{"uid": "executor", "controller": True}])
+        baseline = copy.deepcopy(target)
+        baseline["metadata"]["uid"] = "old"
+        env(baseline)[:] = []  # Only pre-sequence templates are exempt.
+        self.assertEqual(validate_new_replicasets([baseline, target], {"old"}, "executor"), {"new"})
+        for defect in ("missing", "duplicate", "dual"):
+            bad = copy.deepcopy(target)
+            bad["metadata"]["uid"] = "superseded"
+            if defect == "missing":
+                env(bad)[:] = [item for item in env(bad) if item["name"] != "KEYCLOAK_JWKS_URL"]
+            elif defect == "duplicate":
+                env(bad).append(copy.deepcopy(next(item for item in env(bad)
+                                                  if item["name"] == "KEYCLOAK_JWKS_URL")))
+            else:
+                env(bad).append({"name": "OTHER", "value": "", "valueFrom": {}})
+            with self.subTest(defect=defect), self.assertRaises(ValueError):
+                validate_new_replicasets([baseline, bad, target], {"old"}, "executor")
+
+    def test_paused_apply_repairs_env_without_resuming_or_waiting_for_rollout(self):
+        objects = render(ROOT)
+        target = select(objects, "Deployment", NAME)
+        config = select(objects, "ConfigMap", CONFIG)
+        live = copy.deepcopy(target)
+        live["metadata"]["resourceVersion"] = "42"
+        live["spec"]["paused"] = True
+        # Model an accepted merge that removed JWKS while delivery was paused.
+        env(live)[:] = [item for item in env(live) if item["name"] != "KEYCLOAK_JWKS_URL"]
+        original_run, original_argv = migration.run, list(migration.sys.argv)
+        revision = "a" * 40
+        calls = []
+        def fake(args, **kwargs):
+            calls.append(args)
+            if "rev-parse" in args:
+                return revision
+            if "status" in args and args[0] == "git":
+                return ""
+            if args[0] == "helm":
+                return yaml.safe_dump_all([target, config])
+            if "configmap" in args:
+                return json.dumps(config)
+            if "get" in args:
+                return json.dumps(live)
+            if "patch" in args:
+                patch = json.loads(kwargs["input"])
+                self.assertEqual(patch[0]["value"], live["metadata"]["resourceVersion"])
+                self.assertEqual(patch[1]["path"], "/spec/template/spec/containers/0/env")
+                env(live)[:] = patch[1]["value"]
+                return ""
+            raise AssertionError("paused helper must not resume or wait for rollout")
+        try:
+            migration.run = fake
+            migration.sys.argv = [str(HELPER), "--revision", revision, "--release", RELEASE,
+                                  "--namespace", "disposable", "--context", "kind-test", "--apply"]
+            migration.main()
+            migration.validate_env(env(live), CONFIG)
+            self.assertTrue(live["spec"]["paused"])
+            migration.main()  # Verified no-op remains paused for operator resume.
+            self.assertEqual(sum("patch" in call for call in calls), 1)
+            self.assertFalse(any("rollout" in call for call in calls))
+        finally:
+            migration.run, migration.sys.argv = original_run, original_argv
 
     def test_ci_requires_live_evidence_without_changing_argo_equivalence(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/chart-release.yml").read_text())
@@ -365,122 +494,18 @@ class Live(unittest.TestCase):
                  for scenario, root, profile, literals in sources
                  for path in ("helm3-client", "argo-client", "helm4-server")]
         for scenario, source_root, profile, literals, path in cases:
-            namespace = "executor-" + scenario + "-" + path
-            kube = ["kubectl", "--context", context, "-n", namespace]
-            command(kube + ["create", "namespace", namespace], env=kubeenv)
-            previous = render(source_root, profile, namespace=namespace, legacy_literals=literals)
-            old = select(previous, "Deployment", NAME)
-            objects = render(ROOT, profile, namespace=namespace)
-            target = select(objects, "Deployment", NAME)
-            config = select(objects, "ConfigMap", CONFIG)
-            old_probe, new_probe = probe(old, probe_image), probe(target, probe_image)
-            if scenario == "existing980-tls":
-                self.assertEqual(sum(item["name"] == "KEYCLOAK_JWKS_URL" for item in env(old_probe)), 2)
-            # Existing #980 TLS pods need their historical ConfigMap at install.
-            initial_config = select(previous, "ConfigMap", CONFIG) if not literals else config
-            command(kube + ["create", "-f", "-"], input=json.dumps(initial_config), env=kubeenv)
-            chart = work / (scenario + "-" + path)
-            (chart / "templates").mkdir(parents=True)
-            (chart / "Chart.yaml").write_text("apiVersion: v2\nname: executor-upgrade-probe\nversion: 0.0.1\n")
-            manifest = chart / "templates/executor.yaml"
-            manifest.write_text(yaml.safe_dump(old_probe))
-            service = select(objects, "Service", NAME)
-            (chart / "templates/service.yaml").write_text(yaml.safe_dump(service))
-            helm3 = os.environ.get("HELM3_BIN", "helm3")
-            command([helm3, "install", RELEASE, str(chart), "-n", namespace, "--kube-context", context, "--wait", "--timeout", "120s"], env=kubeenv)
-            before = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-            self.assertNotIn("kubectl.kubernetes.io/last-applied-configuration", before["metadata"].get("annotations", {}))
-            # ConfigMap is made available before any reference-only pod template is submitted.
-            command(kube + ["patch", "configmap", CONFIG, "--type=merge", "--patch-file=/dev/stdin"],
-                    input=json.dumps({"data": config["data"]}), env=kubeenv)
-            config_uid = command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
-            service_uid = command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
-            manifest.write_text(yaml.safe_dump(new_probe))
-            apply = (kube + ["apply", "-f", str(manifest)] if path == "argo-client" else
-                     [helm3 if path == "helm3-client" else "helm", "upgrade", RELEASE, str(chart),
-                      "-n", namespace, "--kube-context", context] +
-                     (["--server-side=true"] if path == "helm4-server" else []))
-            result = subprocess.run(apply, capture_output=True, text=True, env=kubeenv, timeout=120)
-            rejected = result.returncode != 0 and "may not be specified when value is not empty" in result.stderr
-            duplicate_rejected = (scenario == "existing980-tls" and result.returncode != 0
-                                  and ("duplicate" in result.stderr.lower() or "$setElementOrder" in result.stderr)
-                                  and "KEYCLOAK_JWKS_URL" in result.stderr)
-            self.assertTrue(result.returncode == 0 or rejected or duplicate_rejected,
-                            scenario + "/" + path + ": unexpected failure (payload redacted)")
-            live = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-            untreated = "REJECTED_DUAL_FIELD" if rejected else "REJECTED_DUPLICATE_ENV" if duplicate_rejected else "PASS"
-            if result.returncode == 0:
-                try:
-                    migration.validate_env(env(live), CONFIG)
-                except ValueError:
-                    untreated = "ACCEPTED_INVALID_JWT_ENV"
-            outcomes.append({"scenario": scenario, "profile": profile, "path": path, "untreated": untreated})
-            # Server-side negative control independently rejects an actual dual-field patch.
-            bad = copy.deepcopy(new_probe)
-            next(item for item in env(bad) if item["name"] == migration.JWT_NAMES[0])["value"] = "legacy"
-            negative = subprocess.run(kube + ["patch", "deployment", NAME, "--type=json", "--dry-run=server",
-                                             "--patch-file=/dev/stdin"], input=json.dumps([
-                {"op": "replace", "path": "/spec/template/spec/containers/0/env", "value": env(bad)}
-            ]), capture_output=True, text=True, env=kubeenv, timeout=60)
-            self.assertTrue(negative.returncode != 0 and "may not be specified when value is not empty" in negative.stderr,
-                            "API must reject negative dual-field control")
-            stale = subprocess.run(kube + ["patch", "deployment", NAME, "--type=json", "--dry-run=server",
-                                          "--patch-file=/dev/stdin"], input=json.dumps([
-                {"op": "test", "path": "/metadata/resourceVersion", "value": "stale-version"},
-                {"op": "replace", "path": "/spec/template/spec/containers/0/env", "value": env(new_probe)}
-            ]), capture_output=True, text=True, env=kubeenv, timeout=60)
-            self.assertNotEqual(stale.returncode, 0, "stale resourceVersion must reject before mutation")
-            unchanged = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-            self.assertTrue(env(unchanged) == env(live), "negative controls must not change live env")
-            # Add other-manager fields after untreated apply; the migration must preserve them.
-            command(kube + ["patch", "deployment", NAME, "--type=merge", "-p", json.dumps({
-                "metadata": {"annotations": {"other-manager": "preserve"}},
-                "spec": {"replicas": 2, "template": {"metadata": {"annotations": {"rollout-restart": "preserve"}}}},
-            })], env=kubeenv)
-            revision = command(GIT + ["rev-parse", "HEAD"]).strip()
-            step = ["python3", str(HELPER), "--revision", revision, "--release", RELEASE,
-                    "--namespace", namespace, "--context", context, "--apply"]
-            for layer in LAYERS[profile]:
-                step += ["--values", layer]
-            command(step, env=kubeenv)
-            after = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-            migration.validate_env(env(after), CONFIG)
-            self.assertEqual(after["spec"]["replicas"], 2)
-            self.assertEqual(after["metadata"]["annotations"]["other-manager"], "preserve")
-            self.assertEqual(after["spec"]["template"]["metadata"]["annotations"]["rollout-restart"], "preserve")
-            generation = after["metadata"]["generation"]
-            self.assertIn("UNCHANGED", command(step, env=kubeenv))
-            repeated = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-            self.assertEqual(repeated["metadata"]["generation"], generation)
-            self.assertEqual(command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), config_uid)
-            self.assertEqual(command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), service_uid)
-            self.assertTrue(any(item["type"] == "Available" and item["status"] == "True" for item in repeated["status"]["conditions"]))
-            # Read pod env without printing it: all five must resolve to the ConfigMap.
-            probe_script = "printf '%s\\n' " + " ".join('"$' + key + '"' for key in migration.JWT_NAMES)
-            resolved = command(kube + ["exec", "deployment/" + NAME, "--", "sh", "-c", probe_script], env=kubeenv).splitlines()
-            self.assertTrue(resolved == [config["data"][key] for key in migration.JWT_NAMES], "pod reference resolution mismatch")
-            outcomes[-1]["atomic_step"] = "PASS"
-            # Retry the same failed delivery path after migration, not just the helper.
-            command(apply, env=kubeenv)
-            command(kube + ["rollout", "status", "deployment/" + NAME, "--timeout=120s"], env=kubeenv)
-            delivered = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-            migration.validate_env(env(delivered), CONFIG)
-            self.assertEqual(delivered["spec"]["replicas"], 2, "delivery must retain HPA-managed replicas")
-            self.assertEqual(delivered["metadata"]["annotations"]["other-manager"], "preserve")
-            self.assertEqual(delivered["spec"]["template"]["metadata"]["annotations"]["rollout-restart"], "preserve")
-            self.assertTrue(any(item["type"] == "Available" and item["status"] == "True" for item in delivered["status"]["conditions"]))
-            resolved = command(kube + ["exec", "deployment/" + NAME, "--", "sh", "-c", probe_script], env=kubeenv).splitlines()
-            self.assertTrue(resolved == [config["data"][key] for key in migration.JWT_NAMES], "retry pod reference resolution mismatch")
-            self.assertEqual(command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), config_uid)
-            self.assertEqual(command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), service_uid)
-            self.assertIn("UNCHANGED", command(step, env=kubeenv))
-            outcomes[-1]["retry"] = "PASS"
-            outcomes[-1]["retained_hpa_replicas_and_annotations"] = "PASS"
+            # Untreated observations cannot create pods/ReplicaSets in the positive sequence.
+            untreated = self.run_case(work, context, kubeenv, probe_image, scenario,
+                                      source_root, profile, literals, path, positive=False)
+            positive = self.run_case(work, context, kubeenv, probe_image, scenario,
+                                     source_root, profile, literals, path, positive=True)
+            outcomes.append({"scenario": scenario, "profile": profile, "path": path,
+                             "untreated": untreated, **positive})
         self.assertTrue(any(item["untreated"] == "REJECTED_DUAL_FIELD" for item in outcomes), "matrix must reproduce reported defect")
         evidence = {"old_revision": command(GIT + ["rev-parse", "433be51"]).strip(),
                     "existing_980_tls_revision": command(GIT + ["rev-parse", BASE_REVISION]).strip(),
                     "target_revision": command(GIT + ["rev-parse", "HEAD"]).strip(), "paths": outcomes,
-                    "mechanism": "atomic JWT env patch; preserves live replicas and annotations",
+                    "mechanism": "atomic JWT env patch before delivery; paused delivery verified before resume",
                     "helm3": command([helm3, "version", "--short"]).strip(),
                     "helm4": command(["helm", "version", "--short"]).strip()}
         evidence["legacy_values_layer"] = "tests/blackbox/fixtures/executor-env-before-980.yaml"
@@ -488,13 +513,168 @@ class Live(unittest.TestCase):
         evidence["historical_defaults"] = "no direct issuer/audience; explicit values layer models reported installed state"
         evidence["justification"] = [
             {"scenario": item["scenario"], "path": item["path"], "observed": item["untreated"],
-             "step_required": item["untreated"] != "PASS", "atomic_step_and_retry": "PASS"}
+             "step_required": item["untreated"] != "PASS", "atomic_step_before_delivery": "PASS",
+             "positive_sequence_new_replicasets": item["new_replicasets"]}
             for item in outcomes
         ]
         output = Path(os.environ["EXECUTOR_UPGRADE_EVIDENCE"])
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(evidence, indent=2) + "\n")
         print("EXECUTOR_MATRIX_EVIDENCE_SHA256=" + hashlib.sha256(output.read_bytes()).hexdigest())
+
+    def run_case(self, work, context, kubeenv, probe_image, scenario, source_root,
+                 profile, literals, path, positive):
+        phase = "safe" if positive else "negative"
+        namespace = "executor-" + scenario + "-" + path + "-" + phase
+        kube = ["kubectl", "--context", context, "-n", namespace]
+        command(kube + ["create", "namespace", namespace], env=kubeenv)
+        previous = render(source_root, profile, namespace=namespace, legacy_literals=literals)
+        objects = render(ROOT, profile, namespace=namespace)
+        old = select(previous, "Deployment", NAME)
+        target = select(objects, "Deployment", NAME)
+        config = select(objects, "ConfigMap", CONFIG)
+        old_probe, new_probe = probe(old, probe_image), probe(target, probe_image)
+        if scenario == "existing980-tls":
+            self.assertEqual(sum(item["name"] == "KEYCLOAK_JWKS_URL" for item in env(old_probe)), 2)
+        chart = work / namespace
+        (chart / "templates").mkdir(parents=True)
+        (chart / "Chart.yaml").write_text("apiVersion: v2\nname: executor-upgrade-probe\nversion: 0.0.1\n")
+        manifest = chart / "templates/executor.yaml"
+        manifest.write_text(yaml.safe_dump(old_probe))
+        service = select(objects, "Service", NAME)
+        (chart / "templates/service.yaml").write_text(yaml.safe_dump(service))
+        config_manifest = chart / "templates/config.yaml"
+        if not literals:
+            config_manifest.write_text(yaml.safe_dump(select(previous, "ConfigMap", CONFIG)))
+        helm3 = os.environ.get("HELM3_BIN", "helm3")
+        helm_scope = [RELEASE, str(chart), "-n", namespace, "--kube-context", context]
+        command([helm3, "install", *helm_scope, "--wait", "--timeout", "120s"], env=kubeenv)
+        before = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+        self.assertNotIn("kubectl.kubernetes.io/last-applied-configuration", before["metadata"].get("annotations", {}))
+        revision = command(GIT + ["rev-parse", "HEAD"]).strip()
+        step = ["python3", str(HELPER), "--revision", revision, "--release", RELEASE,
+                "--namespace", namespace, "--context", context]
+        for layer in LAYERS[profile]:
+            step += ["--values", layer]
+        if positive:
+            # Set other-manager fields before the safety baseline; those templates
+            # still belong to the historical installed state.
+            command(kube + ["patch", "deployment", NAME, "--type=merge", "-p", json.dumps({
+                "metadata": {"annotations": {"other-manager": "preserve"}},
+                "spec": {"replicas": 2, "template": {"metadata": {"annotations": {"rollout-restart": "preserve"}}}},
+            })], env=kubeenv)
+            command(kube + ["rollout", "status", "deployment/" + NAME, "--timeout=120s"], env=kubeenv)
+            before = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            baseline = {item["metadata"]["uid"] for item in json.loads(
+                command(kube + ["get", "replicasets", "-o", "json"], env=kubeenv))["items"]}
+            deployment_uid = before["metadata"]["uid"]
+            created = set()
+            def assert_sequence():
+                items = json.loads(command(kube + ["get", "replicasets", "-o", "json"], env=kubeenv))["items"]
+                created.update(validate_new_replicasets(items, baseline, deployment_uid))
+            command(kube + ["rollout", "pause", "deployment/" + NAME], env=kubeenv)
+            before = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            # Even nonempty historical TLS data must fail before patch/rollout.
+            if scenario == "existing980-tls":
+                generation = before["metadata"]["generation"]
+                for flags in ([], ["--apply"]):
+                    stale_config = subprocess.run(step + flags, capture_output=True, text=True,
+                                                  env=kubeenv, timeout=120)
+                    self.assertNotEqual(stale_config.returncode, 0, "stale target data must block the helper")
+                    current = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+                    self.assertEqual(current["metadata"]["generation"], generation)
+                assert_sequence()
+        # Preparation uses the Helm adapter, retaining the installed executor
+        # manifest. Only the target ConfigMap data is delivered in this revision.
+        config_manifest.write_text(yaml.safe_dump(config))
+        command([helm3, "upgrade", *helm_scope, "--wait", "--timeout", "120s"], env=kubeenv)
+        config_uid = command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
+        service_uid = command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
+        prepared = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+        self.assertTrue(env(prepared) == env(before), "ConfigMap preparation must hold the installed executor env")
+        if positive:
+            self.assertTrue(prepared["spec"].get("paused"), "preparation must retain the rollout pause")
+            assert_sequence()
+            command(step, env=kubeenv)  # server-side dry-run
+            command(step + ["--apply"], env=kubeenv)
+            assert_sequence()
+            after = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            migration.validate_env(env(after), CONFIG)
+            self.assertEqual(after["spec"]["replicas"], 2)
+            self.assertEqual(after["metadata"]["annotations"]["other-manager"], "preserve")
+            self.assertEqual(after["spec"]["template"]["metadata"]["annotations"]["rollout-restart"], "preserve")
+            generation = after["metadata"]["generation"]
+            self.assertIn("UNCHANGED", command(step + ["--apply"], env=kubeenv))
+            repeated = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            self.assertEqual(repeated["metadata"]["generation"], generation)
+            probe_script = "printf '%s\\n' " + " ".join('"$' + key + '"' for key in migration.JWT_NAMES)
+        # Deliver the target only AFTER the atomic step in the positive sequence.
+        manifest.write_text(yaml.safe_dump(new_probe))
+        apply = (kube + ["apply", "-f", str(manifest)] if path == "argo-client" else
+                 [helm3 if path == "helm3-client" else "helm", "upgrade", *helm_scope] +
+                 (["--server-side=true"] if path == "helm4-server" else []))
+        if positive:
+            command(apply, env=kubeenv)
+            paused = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            self.assertTrue(paused["spec"].get("paused"), "delivery must retain the rollout pause")
+            assert_sequence()
+            # Helm's stored duplicate manifest can still delete a name during
+            # delivery. Repair atomically while paused, before any new ReplicaSet.
+            command(step + ["--apply"], env=kubeenv)
+            verified = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            migration.validate_env(env(verified), CONFIG)
+            self.assertTrue(verified["spec"].get("paused"))
+            assert_sequence()
+            command(kube + ["rollout", "resume", "deployment/" + NAME], env=kubeenv)
+            command(kube + ["rollout", "status", "deployment/" + NAME, "--timeout=120s"], env=kubeenv)
+            assert_sequence()
+            self.assertTrue(created, "positive sequence must inspect at least one new ReplicaSet")
+            delivered = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            migration.validate_env(env(delivered), CONFIG)
+            self.assertEqual(delivered["spec"]["replicas"], 2, "delivery must retain HPA-managed replicas")
+            self.assertEqual(delivered["metadata"]["annotations"]["other-manager"], "preserve")
+            self.assertEqual(delivered["spec"]["template"]["metadata"]["annotations"]["rollout-restart"], "preserve")
+            self.assertTrue(any(item["type"] == "Available" and item["status"] == "True" for item in delivered["status"]["conditions"]))
+            resolved = command(kube + ["exec", "deployment/" + NAME, "--", "sh", "-c", probe_script], env=kubeenv).splitlines()
+            self.assertTrue(resolved == [config["data"][key] for key in migration.JWT_NAMES], "delivery pod reference resolution mismatch")
+            self.assertEqual(command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), config_uid)
+            self.assertEqual(command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), service_uid)
+            self.assertIn("UNCHANGED", command(step + ["--apply"], env=kubeenv))
+            assert_sequence()
+            return {"atomic_step": "PASS", "delivery": "PASS", "paused_delivery_verification": "PASS", "replicaset_safety": "PASS",
+                    "new_replicasets": len(created), "retained_hpa_replicas_and_annotations": "PASS"}
+        # Negative observations are isolated and never waive a positive safety failure.
+        result = subprocess.run(apply, capture_output=True, text=True, env=kubeenv, timeout=120)
+        rejected = result.returncode != 0 and "may not be specified when value is not empty" in result.stderr
+        duplicate_rejected = (scenario == "existing980-tls" and result.returncode != 0
+                              and ("duplicate" in result.stderr.lower() or "$setElementOrder" in result.stderr)
+                              and "KEYCLOAK_JWKS_URL" in result.stderr)
+        self.assertTrue(result.returncode == 0 or rejected or duplicate_rejected,
+                        scenario + "/" + path + ": unexpected failure (payload redacted)")
+        live = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+        untreated = "REJECTED_DUAL_FIELD" if rejected else "REJECTED_DUPLICATE_ENV" if duplicate_rejected else "PASS"
+        if result.returncode == 0:
+            try:
+                migration.validate_env(env(live), CONFIG)
+            except ValueError:
+                untreated = "ACCEPTED_INVALID_JWT_ENV"  # Defect evidence only in this disposable negative namespace.
+        bad = copy.deepcopy(new_probe)
+        next(item for item in env(bad) if item["name"] == migration.JWT_NAMES[0])["value"] = "legacy"
+        negative = subprocess.run(kube + ["patch", "deployment", NAME, "--type=json", "--dry-run=server",
+                                         "--patch-file=/dev/stdin"], input=json.dumps([
+            {"op": "replace", "path": "/spec/template/spec/containers/0/env", "value": env(bad)}
+        ]), capture_output=True, text=True, env=kubeenv, timeout=60)
+        self.assertTrue(negative.returncode != 0 and "may not be specified when value is not empty" in negative.stderr,
+                        "API must reject negative dual-field control")
+        stale = subprocess.run(kube + ["patch", "deployment", NAME, "--type=json", "--dry-run=server",
+                                      "--patch-file=/dev/stdin"], input=json.dumps([
+            {"op": "test", "path": "/metadata/resourceVersion", "value": "stale-version"},
+            {"op": "replace", "path": "/spec/template/spec/containers/0/env", "value": env(new_probe)}
+        ]), capture_output=True, text=True, env=kubeenv, timeout=60)
+        self.assertNotEqual(stale.returncode, 0, "stale resourceVersion must reject before mutation")
+        unchanged = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+        self.assertTrue(env(unchanged) == env(live), "negative controls must not change live env")
+        return untreated
 
 
 if __name__ == "__main__":
