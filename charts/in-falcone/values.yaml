@@ -32,8 +32,8 @@ global:
     # Exact controller ServiceAccount used only for TokenRequest in externally
     # managed mode. Falcone never creates or mutates this identity.
     operatorServiceAccount: ""
-  # References only: provision an Ed25519 private-key (PKCS#8 PEM), key-id,
-  # and public-only jwks in OpenBao KV v2 before enabling the paired source.
+  # References only: OpenBao bootstrap idempotently seeds an Ed25519 private-key
+  # (PKCS#8 PEM), key-id and public-only jwks on installs and upgrades.
   # ESO delivers all three atomically; only the control-plane container consumes
   # this Secret. Function revisions receive only the public JWKS from that app.
   functionInvocation:

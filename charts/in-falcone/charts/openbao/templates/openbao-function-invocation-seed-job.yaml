@@ -1,0 +1,62 @@
+{{- /* Fresh installs seed in openbao-init. Upgrades use its existing bootstrap
+       identity, never the metadata-only reconciler or recovery credentials. */ -}}
+{{- if or .Release.IsUpgrade (dig "gitops" "upgradeSemantics" false (.Values.global | default dict)) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openbao-function-invocation-seed
+  namespace: {{ .Values.openbao.namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-2"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openbao-function-invocation-seed
+    spec:
+      serviceAccountName: openbao-bootstrap
+      restartPolicy: Never
+      {{- include "openbao.imagePullSecrets" . | nindent 6 }}
+      securityContext: {{- toYaml (merge (deepCopy .Values.openbao.jobPodSecurityContext) (dict "fsGroup" (.Values.openbao.jobPodSecurityContext.runAsUser | default 1000))) | nindent 8 }}
+      containers:
+        {{- include "openbao.functionInvocation.generator" . | nindent 8 }}
+        - name: function-invocation-seed
+          image: {{ include "openbao.image" (dict "root" . "image" .Values.openbao.image) | quote }}
+          imagePullPolicy: {{ .Values.openbao.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.openbao.jobSecurityContext | nindent 12 }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set +x
+              export BAO_ADDR="https://openbao.{{ .Values.openbao.namespace }}.svc.cluster.local:8200"
+              export BAO_CACERT=/openbao/tls/ca.crt
+              i=0
+              until bao status >/dev/null 2>&1; do
+                i=$((i+1)); [ "$i" -le 60 ] || { echo "OpenBao unavailable for function signer bootstrap" >&2; exit 1; }
+                sleep 2
+              done
+              BAO_TOKEN=$(bao write -field=token auth/kubernetes/login \
+                role=openbao-init-role \
+                jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" 2>/dev/null) || {
+                  echo "Function signer bootstrap authentication failed" >&2; exit 1; }
+              [ -n "$BAO_TOKEN" ] || exit 1
+              export BAO_TOKEN
+              {{- include "openbao.functionInvocation.seed" . | nindent 14 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /openbao/tls
+              readOnly: true
+            - name: function-invocation
+              mountPath: /function-invocation
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.openbao.tls.secretName }}
+        - name: function-invocation
+          emptyDir:
+            medium: Memory
+{{- end }}

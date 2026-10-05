@@ -50,10 +50,22 @@ network or return 401. Repository render tests do not establish this live eviden
 
 ## Invocation signer delivery
 
-Before releasing the paired source, provision the OpenBao KV v2 record
-`secret/platform/functions/invocation` through the approved credential workflow.
+OpenBao bootstrap seeds the KV v2 record `secret/platform/functions/invocation`
+on fresh installs and upgrades without manual provisioning. Fresh installs use
+`openbao-init`; upgrades (including GitOps upgrade semantics) use
+`openbao-function-invocation-seed` after auth reconciliation and before ESO hooks.
+The upgrade Job authenticates through the existing `openbao-bootstrap` identity
+and `openbao-init-role`, without mounting recovery credentials or expanding the
+metadata-only auth reconciler's permissions.
+
 Its properties are `private-key` (Ed25519 PKCS#8 PEM), `key-id` (the active signing
 key's `kid`) and `jwks` (a JSON public-only Ed25519 JWKS containing that `kid`).
+Only an absent record triggers key generation in the existing dedicated OpenSSL
+image. Files stay in a restricted memory-backed volume shared only with the
+bootstrap container and are removed after storage. KV v2 compare-and-set version
+zero prevents replacement, including concurrent bootstraps and transient read
+failures. Existing records, key IDs and overlapping public keys are preserved;
+an incomplete existing record fails closed rather than silently rotating keys.
 Never put these contents in Helm values, Git, logs or function definitions.
 `global.functionInvocation.remoteKey` changes the KV path within `platform/`;
 `global.functionInvocation.secretName` changes the target Secret name. Missing
@@ -73,8 +85,8 @@ environment absent and allows the control plane's other APIs to start, including
 profiles without functions/Knative. Function deploys are rejected and invocations
 return 503 until signing is configured; runtime enforcement remains enabled.
 Optional references avoid a Helm `--wait` deadlock before the managed ESO
-post-install/post-upgrade hooks run. The chart does not seed this OpenBao record;
-signer provisioning remains a prerequisite for function availability.
+post-install/post-upgrade hooks run. Bootstrap failure prevents the release's
+signer delivery hooks from proceeding successfully.
 
 After ESO has reconciled, restart the control plane through the approved rollout
 to populate its environment before deploying or re-rolling functions. Check ESO
@@ -86,4 +98,5 @@ plane through the approved rollout and re-roll owned function revisions through
 the existing PATCH flow. Then switch the active private key and `key-id`, restart
 the control plane, and retain the previous public key until old revisions and
 in-flight invocations have drained. Runtime image publication and promotion,
-signer provisioning and live cold-start/CNI evidence remain release gates.
+ESO reconciliation, control-plane rollout and live cold-start/CNI evidence remain
+release gates.

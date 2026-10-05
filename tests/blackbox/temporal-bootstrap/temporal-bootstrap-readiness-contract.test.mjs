@@ -2408,6 +2408,11 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     && document.metadata.name === 'platform-function-invocation');
   assert.ok(signerExternal, 'historical reuse-values must deliver invocation keys through ESO');
   assert.equal(signerExternal.spec.target.name, 'in-falcone-function-invocation');
+  const signerSeed = exactDocuments.find((document) => document.kind === 'Job'
+    && document.metadata.name === 'openbao-function-invocation-seed');
+  assert.ok(signerSeed, 'historical reuse-values must provision the missing signer before ESO');
+  assert.equal(signerSeed.spec.template.spec.serviceAccountName, 'openbao-bootstrap');
+  assert.equal(signerSeed.metadata.annotations['helm.sh/hook-weight'], '-2');
   const signerDeployment = exactDocuments.find((document) => document.kind === 'Deployment'
     && document.metadata.name === `${releaseName}-control-plane`);
   const signerContainer = signerDeployment?.spec.template.spec.containers
