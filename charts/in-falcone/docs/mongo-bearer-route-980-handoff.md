@@ -206,6 +206,53 @@ tenant data through the existing issuer/workspace binding.
    API-key scope/rate-limit behavior and plugin loading. Roll back enforcement
    to false with pod reloads if needed; audience mappers may remain.
 
+## Mandatory prod checklist: executor env transition (#1053)
+
+1. Complete tenant-app/service-account audience reconciliation, fresh-token checks
+   and a zero-repair repeat **before enforcement**. Prod inherits true; retain
+   every existing backup, parity, migration and ESO/OpenBao gate.
+2. Confirm **real production issuer/JWKS hosts** in the exact reviewed values.
+   `https://iam.in-falcone.example.com` is a placeholder; `https://iam.baas.musematic.ai`
+   is staging only. Prod hosts are not changed by this repair. Review TLS JWKS via
+   existing verifier values: shared TLS env cannot override executor references.
+3. From the clean exact target revision, use the one-time atomic executor JWT
+   env step in [0.4.20 release notes](../RELEASE-NOTES-0.4.20.md). Run its dry-run
+   and `--apply` with explicit context/release namespace and every ordered values
+   layer after normal gated delivery reconciles the target executor ConfigMap.
+   It checks all five keys without printing payloads, removes literals while
+   adding references atomically, and preserves replicas/annotations/Service/
+   ConfigMap. It is a no-op on migrated staging. Use the same step for affected
+   Helm and Argo paths, then retry normal delivery. Never force the whole release.
+4. Verify Available, five unique reference-only entries, resolved pod config,
+   preserved replicas/annotations and an unchanged repeat. Complete the existing
+   bearer CRUD/negative/isolation/API-key checks. Correct/retry forward, or use
+   an operator-reviewed reapply of **only** the protected `433be51` executor render
+   with actual old values and retained actor-managed fields. Keep JWT changes
+   atomic and retain the Service and ConfigMap.
+
+The dedicated CI `executor-env-upgrade-evidence` artifact records independent
+Helm 3 client, Argo client and Helm 4 server results, atomic-step/retry outcomes
+and revision/fixture hashes. Live evidence is required before release and not
+claimed locally. Untouched `433be51` defaults lack direct issuer/audience env;
+the reported-state regression explicitly layers the credential-free
+`tests/blackbox/fixtures/executor-env-before-980.yaml` over that historical chart.
+The live test isolates JWT env in a disposable readiness probe; it does not claim
+a full platform install. No default fixture is re-baselined: the template change
+only filters shared TLS JWT literals for the executor. Published notes are intact;
+shipping version and actual prod JWKS endpoint remain release-review questions.
+Hermes must set both source workflow pins to the final local deployment HEAD and
+rerun `tests/blackbox/mongo-gateway-route.test.mjs` after this commit.
+
+Bounded local #1053 evidence: historical/default/staging/prod/prod-TLS/kind-TLS
+render checks, duplicate/dual-field negatives and fake-client atomic/precondition
+checks pass. The existing Mongo chart suite passes 15/15, strict Helm lint passes
+default/staging/prod/kind/kind-TLS, and the unchanged Argo equivalence command
+prints `OK`. Python/Node syntax and diff hygiene pass. The required
+`bbx-temporal-bootstrap-048` command was attempted but cannot import the pinned
+Node `yaml` package; frozen dependency installation and that check remain PR CI
+requirements. Kind is absent locally, so live outcomes remain the dedicated CI
+gate. These sandbox limitations do not replace any existing release evidence.
+
 ## Validation and paired handoff
 
 Fresh scoped evidence covers chart profiles, audience/flag parity and render overrides,

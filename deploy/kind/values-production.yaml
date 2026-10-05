@@ -10,6 +10,9 @@
 # mounts `caSecretName` read-only at `caMountPath`. Because the TLS env is appended LAST, the
 # https endpoint entries below override any http defaults a base profile set in the component env
 # (Kubernetes uses the last occurrence of a duplicated env var name).
+# Exception: executor KEYCLOAK_* entries remain ConfigMap-backed; shared TLS
+# literals do not override them. Review global.keycloakJwksBaseUrl in the ordered
+# release values for the executor's TLS endpoint; this overlay does not change it.
 #
 # PREREQUISITE: create the CA secret the datastore server certs chain to, e.g.
 #   kubectl -n <ns> create secret generic falcone-transport-ca --from-file=ca.crt=ca.crt

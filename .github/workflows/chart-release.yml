@@ -30,6 +30,47 @@ permissions:
   packages: write
 
 jobs:
+  executor-env-upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.17.0'
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Retain Helm 3 client for independent upgrade evidence
+        run: |
+          cp "$(command -v helm)" "$RUNNER_TEMP/helm3"
+          echo "HELM3_BIN=$RUNNER_TEMP/helm3" >>"$GITHUB_ENV"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.1.4
+      - uses: helm/kind-action@v1.12.0
+        with:
+          install_only: true
+          version: v0.27.0
+      - name: Install YAML reader
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends python3-yaml
+      - name: Verify executor renders and live upgrade paths
+        env:
+          EXECUTOR_UPGRADE_LIVE: '1'
+          EXECUTOR_UPGRADE_EVIDENCE: ${{ runner.temp }}/executor-env-upgrade-evidence.json
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: node --test tests/blackbox/deployment-packaging/executor-env-upgrade-contract.test.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: executor-env-upgrade-evidence
+          path: ${{ runner.temp }}/executor-env-upgrade-evidence.json
+          if-no-files-found: error
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -187,7 +228,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push'
-    needs: validate
+    needs: [validate, executor-env-upgrade]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
