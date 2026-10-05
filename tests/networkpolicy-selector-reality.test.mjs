@@ -333,6 +333,8 @@ check('unsafe function egress and invalid types fail closed with and without sch
     ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[]}]'],
     ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":0}]}]'],
     ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":65536}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":"8080"}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":8080,"endPort":65535}]}]'],
     ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":80,"protocol":"INVALID"}]}]'],
     ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"in-falcone.io/component":"function"},"ports":[{"port":8080}]}]'],
     ...[...defaultFunctionGateways, 'custom-knative'].map((namespace) => [

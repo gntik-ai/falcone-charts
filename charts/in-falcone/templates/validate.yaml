@@ -54,8 +54,14 @@
     {{- if not (kindIs "map" $port) -}}
       {{- fail "functions.networkPolicy.allowedEgress ports must be port objects" -}}
     {{- end -}}
+    {{- /* Keep explicit port grants bounded even when schema validation is skipped. */ -}}
+    {{- range $key, $_ := $port -}}
+      {{- if not (has $key (list "port" "protocol")) -}}
+        {{- fail "functions.networkPolicy.allowedEgress ports accept only port and protocol" -}}
+      {{- end -}}
+    {{- end -}}
     {{- $number := $port.port | default 0 -}}
-    {{- if not (regexMatch "^[0-9]+$" (toString $number)) -}}
+    {{- if or (kindIs "string" $number) (not (regexMatch "^[0-9]+$" (toString $number))) -}}
       {{- fail "functions.networkPolicy.allowedEgress port must be an integer from 1 to 65535" -}}
     {{- end -}}
     {{- if or (lt (int $number) 1) (gt (int $number) 65535) -}}
