@@ -34,6 +34,7 @@ LAYERS = {
     "kind-tls": ["deploy/kind/values-kind.yaml", "deploy/kind/values-production.yaml"],
 }
 BASE_REVISION = "93ee9371fdbd029ff49909ff1fb5c03eeff0ddae"
+UPGRADE_VALUES = "tests/blackbox/fixtures/executor-env-upgrade-values.yaml"
 
 
 def command(args, **kwargs):
@@ -58,12 +59,15 @@ def historical_checkout(directory, revision="433be51"):
                 target.write_bytes(archive.extractfile(member).read())
 
 
-def render(root, profile="default", namespace="falcone-upgrade", legacy_literals=False):
+def render(root, profile="default", namespace="falcone-upgrade", legacy_literals=False,
+           upgrade=False):
     args = ["helm", "template", RELEASE, str(root / "charts/in-falcone"), "-n", namespace]
     for layer in LAYERS[profile]:
         args += ["-f", str(root / layer)]
     if legacy_literals:
         args += ["-f", str(ROOT / "tests/blackbox/fixtures/executor-env-before-980.yaml")]
+    if upgrade:
+        args += ["--is-upgrade", "-f", str(ROOT / UPGRADE_VALUES)]
     return [item for item in yaml.load_all(command(args), Loader=yaml.CSafeLoader) if item]
 
 
@@ -141,6 +145,60 @@ def delivery_outcome(result, scenario, path):
 
 
 class Offline(unittest.TestCase):
+    def test_helper_real_upgrade_render_requires_explicit_probe_values(self):
+        # Exercise the helper's actual Helm command, not a mocked render. The
+        # install-only profiles previously passed every offline fake but failed
+        # at the backup/parity and currentVersion gates in the first live dry-run.
+        revision = command(GIT + ["rev-parse", "HEAD"]).strip()
+        for profile in LAYERS:
+            objects = render(ROOT, profile)
+            target = select(objects, "Deployment", NAME)
+            config = select(objects, "ConfigMap", CONFIG)
+            upgraded = render(ROOT, profile, upgrade=True)
+            self.assertTrue(select(upgraded, "Deployment", NAME) == target,
+                            "probe upgrade values must preserve the executor render")
+            self.assertTrue(select(upgraded, "ConfigMap", CONFIG) == config,
+                            "probe upgrade values must preserve JWT configuration")
+            live = copy.deepcopy(target)
+            live["metadata"]["resourceVersion"] = "42"
+            env(live)[:] = [{"name": key, "value": "old"} for key in migration.JWT_NAMES[:3]]
+            for explicit_values in (False, True):
+                with self.subTest(profile=profile, explicit_values=explicit_values):
+                    calls = []
+                    def real_render_fake_cluster(args, **kwargs):
+                        calls.append(args)
+                        if args[0] == "git":
+                            if "rev-parse" in args:
+                                return revision
+                            return ""  # revision/clean-input behavior has separate tests
+                        if args[0] == "helm":
+                            self.assertIn("--is-upgrade", args)
+                            return migration_run(args, **kwargs)
+                        if "configmap" in args:
+                            return json.dumps(config)
+                        if "get" in args:
+                            return json.dumps(live)
+                        if "patch" in args:
+                            self.assertIn("--dry-run=server", args)
+                            migration.validate_env(json.loads(kwargs["input"])[1]["value"], CONFIG)
+                            return ""
+                        raise AssertionError("unexpected fake cluster call")
+                    argv = [str(HELPER), "--revision", revision, "--release", RELEASE,
+                            "--namespace", "falcone-upgrade", "--context", "kind-fake"]
+                    for layer in LAYERS[profile] + ([UPGRADE_VALUES] if explicit_values else []):
+                        argv += ["--values", layer]
+                    migration_run = migration.run
+                    with mock.patch.object(migration, "run", side_effect=real_render_fake_cluster), \
+                            mock.patch.object(migration.sys, "argv", argv), redirect_stdout(io.StringIO()):
+                        if explicit_values:
+                            migration.main()
+                            self.assertEqual(sum("patch" in call for call in calls), 1)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "^EXECUTOR_UPGRADE_COMMAND_FAILED$"):
+                                migration.main()
+                            self.assertFalse(any(call[0] == "kubectl" for call in calls),
+                                             "ungated upgrade must fail before API access")
+
     def test_dual_field_rejection_recognizes_api_message_without_accepting_other_failures(self):
         for value in ("`value`", "value"):
             error = ('The Deployment "executor" is invalid: '
@@ -193,6 +251,9 @@ class Offline(unittest.TestCase):
                              {"pre980", "existing980-tls"})
             self.assertEqual(evidence["helm3"], "v3.17.3")
             self.assertEqual(evidence["helm4"], "v4.1.4")
+            self.assertEqual(evidence["probe_upgrade_values_layer"], UPGRADE_VALUES)
+            self.assertEqual(evidence["probe_upgrade_values_sha256"],
+                             hashlib.sha256((ROOT / UPGRADE_VALUES).read_bytes()).hexdigest())
             self.assertIn(["reviewed-helm3", "version", "--short"], calls)
             self.assertTrue(all(item["atomic_step"] == "PASS" for item in evidence["paths"]))
 
@@ -231,6 +292,8 @@ class Offline(unittest.TestCase):
                                 return ""
                             if args[:2] == ["python3", str(HELPER)]:
                                 self.assertGreater(state["deliveries"], 0, "helper must follow target delivery")
+                                values = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--values"]
+                                self.assertEqual(values, LAYERS[profile] + [UPGRADE_VALUES])
                                 migration.validate_config(state["config"], wanted_config)
                                 patch = migration.migration_patch(state["deployment"], target, CONFIG)
                                 if patch:
@@ -702,6 +765,9 @@ class Live(unittest.TestCase):
                     "helm4": command(["helm", "version", "--short"]).strip()}
         evidence["legacy_values_layer"] = "tests/blackbox/fixtures/executor-env-before-980.yaml"
         evidence["legacy_values_sha256"] = hashlib.sha256((ROOT / evidence["legacy_values_layer"]).read_bytes()).hexdigest()
+        evidence["probe_upgrade_values_layer"] = UPGRADE_VALUES
+        evidence["probe_upgrade_values_sha256"] = hashlib.sha256((ROOT / UPGRADE_VALUES).read_bytes()).hexdigest()
+        evidence["probe_upgrade_scope"] = "disposable JWT probe only; explicit authority waiver; no database or backup/parity claim"
         evidence["historical_defaults"] = "no direct issuer/audience; explicit values layer models reported installed state"
         evidence["justification"] = [
             {"scenario": item["scenario"], "path": item["path"], "observed": item["untreated"],
@@ -721,7 +787,7 @@ class Live(unittest.TestCase):
         kube = ["kubectl", "--context", context, "-n", namespace]
         command(kube + ["create", "namespace", namespace], env=kubeenv)
         previous = render(source_root, profile, namespace=namespace, legacy_literals=literals)
-        objects = render(ROOT, profile, namespace=namespace)
+        objects = render(ROOT, profile, namespace=namespace, upgrade=True)
         old = select(previous, "Deployment", NAME)
         target = select(objects, "Deployment", NAME)
         config = select(objects, "ConfigMap", CONFIG)
@@ -751,6 +817,7 @@ class Live(unittest.TestCase):
                 "--namespace", namespace, "--context", context]
         for layer in LAYERS[profile]:
             step += ["--values", layer]
+        step += ["--values", UPGRADE_VALUES]
         if positive:
             # Set other-manager fields before the safety baseline; those templates
             # still belong to the historical installed state.
