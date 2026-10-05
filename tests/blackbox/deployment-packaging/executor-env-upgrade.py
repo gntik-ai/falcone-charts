@@ -120,10 +120,18 @@ def probe(deployment, image):
     return result
 
 
+def rejected_dual_field(result):
+    # Kubernetes quotes `value` in its validation error; the issue's reported
+    # message and older fake clients omit the backticks. Require a failed request
+    # and the same validation error in either spelling, never an arbitrary error.
+    message = result.stderr.replace("`value`", "value")
+    return result.returncode != 0 and "may not be specified when value is not empty" in message
+
+
 def delivery_outcome(result, scenario, path):
     if result.returncode == 0:
         return "PASS"
-    if "may not be specified when value is not empty" in result.stderr:
+    if rejected_dual_field(result):
         return "REJECTED_DUAL_FIELD"
     if (scenario == "existing980-tls"
             and ("duplicate" in result.stderr.lower() or "$setElementOrder" in result.stderr)
@@ -133,6 +141,25 @@ def delivery_outcome(result, scenario, path):
 
 
 class Offline(unittest.TestCase):
+    def test_dual_field_rejection_recognizes_api_message_without_accepting_other_failures(self):
+        for value in ("`value`", "value"):
+            error = ('The Deployment "executor" is invalid: '
+                     'spec.template.spec.containers[0].env[0].valueFrom: Invalid value: "": '
+                     f'may not be specified when {value} is not empty')
+            rejected = subprocess.CompletedProcess([], 1, "", error)
+            self.assertTrue(rejected_dual_field(rejected))
+            for path in ("helm3-client", "argo-client", "helm4-server"):
+                self.assertEqual(delivery_outcome(rejected, "pre980", path), "REJECTED_DUAL_FIELD")
+            # Matching text is evidence only when the API request actually fails.
+            self.assertFalse(rejected_dual_field(subprocess.CompletedProcess([], 0, "", error)))
+        for error in ("", "Forbidden", "unable to read patch file", "may not specify more than 1 volume type"):
+            rejected = subprocess.CompletedProcess([], 1, "", error)
+            self.assertFalse(rejected_dual_field(rejected))
+            with self.assertRaisesRegex(AssertionError, "unexpected delivery failure"):
+                delivery_outcome(rejected, "pre980", "argo-client")
+        self.assertFalse(rejected_dual_field(subprocess.CompletedProcess(
+            [], 1, "may not be specified when `value` is not empty", "")))
+
     def test_completed_matrix_persists_all_paths_and_client_versions(self):
         with tempfile.TemporaryDirectory(prefix="executor-evidence-") as folder:
             work = Path(folder)
@@ -832,7 +859,7 @@ class Live(unittest.TestCase):
                                          "--patch-file=/dev/stdin"], input=json.dumps([
             {"op": "replace", "path": "/spec/template/spec/containers/0/env", "value": env(bad)}
         ]), capture_output=True, text=True, env=kubeenv, timeout=60)
-        self.assertTrue(negative.returncode != 0 and "may not be specified when value is not empty" in negative.stderr,
+        self.assertTrue(rejected_dual_field(negative),
                         "API must reject negative dual-field control")
         stale = subprocess.run(kube + ["patch", "deployment", NAME, "--type=json", "--dry-run=server",
                                       "--patch-file=/dev/stdin"], input=json.dumps([
