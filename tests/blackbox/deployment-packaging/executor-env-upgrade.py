@@ -473,7 +473,27 @@ class Offline(unittest.TestCase):
                                 and item["metadata"]["name"].endswith("-gateway-policy"))]
                 self.assertTrue(gateway(before) == gateway(after), "gateway verifier must remain unchanged")
                 old_control = select(before, "Deployment", RELEASE + "-control-plane")
-                new_control = select(after, "Deployment", RELEASE + "-control-plane")
+                new_control = copy.deepcopy(select(after, "Deployment", RELEASE + "-control-plane"))
+                old_container = next(item for item in old_control["spec"]["template"]["spec"]["containers"]
+                                     if item["name"] == "control-plane")
+                new_container = next(item for item in new_control["spec"]["template"]["spec"]["containers"]
+                                     if item["name"] == "control-plane")
+                # #972 adds only these reviewed signer references to the historical
+                # control plane. Check their exact shape and the entire inherited
+                # env before comparing every other Deployment field unchanged.
+                signer_env = [{
+                    "name": name,
+                    "valueFrom": {"secretKeyRef": {
+                        "name": "in-falcone-function-invocation", "key": key, "optional": True,
+                    }},
+                } for name, key in (
+                    ("FN_INVOCATION_PRIVATE_KEY", "private-key"),
+                    ("FN_INVOCATION_KEY_ID", "key-id"),
+                    ("FN_INVOCATION_JWKS", "jwks"),
+                )]
+                self.assertTrue(new_container["env"] == signer_env + old_container["env"],
+                                "control-plane env must add only the reviewed function signer references")
+                new_container["env"] = new_container["env"][len(signer_env):]
                 self.assertTrue(old_control == new_control, "control-plane TLS configuration must be preserved")
 
     def test_tls_jwt_source_rejects_ambiguous_entries(self):
