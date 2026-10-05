@@ -2402,6 +2402,17 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #972: real stored values predate function isolation; upgrades still render it.
+  assert.equal(historical.functions, undefined);
+  const functionPolicies = exactDocuments.filter((document) => document.kind === 'NetworkPolicy'
+    && document.metadata.name === `${releaseName}-function-internal-only`);
+  assert.equal(functionPolicies.length, 1, 'historical reuse-values must isolate function pods');
+  assert.deepEqual(functionPolicies[0].spec.podSelector.matchLabels,
+    { 'in-falcone.io/component': 'function' });
+  assert.deepEqual(functionPolicies[0].spec.policyTypes, ['Ingress', 'Egress']);
+  assert.equal(functionPolicies[0].spec.egress.length, 1, 'historical defaults permit DNS only');
+  assert.deepEqual(functionPolicies[0].spec.egress[0].ports,
+    [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }]);
   // #16: stored defaults predate Kafka isolation; reuse-values must apply it too.
   assert.equal(historical.kafka.networkPolicy, undefined);
   const kafkaPolicies = exactDocuments.filter((document) => document.kind === 'NetworkPolicy'

@@ -1,0 +1,84 @@
+{{- /* Stored defaults under --reuse-values may predate the entire functions map. */ -}}
+{{- $functions := .Values.functions | default dict -}}
+{{- $np := $functions.networkPolicy | default dict -}}
+{{- $gateways := dig "gatewayNamespaces" (list "knative-serving" "kourier-system") $np -}}
+{{- $excludedNamespaces := concat (list "knative-serving" "kourier-system") $gateways | uniq -}}
+{{- if dig "enabled" true $np }}
+{{- /*
+  Internal-only NetworkPolicy for runtime-created Knative function pods. The
+  control plane pins `in-falcone.io/component: function` on spec.template labels.
+  Only the configured Knative ingress / activator namespaces may reach them.
+  Egress is DNS plus explicit pod destinations; every peer excludes functions
+  and the Knative data plane, including when an operator supplies broad labels.
+
+  ENFORCEMENT CAVEAT (ADR-12): NetworkPolicy is honored only under a policy-enforcing
+  CNI (Calico/Cilium/OVN-Kubernetes). kind's default kindnet does NOT enforce it,
+  so isolation must be proven on a policy-enforcing CNI in release acceptance.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-function-internal-only
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      in-falcone.io/component: function
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if $gateways }}
+  ingress:
+    - from:
+        {{- range $gateways }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  egress:
+    # Cluster DNS only; no namespace-wide or arbitrary port-53 grant.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: NotIn
+                values: {{ $excludedNamespaces | toJson }}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+            matchExpressions:
+              - key: in-falcone.io/component
+                operator: NotIn
+                values: [function]
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- range (dig "allowedEgress" (list) $np) }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace | default $.Release.Namespace | quote }}
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: NotIn
+                values: {{ $excludedNamespaces | toJson }}
+          podSelector:
+            matchLabels:
+              {{- toYaml (.podLabels | default dict) | nindent 14 }}
+            matchExpressions:
+              - key: in-falcone.io/component
+                operator: NotIn
+                values: [function]
+      ports:
+        {{- toYaml (.ports | default list) | nindent 8 }}
+    {{- end }}
+{{- end }}
