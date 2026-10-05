@@ -1,0 +1,14 @@
+# Only for the disposable #1053 JWT probe: no database is installed or migrated.
+# Use the existing explicit waiver contract; never claim backup/parity evidence.
+# The real release still needs its reviewed host, migration and evidence layers.
+global:
+  webhookDatabase:
+    migration:
+      authorityReplayEnabled: false
+      waiverReference: executor-1053-disposable-jwt-probe-only
+      backupVerified: false
+      parityVerified: false
+      backupReference: ""
+deployment:
+  upgrade:
+    currentVersion: "0.3.1"

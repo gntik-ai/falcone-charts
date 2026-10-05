@@ -206,6 +206,156 @@ tenant data through the existing issuer/workspace binding.
    API-key scope/rate-limit behavior and plugin loading. Roll back enforcement
    to false with pod reloads if needed; audience mappers may remain.
 
+## Mandatory prod checklist: executor env transition (#1053)
+
+1. Complete tenant-app/service-account audience reconciliation, fresh-token checks
+   and a zero-repair repeat **before enforcement**. Prod inherits true; retain
+   every existing backup, parity, migration and ESO/OpenBao gate.
+2. Confirm **real production issuer/JWKS hosts** in the exact reviewed values.
+   `https://iam.in-falcone.example.com` is a placeholder; `https://iam.baas.musematic.ai`
+   is staging only. Prod hosts are not changed by this repair. Shared TLS JWT
+   literals now populate the executor ConfigMap instead of duplicate env names:
+   the transport overlay retains its effective HTTPS JWKS endpoint on port 8443,
+   replacing the stored HTTP default. Verify the resolved executor scheme, host,
+   port and path for the exact ordered values. Release review must acknowledge
+   the ConfigMap representation change while retaining the effective TLS endpoint.
+   The gateway verifier is unchanged.
+3. From the clean exact target revision, use the one-time atomic executor JWT
+   env step in [0.4.20 release notes](../RELEASE-NOTES-0.4.20.md). Pause only the
+   executor Deployment, then run normal gated target delivery with the real chart
+   and exact ordered values while keeping old pods serving. The notes give both
+   the Helm upgrade and revision-pinned Argo sync commands; no ConfigMap-only
+   preparation revision is needed. Defer rollout waits until resume and retain
+   every pre-apply and final readiness gate. Argo must finish its executor apply
+   with no background retry/write in flight before the helper or resume.
+   Pre-#980 delivery creates the ConfigMap; existing #980 prod-TLS/kind-TLS
+   delivery includes target data and the executor. A rejected
+   executor env apply is expected defect evidence; an accepted merge can still
+   drop JWKS, so keep the executor paused in either case. Other failures retain
+   their existing gates. If target ConfigMap delivery is incomplete, correct and
+   retry while paused; never bypass its exact-data check.
+   Then run the helper's dry-run and `--apply` with explicit context/release
+   namespace and every ordered values layer. It compares live ConfigMap data
+   with the exact target render in-process, rejects missing/empty/mismatched data
+   before patch or rollout even for no-op env, and prints no payloads.
+   It removes literals while adding references atomically and preserves
+   replicas/annotations/Service/ConfigMap. It is a no-op on migrated staging.
+   Retry any rejected target delivery while paused for Helm and Argo paths; it
+   must succeed. Confirm the pause remains and no executor apply is in flight,
+   then rerun the helper to verify or atomically repair the merged env.
+   Only then resume the executor Deployment and wait for Available. The helper
+   verifies a paused apply without waiting for rollout or resuming; Helm's stored
+   duplicate manifest cannot create an unsafe ReplicaSet during delivery.
+   Install prerequisites are `python3` with PyYAML, `helm`, and `kubectl`.
+   PR CI isolates untreated negative experiments and fails the positive sequence
+   if any new executor ReplicaSet, including a superseded one, lacks a required
+   JWT env, duplicates a JWT name, or contains both value and valueFrom.
+   An HPA scale during rollout can cause post-patch verification to fail; check
+   the HPA count, JWT env and Available, then rerun without resetting replicas.
+   The patch is not reverted by that failure; keep delivery/resume gated.
+   If Helm 4 retry conflicts on HPA-owned replicas, align only the executor's
+   `controlPlaneExecutor.replicas` in the reviewed target values with the current
+   HPA count and retry with the same layers as the helper. Matching values avoid
+   forcing ownership. Review any lasting ownership handoff separately; never
+   use release-wide `--force-conflicts`.
+4. Verify Available, five unique reference-only entries, resolved pod config,
+   preserved replicas/annotations and an unchanged repeat. Complete the existing
+   bearer CRUD/negative/isolation/API-key checks. Correct/retry forward, or use
+   an operator-reviewed reapply of **only** the protected `433be51` executor render
+   with actual old values and retained actor-managed fields. Keep JWT changes
+   atomic and retain the Service and ConfigMap.
+
+The dedicated CI `executor-env-upgrade-evidence` artifact records independent
+Helm 3 client, Argo client and Helm 4 server results, atomic-step/delivery outcomes
+and revision/fixture hashes. Live evidence is required before release and not
+claimed locally. Untouched `433be51` defaults lack direct issuer/audience env;
+the reported-state regression explicitly layers the credential-free
+`tests/blackbox/fixtures/executor-env-before-980.yaml` over that historical chart.
+The live test isolates JWT env in a disposable readiness probe; it does not claim
+a full platform install. No default fixture is re-baselined: the template change
+filters shared TLS JWT literals only when the executor component env already
+has same-name references, moving their effective values into its ConfigMap source.
+Historical `--reuse-values` without those references retains its literals; it does
+not install the new #980 wiring. Regression cases coalesce `433be51` prod-TLS and
+kind-TLS values and verify JWKS plus any installed issuer/audience remain wired,
+unique and unchanged. The helper and delivery still use reviewed target layers.
+Prod-TLS and kind-TLS resolved endpoint comparisons
+against deployment base `93ee9371` preserve HTTPS/8443 and gateway configuration.
+Published notes are intact; shipping version and actual prod JWKS endpoint
+remain release-review questions.
+All three delivery paths also run from the actual duplicate-env #980 prod-TLS
+render at `93ee9371fdbd029ff49909ff1fb5c03eeff0ddae`. The evidence distinguishes
+API rejection from accepted delivery with missing/duplicate JWT env and cites
+each outcome in its mechanism justification. Before release, append all six
+observed outcomes and the artifact SHA256 to this handoff and the unpublished
+notes. The probe deliberately omits replicas; it verifies HPA count and
+annotations after guarded delivery without claiming full-chart SSA ownership
+compatibility. Positive and negative experiments use separate disposable
+namespaces; every new executor ReplicaSet must retain valid JWT env.
+Hermes must set both source workflow pins to the final local deployment HEAD and
+rerun `tests/blackbox/mongo-gateway-route.test.mjs` after this commit.
+
+Current #1053 checker follow-up (2026-10-05, on top of `bc53eca`): the matrix
+resolves its Helm 3 evidence client from `HELM3_BIN`. An offline completed-matrix
+case writes and decodes all six outcomes and client versions. The positive live
+sequence now delivers target ConfigMap/Service/executor together, repairs while
+paused, retries a rejected apply, rechecks env and then resumes. Its evidence
+distinguishes the first paused delivery and any retry from the final outcome.
+Fake-client cases exercise that sequence with actual historical/current renders
+for default, prod-TLS and kind-TLS on all three paths, including accepted missing
+JWKS and rejected dual-field delivery. These are offline simulations, not observed
+live path outcomes. All 13 offline contracts pass; the Node executor contract
+passes with the live case skipped, Mongo chart tests pass 15/15, strict Helm lint
+passes six profiles, operator commands pass shell syntax checks and the unchanged
+Argo equivalence script prints `OK`. `bbx-temporal-bootstrap-048` was attempted
+but cannot import the absent locked `yaml` dependency; it remains required in CI.
+Kind and Helm 3 are absent and live image pulls require network, so the mandatory
+live matrix and all six actual outcomes/SHA256 remain CI/release obligations.
+The real Argo CLI operation is not exercised by the client-apply probe; rollout
+review must confirm the paused sync's main apply and absence of in-flight retries.
+The existing shipping-version/TLS representation review remains open. No values,
+images, templates, published notes or render baselines change in this follow-up.
+
+Bounded local #1053 repair evidence (2026-10-05, on top of `2dac50ec`):
+all eleven offline contracts pass, including stale/missing/empty/extra ConfigMap
+rejection before patch or rollout, dry-run/apply/no-op mismatch cases, paused
+atomic repair, and missing/duplicate/dual-field superseded ReplicaSet rejection.
+Historical reuse-values/TLS equality cases remain passing. The executor Node
+contract and Mongo chart suite pass using the available out-of-tree YAML 2.9.1
+reader; the locked 2.8.3 reader is absent locally. Strict Helm lint passes all six
+profiles and the unchanged Argo equivalence command prints `OK`. Source Mongo
+route parity passes 6/6 against entry HEAD `2dac50ec`; Hermes must refresh both
+pins to this repair's final HEAD and rerun parity. The required live kind matrix
+is skipped locally because kind/Helm 3 are absent. The required
+`bbx-temporal-bootstrap-048` check was attempted: locked dependencies are absent,
+and a supplemental YAML resolver reaches historical extraction but sandbox tar
+fails with Function not implemented. Both checks remain mandatory in PR CI.
+
+Earlier local #1053 evidence at `f929e895`: all eight offline upgrade contracts pass,
+including historical/default/staging/prod/prod-TLS/kind-TLS renders, base-to-target
+resolved TLS JWT equality, HTTPS/8443, unchanged gateway/control-plane resources,
+invalid TLS JWT source rejection and fake-client atomic/precondition checks. The
+new reuse-values contract passes all four prod-TLS/kind-TLS cases with and without
+installed issuer/audience literals. The live-probe contract preserves the actual
+two-entry JWKS defect in the historical #980 TLS render and omits replicas from
+both manifests, so SSA can retain simulated HPA ownership. The reuse-values
+contract replaces the temporary chart's umbrella
+defaults with coalesced historical values, retaining the existing required
+identity-path migration to `/realms`, `/resources`, `/js` rather than bypassing
+that validation gate.
+The existing Mongo chart suite passes 15/15, strict Helm lint passes all six
+default/staging/prod/kind/prod-TLS/kind-TLS profiles, and the unchanged Argo
+equivalence command prints `OK`. Source Mongo route parity passes 6/6 at the
+entry deployment HEAD `f929e895`; Hermes must refresh pins and rerun it against
+the final follow-up commit. Diff hygiene passes. The required
+`bbx-temporal-bootstrap-048` command was attempted with a temporary resolver for
+installed YAML 2.9.1 (the lockfile pins 2.8.3) and a sandbox-compatible tar shim,
+both outside the worktree. It reaches fake-API startup but this sandbox denies
+localhost sockets (`EPERM`), so it is skipped here and required in PR CI with the
+locked dependencies. Kind is absent, Docker is inaccessible, and Helm 3 is not
+installed locally, so live outcomes remain the dedicated CI
+gate. These sandbox limitations do not replace any existing release evidence.
+
 ## Validation and paired handoff
 
 Fresh scoped evidence covers chart profiles, audience/flag parity and render overrides,

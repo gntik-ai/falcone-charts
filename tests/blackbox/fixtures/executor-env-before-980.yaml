@@ -1,0 +1,11 @@
+# Explicit installed-values case from #1053; not the untouched 433be51 defaults.
+# That revision has no direct executor issuer/audience entries. The live probe
+# isolates JWT env and does not run an application container needing database env.
+controlPlaneExecutor:
+  env:
+    - name: KEYCLOAK_JWKS_URL
+      value: http://falcone-upgrade-keycloak:8080/realms/in-falcone-platform/protocol/openid-connect/certs
+    - name: KEYCLOAK_ISSUER
+      value: https://legacy.example.test/realms/in-falcone-platform
+    - name: KEYCLOAK_AUDIENCE
+      value: in-falcone

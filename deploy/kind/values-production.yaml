@@ -10,6 +10,11 @@
 # mounts `caSecretName` read-only at `caMountPath`. Because the TLS env is appended LAST, the
 # https endpoint entries below override any http defaults a base profile set in the component env
 # (Kubernetes uses the last occurrence of a duplicated env var name).
+# Exception: executor KEYCLOAK_* entries remain ConfigMap-backed; shared TLS
+# literals are copied into that ConfigMap instead of appended to executor env.
+# This preserves the effective HTTPS JWKS endpoint on port 8443, changes its stored
+# representation, and leaves the gateway verifier unchanged. Verify the resolved
+# executor endpoint against the exact ordered release values before rollout.
 #
 # PREREQUISITE: create the CA secret the datastore server certs chain to, e.g.
 #   kubectl -n <ns> create secret generic falcone-transport-ca --from-file=ca.crt=ca.crt
