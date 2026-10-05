@@ -229,6 +229,15 @@ tenant data through the existing issuer/workspace binding.
    adding references atomically, and preserves replicas/annotations/Service/
    ConfigMap. It is a no-op on migrated staging. Use the same step for affected
    Helm and Argo paths, then retry normal delivery. Never force the whole release.
+   Install prerequisites are `python3` with PyYAML, `helm`, and `kubectl`.
+   Include existing #980 prod-TLS/kind-TLS releases: their duplicate JWKS merge
+   may be rejected or may drop the entry despite a successful delivery. Repair
+   missing/duplicate JWT env with this same step after ConfigMap reconciliation.
+   If Helm 4 retry conflicts on HPA-owned replicas, align only the executor's
+   `controlPlaneExecutor.replicas` in the reviewed target values with the current
+   HPA count and retry with the same layers as the helper. Matching values avoid
+   forcing ownership. Review any lasting ownership handoff separately; never
+   use release-wide `--force-conflicts`.
 4. Verify Available, five unique reference-only entries, resolved pod config,
    preserved replicas/annotations and an unchanged repeat. Complete the existing
    bearer CRUD/negative/isolation/API-key checks. Correct/retry forward, or use
@@ -254,27 +263,39 @@ Prod-TLS and kind-TLS resolved endpoint comparisons
 against deployment base `93ee9371` preserve HTTPS/8443 and gateway configuration.
 Published notes are intact; shipping version and actual prod JWKS endpoint
 remain release-review questions.
+All three delivery paths also run from the actual duplicate-env #980 prod-TLS
+render at `93ee9371fdbd029ff49909ff1fb5c03eeff0ddae`. The evidence distinguishes
+API rejection from accepted delivery with missing/duplicate JWT env and cites
+each outcome in its mechanism justification. Before release, append all six
+observed outcomes and the artifact SHA256 to this handoff and the unpublished
+notes. The probe deliberately omits replicas; it verifies HPA count and
+annotations after retry without claiming full-chart SSA ownership compatibility.
 Hermes must set both source workflow pins to the final local deployment HEAD and
 rerun `tests/blackbox/mongo-gateway-route.test.mjs` after this commit.
 
-Bounded local #1053 checker repair evidence: all seven offline upgrade contracts pass,
+Bounded local #1053 checker follow-up evidence: all eight offline upgrade contracts pass,
 including historical/default/staging/prod/prod-TLS/kind-TLS renders, base-to-target
 resolved TLS JWT equality, HTTPS/8443, unchanged gateway/control-plane resources,
 invalid TLS JWT source rejection and fake-client atomic/precondition checks. The
 new reuse-values contract passes all four prod-TLS/kind-TLS cases with and without
-installed issuer/audience literals; it rejects entry `f6a3d92` in all four cases
-because effective JWT env disappears. It replaces the temporary chart's umbrella
+installed issuer/audience literals. The live-probe contract preserves the actual
+two-entry JWKS defect in the historical #980 TLS render and omits replicas from
+both manifests, so SSA can retain simulated HPA ownership. The reuse-values
+contract replaces the temporary chart's umbrella
 defaults with coalesced historical values, retaining the existing required
 identity-path migration to `/realms`, `/resources`, `/js` rather than bypassing
 that validation gate.
 The existing Mongo chart suite passes 15/15, strict Helm lint passes all six
 default/staging/prod/kind/prod-TLS/kind-TLS profiles, and the unchanged Argo
 equivalence command prints `OK`. Source Mongo route parity passes 6/6 at the
-entry deployment HEAD `f6a3d92`; Hermes must refresh pins and rerun it against
+entry deployment HEAD `f929e895`; Hermes must refresh pins and rerun it against
 the final follow-up commit. Diff hygiene passes. The required
-`bbx-temporal-bootstrap-048` command was attempted but cannot import the pinned
-Node `yaml` package; frozen dependency installation and that check remain PR CI
-requirements. Kind is absent locally, so live outcomes remain the dedicated CI
+`bbx-temporal-bootstrap-048` command was attempted with a temporary resolver for
+installed YAML 2.9.1 (the lockfile pins 2.8.3) and a sandbox-compatible tar shim,
+both outside the worktree. It reaches fake-API startup but this sandbox denies
+localhost sockets (`EPERM`), so it is skipped here and required in PR CI with the
+locked dependencies. Kind is absent, Docker is inaccessible, and Helm 3 is not
+installed locally, so live outcomes remain the dedicated CI
 gate. These sandbox limitations do not replace any existing release evidence.
 
 ## Validation and paired handoff

@@ -31,6 +31,7 @@ LAYERS = {
     "prod-tls": ["charts/in-falcone/values/prod.yaml", "deploy/kind/values-production.yaml"],
     "kind-tls": ["deploy/kind/values-kind.yaml", "deploy/kind/values-production.yaml"],
 }
+BASE_REVISION = "93ee9371fdbd029ff49909ff1fb5c03eeff0ddae"
 
 
 def command(args, **kwargs):
@@ -90,7 +91,42 @@ def resolved_jwt(objects, deployment):
     return result
 
 
+def probe(deployment, image):
+    result = copy.deepcopy(deployment)
+    # The API defaults the initial replica count to one. Neither Helm manifest
+    # claims replicas, so the simulated HPA can own it across SSA retries.
+    result["spec"].pop("replicas", None)
+    jwt = [item for item in env(result) if item["name"] in migration.JWT_NAMES]
+    result["spec"]["template"]["spec"] = {"containers": [{
+        "name": "control-plane-executor", "image": image, "imagePullPolicy": "IfNotPresent",
+        "env": jwt, "command": ["sh", "-c", "sleep 3600"],
+        "readinessProbe": {"exec": {"command": ["sh", "-c",
+            'test -n "$KEYCLOAK_JWKS_URL" && test -n "$KEYCLOAK_ISSUER" && test -n "$KEYCLOAK_AUDIENCE"']}, "periodSeconds": 1},
+    }]}
+    return result
+
+
 class Offline(unittest.TestCase):
+    def test_existing_980_tls_probe_preserves_defect_without_owning_replicas(self):
+        with tempfile.TemporaryDirectory(prefix="executor-980-tls-") as folder:
+            base = Path(folder)
+            historical_checkout(base, BASE_REVISION)
+            for root, count in ((base, 2), (ROOT, 1)):
+                deployment = select(render(root, "prod-tls"), "Deployment", NAME)
+                snapshot = copy.deepcopy(deployment)
+                manifest = probe(deployment, "offline-probe")
+                self.assertNotIn("replicas", manifest["spec"],
+                                 "SSA retry must leave replicas owned by the HPA")
+                self.assertEqual(deployment, snapshot, "probe must not modify source render")
+                jwt = [item for item in env(deployment) if item["name"] in migration.JWT_NAMES]
+                self.assertEqual(env(manifest), jwt, "probe must retain the actual historical duplicate")
+                self.assertEqual(sum(item["name"] == "KEYCLOAK_JWKS_URL" for item in env(manifest)), count)
+                if root == base:
+                    with self.assertRaises(ValueError):
+                        migration.validate_env(env(manifest), CONFIG)
+                else:
+                    migration.validate_env(env(manifest), CONFIG)
+
     def test_reused_historical_tls_values_preserve_jwt_env(self):
         # Model stored, coalesced values without adding current umbrella defaults.
         # This complements the real fake-API Helm reuse-values test (bbx-048).
@@ -313,6 +349,9 @@ class Live(unittest.TestCase):
         old_root = work / "old"
         old_root.mkdir()
         historical_checkout(old_root)
+        tls_root = work / "existing-980-tls"
+        tls_root.mkdir()
+        historical_checkout(tls_root, BASE_REVISION)
         outcomes = []
         # Use the already reviewed BusyBox image only as a JWT-env probe. No product image changes.
         image = "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
@@ -320,27 +359,27 @@ class Live(unittest.TestCase):
         probe_image = "executor-jwt-probe:1053"
         command(["docker", "tag", image, probe_image])
         command(["kind", "load", "docker-image", probe_image, "--name", context.removeprefix("kind-")])
-        for path in ("helm3-client", "argo-client", "helm4-server"):
-            namespace = "executor-" + path
+        sources = (("pre980", old_root, "default", True),
+                   ("existing980-tls", tls_root, "prod-tls", False))
+        cases = [(scenario, root, profile, literals, path)
+                 for scenario, root, profile, literals in sources
+                 for path in ("helm3-client", "argo-client", "helm4-server")]
+        for scenario, source_root, profile, literals, path in cases:
+            namespace = "executor-" + scenario + "-" + path
             kube = ["kubectl", "--context", context, "-n", namespace]
             command(kube + ["create", "namespace", namespace], env=kubeenv)
-            old = select(render(old_root, namespace=namespace, legacy_literals=True), "Deployment", NAME)
-            objects = render(ROOT, namespace=namespace)
+            previous = render(source_root, profile, namespace=namespace, legacy_literals=literals)
+            old = select(previous, "Deployment", NAME)
+            objects = render(ROOT, profile, namespace=namespace)
             target = select(objects, "Deployment", NAME)
             config = select(objects, "ConfigMap", CONFIG)
-            def probe(deployment):
-                result = copy.deepcopy(deployment)
-                result["spec"]["replicas"] = 1
-                jwt = [item for item in env(result) if item["name"] in migration.JWT_NAMES]
-                result["spec"]["template"]["spec"] = {"containers": [{
-                    "name": "control-plane-executor", "image": probe_image, "imagePullPolicy": "IfNotPresent",
-                    "env": jwt, "command": ["sh", "-c", "sleep 3600"],
-                    "readinessProbe": {"exec": {"command": ["sh", "-c",
-                        'test -n "$KEYCLOAK_JWKS_URL" && test -n "$KEYCLOAK_ISSUER" && test -n "$KEYCLOAK_AUDIENCE"']}, "periodSeconds": 1},
-                }]}
-                return result
-            old_probe, new_probe = probe(old), probe(target)
-            chart = work / path
+            old_probe, new_probe = probe(old, probe_image), probe(target, probe_image)
+            if scenario == "existing980-tls":
+                self.assertEqual(sum(item["name"] == "KEYCLOAK_JWKS_URL" for item in env(old_probe)), 2)
+            # Existing #980 TLS pods need their historical ConfigMap at install.
+            initial_config = select(previous, "ConfigMap", CONFIG) if not literals else config
+            command(kube + ["create", "-f", "-"], input=json.dumps(initial_config), env=kubeenv)
+            chart = work / (scenario + "-" + path)
             (chart / "templates").mkdir(parents=True)
             (chart / "Chart.yaml").write_text("apiVersion: v2\nname: executor-upgrade-probe\nversion: 0.0.1\n")
             manifest = chart / "templates/executor.yaml"
@@ -352,7 +391,8 @@ class Live(unittest.TestCase):
             before = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
             self.assertNotIn("kubectl.kubernetes.io/last-applied-configuration", before["metadata"].get("annotations", {}))
             # ConfigMap is made available before any reference-only pod template is submitted.
-            command(kube + ["create", "-f", "-"], input=json.dumps(config), env=kubeenv)
+            command(kube + ["patch", "configmap", CONFIG, "--type=merge", "--patch-file=/dev/stdin"],
+                    input=json.dumps({"data": config["data"]}), env=kubeenv)
             config_uid = command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
             service_uid = command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
             manifest.write_text(yaml.safe_dump(new_probe))
@@ -362,9 +402,19 @@ class Live(unittest.TestCase):
                      (["--server-side=true"] if path == "helm4-server" else []))
             result = subprocess.run(apply, capture_output=True, text=True, env=kubeenv, timeout=120)
             rejected = result.returncode != 0 and "may not be specified when value is not empty" in result.stderr
-            self.assertTrue(result.returncode == 0 or rejected, path + ": unexpected failure (payload redacted)")
-            outcomes.append({"path": path, "untreated": "REJECTED_DUAL_FIELD" if rejected else "PASS"})
+            duplicate_rejected = (scenario == "existing980-tls" and result.returncode != 0
+                                  and ("duplicate" in result.stderr.lower() or "$setElementOrder" in result.stderr)
+                                  and "KEYCLOAK_JWKS_URL" in result.stderr)
+            self.assertTrue(result.returncode == 0 or rejected or duplicate_rejected,
+                            scenario + "/" + path + ": unexpected failure (payload redacted)")
             live = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            untreated = "REJECTED_DUAL_FIELD" if rejected else "REJECTED_DUPLICATE_ENV" if duplicate_rejected else "PASS"
+            if result.returncode == 0:
+                try:
+                    migration.validate_env(env(live), CONFIG)
+                except ValueError:
+                    untreated = "ACCEPTED_INVALID_JWT_ENV"
+            outcomes.append({"scenario": scenario, "profile": profile, "path": path, "untreated": untreated})
             # Server-side negative control independently rejects an actual dual-field patch.
             bad = copy.deepcopy(new_probe)
             next(item for item in env(bad) if item["name"] == migration.JWT_NAMES[0])["value"] = "legacy"
@@ -390,6 +440,8 @@ class Live(unittest.TestCase):
             revision = command(GIT + ["rev-parse", "HEAD"]).strip()
             step = ["python3", str(HELPER), "--revision", revision, "--release", RELEASE,
                     "--namespace", namespace, "--context", context, "--apply"]
+            for layer in LAYERS[profile]:
+                step += ["--values", layer]
             command(step, env=kubeenv)
             after = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
             migration.validate_env(env(after), CONFIG)
@@ -411,10 +463,22 @@ class Live(unittest.TestCase):
             # Retry the same failed delivery path after migration, not just the helper.
             command(apply, env=kubeenv)
             command(kube + ["rollout", "status", "deployment/" + NAME, "--timeout=120s"], env=kubeenv)
-            migration.validate_env(env(json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))), CONFIG)
+            delivered = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+            migration.validate_env(env(delivered), CONFIG)
+            self.assertEqual(delivered["spec"]["replicas"], 2, "delivery must retain HPA-managed replicas")
+            self.assertEqual(delivered["metadata"]["annotations"]["other-manager"], "preserve")
+            self.assertEqual(delivered["spec"]["template"]["metadata"]["annotations"]["rollout-restart"], "preserve")
+            self.assertTrue(any(item["type"] == "Available" and item["status"] == "True" for item in delivered["status"]["conditions"]))
+            resolved = command(kube + ["exec", "deployment/" + NAME, "--", "sh", "-c", probe_script], env=kubeenv).splitlines()
+            self.assertTrue(resolved == [config["data"][key] for key in migration.JWT_NAMES], "retry pod reference resolution mismatch")
+            self.assertEqual(command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), config_uid)
+            self.assertEqual(command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), service_uid)
+            self.assertIn("UNCHANGED", command(step, env=kubeenv))
             outcomes[-1]["retry"] = "PASS"
+            outcomes[-1]["retained_hpa_replicas_and_annotations"] = "PASS"
         self.assertTrue(any(item["untreated"] == "REJECTED_DUAL_FIELD" for item in outcomes), "matrix must reproduce reported defect")
         evidence = {"old_revision": command(GIT + ["rev-parse", "433be51"]).strip(),
+                    "existing_980_tls_revision": command(GIT + ["rev-parse", BASE_REVISION]).strip(),
                     "target_revision": command(GIT + ["rev-parse", "HEAD"]).strip(), "paths": outcomes,
                     "mechanism": "atomic JWT env patch; preserves live replicas and annotations",
                     "helm3": command([helm3, "version", "--short"]).strip(),
@@ -422,6 +486,11 @@ class Live(unittest.TestCase):
         evidence["legacy_values_layer"] = "tests/blackbox/fixtures/executor-env-before-980.yaml"
         evidence["legacy_values_sha256"] = hashlib.sha256((ROOT / evidence["legacy_values_layer"]).read_bytes()).hexdigest()
         evidence["historical_defaults"] = "no direct issuer/audience; explicit values layer models reported installed state"
+        evidence["justification"] = [
+            {"scenario": item["scenario"], "path": item["path"], "observed": item["untreated"],
+             "step_required": item["untreated"] != "PASS", "atomic_step_and_retry": "PASS"}
+            for item in outcomes
+        ]
         output = Path(os.environ["EXECUTOR_UPGRADE_EVIDENCE"])
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(evidence, indent=2) + "\n")

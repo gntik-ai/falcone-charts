@@ -9,6 +9,11 @@ atomic env patch below before retrying a rejected delivery, after normal gated
 Helm delivery has reconciled the target executor JWT ConfigMap. The helper cannot
 prepare a pre-#980 release before that ConfigMap exists. On migrated staging it
 is a no-op. Fresh installs need no transition.
+Existing #980 releases using `deploy/kind/values-production.yaml` also need
+verification: their render has two `KEYCLOAK_JWKS_URL` entries. A merge can reject
+duplicates or accept delivery while dropping the JWKS entry. If the resulting
+executor JWT env is missing or duplicated, run the same atomic step after target
+ConfigMap reconciliation, even when delivery returned success.
 
 The chosen mechanism changes only the five executor JWT env entries in one
 resourceVersion-fenced JSON Patch. It preserves non-JWT env, HPA-managed replicas,
@@ -31,6 +36,13 @@ the step; do not infer Helm's behavior from Argo's failure. Publication requires
 the job. At least one untreated path must reproduce the reported API rejection;
 all recovered paths must become Available, resolve all five references, preserve
 replicas/annotations/Service/ConfigMap and be unchanged on a repeat step.
+The matrix also exercises all three paths from the existing #980 deployment base
+`93ee9371fdbd029ff49909ff1fb5c03eeff0ddae` with the prod-TLS layers and its actual
+duplicate JWKS entries, without the pre-#980 literal fixture. It records accepted
+but invalid JWT env separately from API rejections. The evidence's `justification`
+ties the step requirement to each observed untreated result and successful retry.
+Before release, record the six observed outcomes and artifact SHA256 in these
+unpublished notes and the prod handoff; pending CI is not a successful outcome.
 
 Untouched `433be51` executor defaults do **not** define direct issuer/audience env
 (the TLS overlay adds literal JWKS only). The test renders that real chart with
@@ -40,8 +52,15 @@ untouched historical defaults reproduce that installation. The disposable live
 probe preserves rendered selectors, metadata and JWT env, substituting BusyBox
 readiness/env checks for the application. It does not claim a full platform install
 or bearer round trip. Live outcomes are pending CI, not claimed from this sandbox.
+The probe manifests omit replicas so the simulated HPA retains ownership across
+Helm 4 retries without `--force-conflicts`. Replicas and other-manager annotations
+are checked after both the atomic step and delivery retry. This isolates JWT env
+migration; it does not prove the full chart avoids unrelated SSA ownership conflicts.
 
 ## Operator order and step
+
+Prerequisites: `python3` with **PyYAML**, `helm`, `kubectl`, and the clean target
+checkout. Use the reviewed client versions and the same values as gated delivery.
 
 1. Complete tenant-app and service-account audience reconciliation, idempotent
    rerun and fresh-token checks **before enforcement**. Prod inherits true.
@@ -106,6 +125,13 @@ or bearer round trip. Live outcomes are pending CI, not claimed from this sandbo
    replicas/annotations, and `EXECUTOR_UPGRADE_UNCHANGED` on repeat. Retain only
    statuses/hashes. ConfigMap-only changes do not refresh running env: later audience
    enforcement changes still need the existing APISIX/executor reload procedure.
+   If Helm 4 reports a conflict on HPA-managed `spec.replicas`, the env step cannot
+   resolve replica ownership. Reconcile only the executor's desired replica count
+   with its HPA owner: set `controlPlaneExecutor.replicas` to the current count in
+   the reviewed tracked target values, re-render, and retry with those same layers
+   without `--force-conflicts`. Matching values permit SSA without overriding that
+   count. Any lasting ownership handoff remains an operator rollout decision;
+   never force conflicts for the whole release to recover this env transition.
 
 ## Failure and rollback
 
