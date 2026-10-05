@@ -1,5 +1,6 @@
 """#1053 render, atomic patch, and disposable API-server regression evidence."""
 import copy
+from contextlib import redirect_stdout
 import hashlib
 import importlib.util
 import io
@@ -11,6 +12,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 from urllib.parse import urlsplit
 
 import yaml
@@ -118,7 +120,169 @@ def probe(deployment, image):
     return result
 
 
+def delivery_outcome(result, scenario, path):
+    if result.returncode == 0:
+        return "PASS"
+    if "may not be specified when value is not empty" in result.stderr:
+        return "REJECTED_DUAL_FIELD"
+    if (scenario == "existing980-tls"
+            and ("duplicate" in result.stderr.lower() or "$setElementOrder" in result.stderr)
+            and "KEYCLOAK_JWKS_URL" in result.stderr):
+        return "REJECTED_DUPLICATE_ENV"
+    raise AssertionError(scenario + "/" + path + ": unexpected delivery failure (payload redacted)")
+
+
 class Offline(unittest.TestCase):
+    def test_completed_matrix_persists_all_paths_and_client_versions(self):
+        with tempfile.TemporaryDirectory(prefix="executor-evidence-") as folder:
+            work = Path(folder)
+            output = work / "evidence.json"
+            calls = []
+            def fake_command(args, **kwargs):
+                calls.append(args)
+                if args[0] == "reviewed-helm3":
+                    return "v3.17.3\n"
+                if args[:2] == ["helm", "version"]:
+                    return "v4.1.4\n"
+                return "a" * 40 + "\n"
+            def fake_case(*args, **kwargs):
+                if not kwargs["positive"]:
+                    return "REJECTED_DUAL_FIELD" if args[-1] == "argo-client" else "PASS"
+                return {"atomic_step": "PASS", "delivery": "PASS", "new_replicasets": 1}
+            with mock.patch.dict(os.environ, {"HELM3_BIN": "reviewed-helm3",
+                                               "EXECUTOR_UPGRADE_EVIDENCE": str(output)}), \
+                    mock.patch(__name__ + ".command", side_effect=fake_command), \
+                    mock.patch(__name__ + ".historical_checkout"), \
+                    mock.patch.object(Live, "run_case", side_effect=fake_case) as cases, \
+                    redirect_stdout(io.StringIO()):
+                Live().matrix(work, "kind-disposable", {})
+            evidence = json.loads(output.read_text())
+            self.assertEqual(cases.call_count, 12)
+            self.assertEqual(len(evidence["paths"]), 6)
+            self.assertEqual(len(evidence["justification"]), 6)
+            self.assertEqual({item["path"] for item in evidence["paths"]},
+                             {"helm3-client", "argo-client", "helm4-server"})
+            self.assertEqual({item["scenario"] for item in evidence["paths"]},
+                             {"pre980", "existing980-tls"})
+            self.assertEqual(evidence["helm3"], "v3.17.3")
+            self.assertEqual(evidence["helm4"], "v4.1.4")
+            self.assertIn(["reviewed-helm3", "version", "--short"], calls)
+            self.assertTrue(all(item["atomic_step"] == "PASS" for item in evidence["paths"]))
+
+    def test_paused_real_render_delivery_repairs_accepted_env_and_retries_rejection(self):
+        real_command, real_process = command, subprocess.run
+        with tempfile.TemporaryDirectory(prefix="executor-delivery-") as folder:
+            work = Path(folder)
+            old_root, tls_root = work / "old", work / "tls"
+            historical_checkout(old_root)
+            historical_checkout(tls_root, BASE_REVISION)
+            sources = (("pre980", old_root, "default", True),
+                       ("existing980-tls", tls_root, "prod-tls", False),
+                       ("existing980-tls", tls_root, "kind-tls", False))
+            for scenario, source, profile, literals in sources:
+                for path in ("helm3-client", "argo-client", "helm4-server"):
+                    with self.subTest(scenario=scenario, profile=profile, path=path):
+                        sandbox = work / (profile + "-" + path)
+                        sandbox.mkdir()
+                        target = select(render(ROOT, profile), "Deployment", NAME)
+                        wanted_config = select(render(ROOT, profile), "ConfigMap", CONFIG)
+                        state = {"deployment": None, "config": None, "replicasets": [], "deliveries": 0}
+                        events = []
+
+                        def fake_command(args, **kwargs):
+                            if args[0] == "helm3" and args[1] == "install":
+                                chart = Path(args[3])
+                                live = yaml.safe_load((chart / "templates/executor.yaml").read_text())
+                                live["metadata"].update(uid="executor", resourceVersion="1", generation=1)
+                                live["spec"]["replicas"] = 1
+                                state["deployment"] = live
+                                config_file = chart / "templates/config.yaml"
+                                state["config"] = yaml.safe_load(config_file.read_text()) if config_file.exists() else None
+                                rs = copy.deepcopy(live)
+                                rs["metadata"].update(uid="old", ownerReferences=[{"uid": "executor", "controller": True}])
+                                state["replicasets"] = [rs]
+                                return ""
+                            if args[:2] == ["python3", str(HELPER)]:
+                                self.assertGreater(state["deliveries"], 0, "helper must follow target delivery")
+                                migration.validate_config(state["config"], wanted_config)
+                                patch = migration.migration_patch(state["deployment"], target, CONFIG)
+                                if patch:
+                                    self.assertTrue(state["deployment"]["spec"].get("paused"))
+                                events.append("repair" if "--apply" in args else "dry-run")
+                                if patch and "--apply" in args:
+                                    env(state["deployment"])[:] = patch[1]["value"]
+                                    state["deployment"]["metadata"]["generation"] += 1
+                                return "EXECUTOR_UPGRADE_" + ("APPLIED_PAUSED" if patch else "UNCHANGED_PAUSED")
+                            if args[0] != "kubectl":
+                                return real_command(args, **kwargs)
+                            if "apply" in args:
+                                return real_command(args, **kwargs)
+                            live = state["deployment"]
+                            if "patch" in args:
+                                update = json.loads(args[args.index("-p") + 1])
+                                live["metadata"].setdefault("annotations", {}).update(update["metadata"]["annotations"])
+                                live["spec"]["replicas"] = update["spec"]["replicas"]
+                                live["spec"]["template"]["metadata"].setdefault("annotations", {}).update(
+                                    update["spec"]["template"]["metadata"]["annotations"])
+                            if "rollout" in args:
+                                if "pause" in args:
+                                    live["spec"]["paused"] = True
+                                    events.append("pause")
+                                if "resume" in args:
+                                    migration.validate_config(state["config"], wanted_config)
+                                    migration.validate_env(env(live), CONFIG)
+                                    live["spec"]["paused"] = False
+                                    live["status"] = {"conditions": [{"type": "Available", "status": "True"}]}
+                                    rs = copy.deepcopy(live)
+                                    rs["metadata"].update(uid="new", ownerReferences=[{"uid": "executor", "controller": True}])
+                                    state["replicasets"].append(rs)
+                                    events.append("resume")
+                            if "get" in args:
+                                if "replicasets" in args:
+                                    return json.dumps({"items": state["replicasets"]})
+                                if "jsonpath={.metadata.uid}" in args:
+                                    return "stable-config" if "configmap" in args else "stable-service"
+                                return json.dumps(live)
+                            if "exec" in args:
+                                return "\n".join(wanted_config["data"][key] for key in migration.JWT_NAMES)
+                            return ""
+
+                        def fake_process(args, **kwargs):
+                            if args[:2] == ["python3", str(HELPER)]:
+                                # Existing TLS ConfigMap mismatch must still fail
+                                # before the first target delivery and mutation.
+                                with self.assertRaises(ValueError):
+                                    migration.validate_config(state["config"], wanted_config)
+                                return subprocess.CompletedProcess(args, 1, "", "redacted")
+                            if "upgrade" not in args and not (args[0] == "kubectl" and "apply" in args):
+                                return real_process(args, **kwargs)
+                            live = state["deployment"]
+                            self.assertTrue(live["spec"].get("paused"))
+                            chart = Path(args[3]) if args[0] != "kubectl" else Path(args[-1]).parent
+                            state["config"] = yaml.safe_load((chart / "templates/config.yaml").read_text())
+                            state["deliveries"] += 1
+                            events.append("delivery")
+                            if path == "argo-client" and state["deliveries"] == 1:
+                                return subprocess.CompletedProcess(args, 1, "", "may not be specified when value is not empty")
+                            # Model Helm accepting an env merge that drops JWKS.
+                            env(live)[:] = [entry for entry in env(target)
+                                           if entry["name"] != "KEYCLOAK_JWKS_URL"]
+                            return subprocess.CompletedProcess(args, 0, "", "")
+
+                        with mock.patch.dict(os.environ, {"HELM3_BIN": "helm3"}), \
+                                mock.patch(__name__ + ".command", side_effect=fake_command), \
+                                mock.patch.object(subprocess, "run", side_effect=fake_process):
+                            outcome = Live().run_case(sandbox, "kind-fake", {}, "offline-probe",
+                                                      scenario, source, profile, literals, path, positive=True)
+                        self.assertEqual(outcome["delivery"], "PASS")
+                        self.assertEqual(outcome["new_replicasets"], 1)
+                        self.assertEqual(state["deliveries"], 2 if path == "argo-client" else 1)
+                        self.assertLess(events.index("pause"), events.index("delivery"))
+                        self.assertLess(events.index("delivery"), events.index("repair"))
+                        self.assertLess(events.index("repair"), events.index("resume"))
+                        self.assertEqual(outcome["initial_paused_delivery"],
+                                         "REJECTED_DUAL_FIELD" if path == "argo-client" else "ACCEPTED_INVALID_JWT_ENV")
+
     def test_existing_980_tls_probe_preserves_defect_without_owning_replicas(self):
         with tempfile.TemporaryDirectory(prefix="executor-980-tls-") as folder:
             base = Path(folder)
@@ -475,6 +639,7 @@ class Live(unittest.TestCase):
                 command(["kind", "delete", "cluster", "--name", cluster], env=kubeenv)
 
     def matrix(self, work, context, kubeenv):
+        helm3 = os.environ.get("HELM3_BIN", "helm3")
         old_root = work / "old"
         old_root.mkdir()
         historical_checkout(old_root)
@@ -505,7 +670,7 @@ class Live(unittest.TestCase):
         evidence = {"old_revision": command(GIT + ["rev-parse", "433be51"]).strip(),
                     "existing_980_tls_revision": command(GIT + ["rev-parse", BASE_REVISION]).strip(),
                     "target_revision": command(GIT + ["rev-parse", "HEAD"]).strip(), "paths": outcomes,
-                    "mechanism": "atomic JWT env patch before delivery; paused delivery verified before resume",
+                    "mechanism": "pause executor; gated target delivery; atomic JWT env repair; retry rejected delivery; verify before resume",
                     "helm3": command([helm3, "version", "--short"]).strip(),
                     "helm4": command(["helm", "version", "--short"]).strip()}
         evidence["legacy_values_layer"] = "tests/blackbox/fixtures/executor-env-before-980.yaml"
@@ -513,7 +678,7 @@ class Live(unittest.TestCase):
         evidence["historical_defaults"] = "no direct issuer/audience; explicit values layer models reported installed state"
         evidence["justification"] = [
             {"scenario": item["scenario"], "path": item["path"], "observed": item["untreated"],
-             "step_required": item["untreated"] != "PASS", "atomic_step_before_delivery": "PASS",
+             "step_required": item["untreated"] != "PASS", "paused_delivery_and_atomic_repair": "PASS",
              "positive_sequence_new_replicasets": item["new_replicasets"]}
             for item in outcomes
         ]
@@ -549,6 +714,9 @@ class Live(unittest.TestCase):
         helm3 = os.environ.get("HELM3_BIN", "helm3")
         helm_scope = [RELEASE, str(chart), "-n", namespace, "--kube-context", context]
         command([helm3, "install", *helm_scope, "--wait", "--timeout", "120s"], env=kubeenv)
+        service_uid = command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
+        initial_config_uid = (command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
+                              if not literals else None)
         before = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
         self.assertNotIn("kubectl.kubernetes.io/last-applied-configuration", before["metadata"].get("annotations", {}))
         revision = command(GIT + ["rev-parse", "HEAD"]).strip()
@@ -584,16 +752,31 @@ class Live(unittest.TestCase):
                     current = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
                     self.assertEqual(current["metadata"]["generation"], generation)
                 assert_sequence()
-        # Preparation uses the Helm adapter, retaining the installed executor
-        # manifest. Only the target ConfigMap data is delivered in this revision.
+        # Deliver the target ConfigMap AND executor together, just as the real
+        # chart does. There is no synthetic ConfigMap-only preparation revision.
+        # The readiness probe isolates runtime dependencies, not delivery order.
         config_manifest.write_text(yaml.safe_dump(config))
-        command([helm3, "upgrade", *helm_scope, "--wait", "--timeout", "120s"], env=kubeenv)
+        manifest.write_text(yaml.safe_dump(new_probe))
+        argo_manifest = chart / "target.yaml"
+        argo_manifest.write_text(yaml.safe_dump_all([config, service, new_probe]))
+        apply = (kube + ["apply", "-f", str(argo_manifest)] if path == "argo-client" else
+                 [helm3 if path == "helm3-client" else "helm", "upgrade", *helm_scope] +
+                 (["--server-side=true"] if path == "helm4-server" else []))
+        # A paused Deployment cannot satisfy a rollout wait. Perform the normal
+        # adapter apply, then repair/retry before the final readiness gate.
+        result = subprocess.run(apply, capture_output=True, text=True, env=kubeenv, timeout=120)
+        untreated = delivery_outcome(result, scenario, path)
+        live = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
+        if result.returncode == 0:
+            try:
+                migration.validate_env(env(live), CONFIG)
+            except ValueError:
+                untreated = "ACCEPTED_INVALID_JWT_ENV"
         config_uid = command(kube + ["get", "configmap", CONFIG, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
-        service_uid = command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv)
-        prepared = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-        self.assertTrue(env(prepared) == env(before), "ConfigMap preparation must hold the installed executor env")
+        if initial_config_uid is not None:
+            self.assertEqual(config_uid, initial_config_uid, "target delivery must retain the ConfigMap")
         if positive:
-            self.assertTrue(prepared["spec"].get("paused"), "preparation must retain the rollout pause")
+            self.assertTrue(live["spec"].get("paused"), "target delivery must retain the rollout pause")
             assert_sequence()
             command(step, env=kubeenv)  # server-side dry-run
             command(step + ["--apply"], env=kubeenv)
@@ -608,18 +791,15 @@ class Live(unittest.TestCase):
             repeated = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
             self.assertEqual(repeated["metadata"]["generation"], generation)
             probe_script = "printf '%s\\n' " + " ".join('"$' + key + '"' for key in migration.JWT_NAMES)
-        # Deliver the target only AFTER the atomic step in the positive sequence.
-        manifest.write_text(yaml.safe_dump(new_probe))
-        apply = (kube + ["apply", "-f", str(manifest)] if path == "argo-client" else
-                 [helm3 if path == "helm3-client" else "helm", "upgrade", *helm_scope] +
-                 (["--server-side=true"] if path == "helm4-server" else []))
-        if positive:
-            command(apply, env=kubeenv)
+            if result.returncode:
+                # The first apply already reconciled the ConfigMap before the
+                # executor rejection. Retry the exact target, retaining gates.
+                command(apply, env=kubeenv)
             paused = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
             self.assertTrue(paused["spec"].get("paused"), "delivery must retain the rollout pause")
             assert_sequence()
-            # Helm's stored duplicate manifest can still delete a name during
-            # delivery. Repair atomically while paused, before any new ReplicaSet.
+            # Reverify/repair after any retry while paused, before a new ReplicaSet.
+            command(step, env=kubeenv)
             command(step + ["--apply"], env=kubeenv)
             verified = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
             migration.validate_env(env(verified), CONFIG)
@@ -641,23 +821,11 @@ class Live(unittest.TestCase):
             self.assertEqual(command(kube + ["get", "service", NAME, "-o", "jsonpath={.metadata.uid}"], env=kubeenv), service_uid)
             self.assertIn("UNCHANGED", command(step + ["--apply"], env=kubeenv))
             assert_sequence()
-            return {"atomic_step": "PASS", "delivery": "PASS", "paused_delivery_verification": "PASS", "replicaset_safety": "PASS",
+            return {"initial_paused_delivery": untreated,
+                    "rejected_delivery_retry": "PASS" if result.returncode else "NOT_REQUIRED",
+                    "atomic_step": "PASS", "delivery": "PASS", "paused_delivery_verification": "PASS", "replicaset_safety": "PASS",
                     "new_replicasets": len(created), "retained_hpa_replicas_and_annotations": "PASS"}
         # Negative observations are isolated and never waive a positive safety failure.
-        result = subprocess.run(apply, capture_output=True, text=True, env=kubeenv, timeout=120)
-        rejected = result.returncode != 0 and "may not be specified when value is not empty" in result.stderr
-        duplicate_rejected = (scenario == "existing980-tls" and result.returncode != 0
-                              and ("duplicate" in result.stderr.lower() or "$setElementOrder" in result.stderr)
-                              and "KEYCLOAK_JWKS_URL" in result.stderr)
-        self.assertTrue(result.returncode == 0 or rejected or duplicate_rejected,
-                        scenario + "/" + path + ": unexpected failure (payload redacted)")
-        live = json.loads(command(kube + ["get", "deployment", NAME, "-o", "json"], env=kubeenv))
-        untreated = "REJECTED_DUAL_FIELD" if rejected else "REJECTED_DUPLICATE_ENV" if duplicate_rejected else "PASS"
-        if result.returncode == 0:
-            try:
-                migration.validate_env(env(live), CONFIG)
-            except ValueError:
-                untreated = "ACCEPTED_INVALID_JWT_ENV"  # Defect evidence only in this disposable negative namespace.
         bad = copy.deepcopy(new_probe)
         next(item for item in env(bad) if item["name"] == migration.JWT_NAMES[0])["value"] = "legacy"
         negative = subprocess.run(kube + ["patch", "deployment", NAME, "--type=json", "--dry-run=server",

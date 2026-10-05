@@ -5,16 +5,16 @@
 #980 moved the executor JWT configuration to five reference-only entries in
 `{release}-executor-jwt-config`. An existing Deployment with literal JWT env
 can reject an apply that retains both `value` and `valueFrom`. Use the one-time
-atomic env patch below **before delivering the target executor Deployment**.
-Pause only the executor Deployment, then reconcile only the target executor JWT
-ConfigMap through the gated Helm adapter, holding the installed executor pod
-template unchanged. Dry-run and apply the atomic step before target delivery.
-Keep the Deployment paused across delivery, rerun the atomic step to verify or
-repair its merged env, then resume and wait for Available. This also protects
+atomic env patch below **while the executor Deployment is paused**.
+Pause only the executor Deployment, then run normal gated target delivery through
+Helm or Argo's Helm render. This reconciles the target ConfigMap and attempts the
+executor apply, which may reject the env transition or accept an invalid merge. Dry-run and apply
+the atomic step while paused; retry rejected delivery with the same target, then
+verify or repair again before resume and the final readiness gates. This protects
 against a client merge driven by Helm's stored duplicate-name manifest. This
 order applies to pre-#980 literals and to existing #980
 prod-TLS/kind-TLS releases with duplicate `KEYCLOAK_JWKS_URL` entries. A successful
-untreated delivery can still drop JWKS; do not deliver first and repair afterwards.
+untreated delivery can still drop JWKS; never deliver it with the executor unpaused.
 On migrated staging the step is a no-op after ConfigMap verification. Fresh
 installs need no transition.
 
@@ -46,9 +46,9 @@ duplicate JWKS entries, without the pre-#980 literal fixture. It records accepte
 but invalid JWT env separately from API rejections. The evidence's `justification`
 ties the step requirement to each isolated untreated result and successful delivery.
 Negative experiments use separate disposable namespaces. In the positive sequence,
-the test captures historical ReplicaSets before preparation and checks every new
-executor ReplicaSet, including superseded templates, after preparation, migration
-and delivery/resume. Delivery must retain the pause, and the env must pass
+the test captures historical ReplicaSets before delivery and checks every new
+executor ReplicaSet, including superseded templates, after delivery, atomic repair,
+any retry and resume. Delivery must retain the pause, and the env must pass
 verification before resume. Missing/duplicate JWT names or dual-field env in any
 new ReplicaSet fail that sequence. An accepted invalid env result is defect
 evidence only in a negative experiment.
@@ -63,6 +63,10 @@ untouched historical defaults reproduce that installation. The disposable live
 probe preserves rendered selectors, metadata and JWT env, substituting BusyBox
 readiness/env checks for the application. It does not claim a full platform install
 or bearer round trip. Live outcomes are pending CI, not claimed from this sandbox.
+Its target chart revision includes the rendered ConfigMap, Service and executor
+together; there is no ConfigMap-only preparation revision. Argo-equivalent apply
+includes those same resources with the ConfigMap first. This tests the operator
+order using real chart renders while isolating runtime dependencies.
 The probe manifests omit replicas so the simulated HPA retains ownership across
 Helm 4 delivery without `--force-conflicts`. Replicas and other-manager annotations
 are checked after both the atomic step and target delivery. This isolates JWT env
@@ -101,23 +105,57 @@ checkout. Use the reviewed client versions and the same values as gated delivery
    for the helper and delivery. Retain a protected rollback
    render from `433be51` with the actual old release values and live replicas/
    annotations; never copy configuration/env payloads into release evidence.
-4. Before target executor delivery, have the operator reconcile **only**
-   `{release}-executor-jwt-config` through the gated Helm adapter from that exact
-   target render. First pause only the executor Deployment, keeping serving
-   pods running. Keep that pause through target delivery and verification:
+4. Pause only the executor Deployment, keeping serving pods running. Keep that
+   pause through normal gated target delivery, atomic repair and any retry:
 
    ```sh
    kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
      rollout pause "deployment/$RELEASE-control-plane-executor"
+   TARGET_REVISION="$(git rev-parse HEAD)"
    ```
 
-   The reviewed preparation plan must hold the installed executor
-   pod template unchanged, and must not deliver other target resources. For a
-   pre-#980 release this creates the ConfigMap; for existing #980 TLS it updates
-   the stale HTTP default to the already effective HTTPS endpoint. Do not use a
-   normal full-release upgrade/sync as preparation: that could deliver an invalid
-   executor template before the step. If the adapter cannot isolate preparation,
-   stop for release review rather than delivering the executor first.
+   Run the normal gated delivery from this checkout and exact ordered values.
+   **Helm path:** the following is the ordinary release delivery, not an additional
+   resource replacement. Include every reviewed values/evidence layer and retain
+   all existing pre-upgrade hooks and admission gates:
+
+   ```sh
+   helm upgrade "$RELEASE" charts/in-falcone \
+     --kube-context "$CONTEXT" --namespace "$NAMESPACE" \
+     -f charts/in-falcone/values/prod.yaml -f "$REVIEWED_PROD_VALUES_LAYER"
+   ```
+
+   Use the reviewed Helm 3 client or, for the harness's Helm 4 SSA path, add
+   `--server-side=true`. Do not use a rollout-wait or automatic-rollback flag
+   during this paused apply: the executor cannot roll out until step 6. Readiness
+   and all existing post-delivery gates still run after resume. If the env apply
+   is rejected, retain the failed revision and continue to step 5 only after the
+   target ConfigMap is present; retry the same gated delivery in step 6. Other
+   errors retain their normal failure gates and must be corrected while paused.
+
+   **Argo path:** retain the gated Application and its exact Helm values layers
+   from `deploy/argocd/README.md`. After the existing operator/environment gate,
+   verify that its destination cluster/namespace and Helm release match
+   `$CONTEXT`, `$NAMESPACE` and `$RELEASE`, and pin the sync to this same full
+   revision. Keep automated sync off and avoid background retries during repair:
+
+   ```sh
+   argocd app sync "$APPLICATION" --revision "$TARGET_REVISION" --async --retry-limit 0
+   ```
+
+   Let PreSync gates complete and the main target apply reconcile the ConfigMap
+   and attempt the executor. Check the sync operation before step 5: it must have
+   completed its executor apply (or rejected it), with no executor write in flight.
+   A sync waiting for executor health can remain active while paused; do not wait
+   for Healthy before repairing and resuming. If rejected, manually retry the same
+   gated sync after repair; confirm its executor apply is finished before resume.
+   Do not use selective sync, `Replace=true`, pruning or a replacement chart.
+
+   For pre-#980 delivery creates the ConfigMap; for existing #980 TLS it updates
+   the stale HTTP default to the already effective HTTPS endpoint. The ConfigMap
+   must match the target before the helper can repair env or new pods can start.
+   Keep the executor paused if delivery stops before that ConfigMap is ready;
+   correct the gated delivery and retry.
    The helper never creates/changes the ConfigMap or reads a Secret. It compares
    all live data with the exact target render in-process, requires all five keys
    to be nonempty, and fails before dry-run, mutation or rollout on any mismatch,
@@ -127,7 +165,6 @@ checkout. Use the reviewed client versions and the same values as gated delivery
    additional values layer; prod.yaml alone has placeholder hosts and is insufficient.
 
    ```sh
-   TARGET_REVISION="$(git rev-parse HEAD)"
    python3 charts/in-falcone/migrations/executor-jwt-env-upgrade.py \
      --revision "$TARGET_REVISION" --context "$CONTEXT" \
      --release "$RELEASE" --namespace "$NAMESPACE" \
@@ -141,17 +178,24 @@ checkout. Use the reviewed client versions and the same values as gated delivery
    ```
 
    For staging use its three Argo layers in README order; for Helm use that release's
-   exact ordered layers. The same helper completes before target executor delivery
-   through the gated adapter, including on existing TLS releases. It mutates only
+   exact ordered layers. The helper follows the first paused target apply,
+   including on existing TLS releases. It mutates only
    `{release}-control-plane-executor`, checks reference-only env and retained
    replicas/annotations. While paused, `--apply` verifies env without waiting for
    a rollout and prints `EXECUTOR_UPGRADE_APPLIED_PAUSED` or
    `EXECUTOR_UPGRADE_UNCHANGED_PAUSED`; it never resumes the Deployment.
    Kubernetes' controller-owned Deployment revision annotation may advance. A concurrent change fails the
    resourceVersion test: recheck live state and retry instead of bypassing the fence.
-6. After the atomic env step verifies, run the normal gated target delivery
-   **while the executor remains paused**. Check that delivery retained the pause;
-   rerun the same dry-run and `--apply` commands before resuming. This repairs any
+6. If the first delivery was rejected, rerun the same gated target delivery
+   **while the executor remains paused**; it must now succeed. Confirm no executor
+   apply/retry remains in flight. Check that delivery retained the pause:
+
+   ```sh
+   test "$(kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
+     get deployment "$RELEASE-control-plane-executor" -o jsonpath='{.spec.paused}')" = true
+   ```
+
+   Rerun the same dry-run and `--apply` commands before resuming. This repairs any
    JWT name removed by a merge based on the historical Helm manifest without
    creating a pod or ReplicaSet with missing JWT config. A failed delivery or
    helper check must leave the executor paused; fix and retry forward.
@@ -183,14 +227,14 @@ checkout. Use the reviewed client versions and the same values as gated delivery
 Missing, empty or mismatched ConfigMap data, invalid env, dirty render input or
 wrong revision fails before mutation. Correct and retry forward. Never delete
 the Service or ConfigMap.
-Keep a failed preparation/delivery paused and serving the installed ReplicaSet;
+Keep a failed delivery paused and serving the installed ReplicaSet;
 correct configuration/env before resume. If new pods fail after resume, old pods
 remain under the rolling update; check availability before proceeding. A post-patch rollout timeout does not revert the patch.
 If an HPA changes replicas during the rollout, the helper can report a post-patch
 live-state verification failure even though it never writes replicas. Check the
 HPA's desired count, live replicas, JWT env and Available, then rerun the same step
 against the new resourceVersion. Do not reset replicas or assume the patch reverted;
-do not proceed to delivery or resume until verification succeeds.
+do not proceed to a delivery retry or resume until verification succeeds.
 
 Prefer correcting the target configuration and retrying forward. Alternatively,
 an operator may approve reapplying **only** the protected `433be51` executor render

@@ -221,22 +221,28 @@ tenant data through the existing issuer/workspace binding.
    the ConfigMap representation change while retaining the effective TLS endpoint.
    The gateway verifier is unchanged.
 3. From the clean exact target revision, use the one-time atomic executor JWT
-   env step in [0.4.20 release notes](../RELEASE-NOTES-0.4.20.md). **Before delivering
-   the target executor Deployment**, pause only that Deployment and reconcile
-   only its target ConfigMap through the gated Helm adapter, holding the installed
-   executor template unchanged. Keep serving old pods and preserve the pause.
-   Pre-#980 needs ConfigMap creation; existing #980 prod-TLS/kind-TLS needs the
-   target data reconciled before replacing duplicate JWT entries. Never prepare
-   with full-release delivery: an untreated merge may drop JWKS even if accepted.
-   If preparation cannot be isolated, stop for release review.
+   env step in [0.4.20 release notes](../RELEASE-NOTES-0.4.20.md). Pause only the
+   executor Deployment, then run normal gated target delivery with the real chart
+   and exact ordered values while keeping old pods serving. The notes give both
+   the Helm upgrade and revision-pinned Argo sync commands; no ConfigMap-only
+   preparation revision is needed. Defer rollout waits until resume and retain
+   every pre-apply and final readiness gate. Argo must finish its executor apply
+   with no background retry/write in flight before the helper or resume.
+   Pre-#980 delivery creates the ConfigMap; existing #980 prod-TLS/kind-TLS
+   delivery includes target data and the executor. A rejected
+   executor env apply is expected defect evidence; an accepted merge can still
+   drop JWKS, so keep the executor paused in either case. Other failures retain
+   their existing gates. If target ConfigMap delivery is incomplete, correct and
+   retry while paused; never bypass its exact-data check.
    Then run the helper's dry-run and `--apply` with explicit context/release
    namespace and every ordered values layer. It compares live ConfigMap data
    with the exact target render in-process, rejects missing/empty/mismatched data
    before patch or rollout even for no-op env, and prints no payloads.
    It removes literals while adding references atomically and preserves
    replicas/annotations/Service/ConfigMap. It is a no-op on migrated staging.
-   Deliver the target while paused for Helm and Argo paths, confirm the pause
-   remains, and rerun the helper to verify or atomically repair the merged env.
+   Retry any rejected target delivery while paused for Helm and Argo paths; it
+   must succeed. Confirm the pause remains and no executor apply is in flight,
+   then rerun the helper to verify or atomically repair the merged env.
    Only then resume the executor Deployment and wait for Available. The helper
    verifies a paused apply without waiting for rollout or resuming; Helm's stored
    duplicate manifest cannot create an unsafe ReplicaSet during delivery.
@@ -288,6 +294,27 @@ compatibility. Positive and negative experiments use separate disposable
 namespaces; every new executor ReplicaSet must retain valid JWT env.
 Hermes must set both source workflow pins to the final local deployment HEAD and
 rerun `tests/blackbox/mongo-gateway-route.test.mjs` after this commit.
+
+Current #1053 checker follow-up (2026-10-05, on top of `bc53eca`): the matrix
+resolves its Helm 3 evidence client from `HELM3_BIN`. An offline completed-matrix
+case writes and decodes all six outcomes and client versions. The positive live
+sequence now delivers target ConfigMap/Service/executor together, repairs while
+paused, retries a rejected apply, rechecks env and then resumes. Its evidence
+distinguishes the first paused delivery and any retry from the final outcome.
+Fake-client cases exercise that sequence with actual historical/current renders
+for default, prod-TLS and kind-TLS on all three paths, including accepted missing
+JWKS and rejected dual-field delivery. These are offline simulations, not observed
+live path outcomes. All 13 offline contracts pass; the Node executor contract
+passes with the live case skipped, Mongo chart tests pass 15/15, strict Helm lint
+passes six profiles, operator commands pass shell syntax checks and the unchanged
+Argo equivalence script prints `OK`. `bbx-temporal-bootstrap-048` was attempted
+but cannot import the absent locked `yaml` dependency; it remains required in CI.
+Kind and Helm 3 are absent and live image pulls require network, so the mandatory
+live matrix and all six actual outcomes/SHA256 remain CI/release obligations.
+The real Argo CLI operation is not exercised by the client-apply probe; rollout
+review must confirm the paused sync's main apply and absence of in-flight retries.
+The existing shipping-version/TLS representation review remains open. No values,
+images, templates, published notes or render baselines change in this follow-up.
 
 Bounded local #1053 repair evidence (2026-10-05, on top of `2dac50ec`):
 all eleven offline contracts pass, including stale/missing/empty/extra ConfigMap
