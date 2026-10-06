@@ -12,6 +12,9 @@ const bindings = {
   FN_INVOCATION_KEY_ID: 'key-id',
   FN_INVOCATION_JWKS: 'jwks',
 };
+const signerNames = ['control-plane', 'control-plane-executor'];
+const signerVolume = 'falcone-function-invocation';
+const signerDirectory = '/var/run/falcone/function-invocation';
 
 function verify(objects, { secretName = 'in-falcone-function-invocation',
   remoteKey = 'platform/functions/invocation', managed = true } = {}) {
@@ -40,35 +43,47 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   assert.equal(stores[0].spec.provider.vault.version, 'v2');
   assert.equal(stores[0].spec.provider.vault.auth.kubernetes.role, 'eso-role');
 
-  let signers = 0;
+  const signers = [];
   for (const o of [...objects, ...fixture]) {
     const pod = o.kind === 'CronJob' ? o.spec?.jobTemplate?.spec?.template?.spec
       : o.spec?.template?.spec;
     if (!pod) continue;
+    const signerPod = o.kind === 'Deployment'
+      && pod.containers.some((container) => signerNames.includes(container.name));
+    if (signerPod) {
+      const volumes = (pod.volumes ?? []).filter((volume) => volume.name === signerVolume);
+      assert.equal(volumes.length, 1);
+      assert.deepEqual(volumes[0].secret, {
+        secretName, optional: true, defaultMode: 0o440,
+        items: Object.values(bindings).map((key) => ({ key, path: key })),
+      }, 'optional Secret projection must allow startup before post-install/post-upgrade ESO delivery');
+    } else {
+      assert.ok(!JSON.stringify(pod.volumes ?? []).includes(secretName),
+        `${o.metadata.name} must not receive the signer Secret`);
+    }
     for (const container of [...(pod.containers ?? []), ...(pod.initContainers ?? [])]) {
       const env = container.env ?? [];
-      const signer = o.kind === 'Deployment' && container.name === 'control-plane';
+      const signer = signerPod && signerNames.includes(container.name);
+      assert.ok(env.every((entry) => !(entry.name in bindings)),
+        'startup-only signer key env must never return');
       if (signer) {
-        signers += 1;
-        for (const [name, key] of Object.entries(bindings)) {
-          const entries = env.filter((entry) => entry.name === name);
-          assert.equal(entries.length, 1, name);
-          assert.deepEqual(entries[0], { name, valueFrom: {
-            secretKeyRef: { name: secretName, key, optional: true },
-          } });
-        }
+        signers.push(container.name);
+        assert.deepEqual(env.filter((entry) => entry.name === 'FN_INVOCATION_SECRET_DIR'),
+          [{ name: 'FN_INVOCATION_SECRET_DIR', value: signerDirectory }]);
+        assert.deepEqual((container.volumeMounts ?? []).filter((mount) => mount.name === signerVolume),
+          [{ name: signerVolume, mountPath: signerDirectory, readOnly: true }],
+          'whole-directory mount without subPath must receive delayed delivery and atomic rotation');
       } else {
-        assert.ok(env.every((entry) => !(entry.name in bindings)),
-          `${o.metadata.name}/${container.name} must not receive signer env`);
+        assert.ok(env.every((entry) => entry.name !== 'FN_INVOCATION_SECRET_DIR'));
+        assert.ok((container.volumeMounts ?? []).every((mount) => mount.name !== signerVolume),
+          `${o.metadata.name}/${container.name} must not mount signer files`);
         assert.ok(!JSON.stringify(container).includes(secretName),
           `${o.metadata.name}/${container.name} must not reference signer Secret`);
       }
       assert.ok(!JSON.stringify(container.envFrom ?? []).includes(secretName));
     }
-    assert.ok(!JSON.stringify(pod.volumes ?? []).includes(secretName),
-      'signer Secret must not be mounted into pods or sidecars');
   }
-  assert.equal(signers, 1);
+  assert.deepEqual(signers.sort(), [...signerNames].sort());
   for (const o of objects.filter((o) => o.kind === 'ConfigMap' || o.kind === 'Secret')) {
     assert.ok(!Object.keys(o.data ?? {}).some((key) => key in bindings),
       'Helm must not store invocation keys in shared config or generate key material');
@@ -76,13 +91,14 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   }
 }
 
-test('signer delivery is control-plane-only and missing keys permit startup in every shipped profile', () => {
+test('only both signer consumers mount refreshable keys, allowing startup before ESO in shipped profiles', () => {
   const profiles = [
     { args: [] }, { args: ['--set', 'temporal.ui.enabled=false'] },
     { args: ['-f', 'charts/in-falcone/values/staging.yaml'], managed: false },
     { args: ['-f', 'charts/in-falcone/values/prod.yaml'] },
     { args: ['-f', 'deploy/kind/values-kind.yaml'] },
     { args: ['-f', 'tests/e2e/values-flows-e2e.yaml', '--skip-schema-validation'] },
+    { args: ['--set', 'global.podSecurity.openshiftRestricted=true'] },
   ];
   for (const { args, managed = true } of profiles) verify(render(umbrellaChart, args).objects, { managed });
 });
@@ -142,8 +158,11 @@ test('inline key material and env overrides fail closed, including without schem
     ['global.functionInvocation.privateKey=invalid', /references only/],
     ['controlPlane.env[0].name=FN_INVOCATION_PRIVATE_KEY', /reserved FN_INVOCATION/],
     ['controlPlaneExecutor.env[0].name=FN_INVOCATION_KEY_ID', /reserved FN_INVOCATION/],
+    ['controlPlane.env[0].name=FN_INVOCATION_SECRET_DIR', /reserved FN_INVOCATION/],
+    ['controlPlaneExecutor.config.inline.FN_INVOCATION_SECRET_DIR=invalid', /reserved FN_INVOCATION/],
     ['controlPlane.config.inline.FN_INVOCATION_JWKS=invalid', /reserved FN_INVOCATION/],
     ['global.transportSecurity.env[0].name=FN_INVOCATION_PRIVATE_KEY', /reserved FN_INVOCATION/],
+    ['global.transportSecurity.env[0].name=FN_INVOCATION_SECRET_DIR', /reserved FN_INVOCATION/],
     ['global.functionInvocation.remoteKey=workspaces/foreign', /platform OpenBao/],
   ];
   for (const [setting, error] of cases) {

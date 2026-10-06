@@ -92,9 +92,11 @@
 {{- $isControlPlane := and (eq (.Values.wrapper.componentId | default "") "control-plane") (gt (len $webhookKey) 0) -}}
 {{- /* #972: signer configuration is never shared through envFrom or runtime
        ConfigMaps. Defaults also cover Helm releases predating this contract. */ -}}
-{{- $isFunctionSigner := eq (.Values.wrapper.componentId | default "") "control-plane" -}}
+{{- $isFunctionSigner := has (.Values.wrapper.componentId | default "") (list "control-plane" "control-plane-executor") -}}
 {{- $functionInvocation := default (dict) .Values.global.functionInvocation -}}
 {{- $functionInvocationSecret := $functionInvocation.secretName | default "in-falcone-function-invocation" -}}
+{{- $functionInvocationVolume := "falcone-function-invocation" -}}
+{{- $functionInvocationDirectory := "/var/run/falcone/function-invocation" -}}
 {{- $databaseGateSecurityContext := deepCopy (default (dict) $webhookDatabase.securityContext) -}}
 {{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
   {{- $_ := unset $databaseGateSecurityContext "runAsUser" -}}
@@ -343,17 +345,11 @@ spec:
           {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer }}
           env:
             {{- if $isFunctionSigner }}
-            {{- /* ESO reconciles after Helm --wait in managed mode. Missing signer
-                   keys must not block control-plane startup; the application
-                   rejects function deploy/invoke until signing is configured. */}}
-            {{- range $entry := list (dict "name" "FN_INVOCATION_PRIVATE_KEY" "key" "private-key") (dict "name" "FN_INVOCATION_KEY_ID" "key" "key-id") (dict "name" "FN_INVOCATION_JWKS" "key" "jwks") }}
-            - name: {{ $entry.name }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $functionInvocationSecret | quote }}
-                  key: {{ $entry.key | quote }}
-                  optional: true
-            {{- end }}
+            {{- /* Managed ESO reconciles after Helm --wait. The optional whole
+                   directory is refreshed by kubelet after delivery/rotation;
+                   the signer reads it lazily, without a container restart. */}}
+            - name: FN_INVOCATION_SECRET_DIR
+              value: {{ $functionInvocationDirectory | quote }}
             {{- end }}
             {{- if $isControlPlane }}
             - name: WEBHOOK_SIGNING_KEY
@@ -435,8 +431,13 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.persistence.enabled (gt (len .Values.extraVolumeMounts) 0) $tsCa $knativeRuntimeConsumer }}
+          {{- if or .Values.persistence.enabled (gt (len .Values.extraVolumeMounts) 0) $tsCa $knativeRuntimeConsumer $isFunctionSigner }}
           volumeMounts:
+            {{- if $isFunctionSigner }}
+            - name: {{ $functionInvocationVolume }}
+              mountPath: {{ $functionInvocationDirectory }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
@@ -593,8 +594,20 @@ spec:
       {{- with .Values.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
-      {{- if or $isControlPlane .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa $knativeRuntimeConsumer }}
+      {{- if or $isControlPlane .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa $knativeRuntimeConsumer $isFunctionSigner }}
       volumes:
+        {{- if $isFunctionSigner }}
+        - name: {{ $functionInvocationVolume }}
+          secret:
+            secretName: {{ $functionInvocationSecret | quote }}
+            optional: true
+            defaultMode: 0440
+            items:
+              {{- range $key := list "private-key" "key-id" "jwks" }}
+              - key: {{ $key }}
+                path: {{ $key }}
+              {{- end }}
+        {{- end }}
         {{- if $isControlPlane }}
         - name: webhook-database-principal-gate
           configMap:

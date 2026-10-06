@@ -2416,18 +2416,20 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
   assert.ok(signerSeed, 'historical reuse-values must provision the missing signer before ESO');
   assert.equal(signerSeed.spec.template.spec.serviceAccountName, 'openbao-bootstrap');
   assert.equal(signerSeed.metadata.annotations['helm.sh/hook-weight'], '-2');
-  const signerDeployment = exactDocuments.find((document) => document.kind === 'Deployment'
-    && document.metadata.name === `${releaseName}-control-plane`);
-  const signerContainer = signerDeployment?.spec.template.spec.containers
-    .find((container) => container.name === 'control-plane');
-  assert.ok(signerContainer, 'historical reuse-values must retain the function signer');
-  for (const [name, key] of Object.entries({
-    FN_INVOCATION_PRIVATE_KEY: 'private-key', FN_INVOCATION_KEY_ID: 'key-id', FN_INVOCATION_JWKS: 'jwks',
-  })) {
-    const entries = signerContainer.env.filter((entry) => entry.name === name);
-    assert.equal(entries.length, 1);
-    assert.deepEqual(entries[0].valueFrom.secretKeyRef,
-      { name: 'in-falcone-function-invocation', key, optional: true });
+  for (const name of ['control-plane', 'control-plane-executor']) {
+    const signerDeployment = exactDocuments.find((document) => document.kind === 'Deployment'
+      && document.metadata.name === `${releaseName}-${name}`);
+    const pod = signerDeployment?.spec.template.spec;
+    const signerContainer = pod?.containers.find((container) => container.name === name);
+    assert.ok(signerContainer, 'historical reuse-values must retain both function signer consumers');
+    assert.deepEqual(signerContainer.env.filter((entry) => entry.name.startsWith('FN_INVOCATION_')),
+      [{ name: 'FN_INVOCATION_SECRET_DIR', value: '/var/run/falcone/function-invocation' }]);
+    assert.deepEqual(signerContainer.volumeMounts.filter((mount) => mount.name === 'falcone-function-invocation'),
+      [{ name: 'falcone-function-invocation', mountPath: '/var/run/falcone/function-invocation', readOnly: true }]);
+    assert.deepEqual(pod.volumes.find((volume) => volume.name === 'falcone-function-invocation').secret, {
+      secretName: 'in-falcone-function-invocation', optional: true, defaultMode: 0o440,
+      items: ['private-key', 'key-id', 'jwks'].map((key) => ({ key, path: key })),
+    });
   }
   // #972: real stored values predate function isolation; upgrades still render it.
   assert.equal(historical.functions, undefined);

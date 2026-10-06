@@ -87,7 +87,7 @@
 {{- if not (regexMatch "^platform/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$" $functionRemoteKey) -}}
   {{- fail "global.functionInvocation.remoteKey must be a platform OpenBao KV path" -}}
 {{- end -}}
-{{- $functionEnvNames := list "FN_INVOCATION_PRIVATE_KEY" "FN_INVOCATION_KEY_ID" "FN_INVOCATION_JWKS" -}}
+{{- $functionEnvNames := list "FN_INVOCATION_PRIVATE_KEY" "FN_INVOCATION_KEY_ID" "FN_INVOCATION_JWKS" "FN_INVOCATION_SECRET_DIR" -}}
 {{- range $componentName := $components -}}
   {{- $component := index $.Values $componentName | default dict -}}
   {{- range $entry := ($component.env | default list) -}}

@@ -80,29 +80,32 @@ on upgrades cannot garbage-collect signing keys during a control-plane rollout.
 It follows existing post-install/post-upgrade hook ordering with bundled ESO,
 and is an ordinary tracked resource with an administrator-owned ESO controller.
 Confirm reconciliation using status only, without retrieving Secret contents.
-The control-plane application's three optional Secret references populate
-`FN_INVOCATION_PRIVATE_KEY`, `FN_INVOCATION_KEY_ID` and `FN_INVOCATION_JWKS`.
-No other chart container, init container, shared ConfigMap or function pod
-receives this Secret. Missing provisioning or reconciliation leaves the signer
-environment absent and allows the control plane's other APIs to start, including
-profiles without functions/Knative. Function deploys are rejected and invocations
-return 503 until signing is configured; runtime enforcement remains enabled.
-Optional references avoid a Helm `--wait` deadlock before the managed ESO
-post-install/post-upgrade hooks run. Bootstrap failure prevents the release's
-signer delivery hooks from proceeding successfully.
+Both signer consumers, `control-plane` and `control-plane-executor`, mount the
+Secret at `/var/run/falcone/function-invocation` and receive only the directory
+path in `FN_INVOCATION_SECRET_DIR`. The mount is read-only, projects only
+`private-key`, `key-id` and `jwks` with mode `0440`, and has no `subPath`.
+The pod's filesystem group grants the application read access; OpenShift's SCC
+provides the group under the restricted profile. No sidecar, init container,
+shared ConfigMap or function pod receives this Secret.
 
-After ESO has reconciled, restart the control plane through the approved rollout
-to populate its environment before deploying or re-rolling functions. Check ESO
-reconciliation and rollout status without retrieving Secret contents.
+The optional volume permits startup before managed ESO's post-install/post-upgrade
+hooks, avoiding a Helm `--wait` deadlock. Once ESO reconciles, kubelet populates
+the directory in running pods. The source signer reads it on every operation and
+pins one atomic kubelet projection for each read, so delayed delivery and rotation
+take effect without restarting either application. Missing or invalid files fail
+closed: function deploys are rejected and invocations return 503 until valid keys
+arrive; other APIs can start, including profiles without functions/Knative.
+Bootstrap failure prevents the release's signer delivery hooks from proceeding
+successfully. Check reconciliation and delivery using status and a legitimate
+invocation, without retrieving Secret contents.
 
-Secret-backed environment variables do not refresh in running containers.
-For rotation, publish overlapping old/new public keys first, restart the control
-plane through the approved rollout and re-roll owned function revisions through
-the existing PATCH flow. Then switch the active private key and `key-id`, restart
-the control plane, and retain the previous public key until old revisions and
-in-flight invocations have drained. Runtime image publication and promotion,
-ESO reconciliation, control-plane rollout and live cold-start/CNI evidence remain
-release gates.
+For rotation, publish overlapping old/new public keys first, allow ESO and kubelet
+to refresh both signer consumers, and re-roll owned function revisions through
+the existing PATCH flow. Then switch the active private key and `key-id`, allow
+the projection to refresh, and retain the previous public key until old revisions
+and in-flight invocations have drained. Runtime image publication and promotion,
+ESO reconciliation, projected-volume delivery and live cold-start/CNI evidence
+remain release gates.
 
 ## Repository review evidence (2026-10-06)
 
@@ -113,7 +116,11 @@ selector matching the function fixture's pod template. The existing toggle,
 explicit-egress, unsafe-input and historical-values checks remain in place.
 
 Scoped signer-delivery, bootstrap, flow-audit and offline executor-upgrade checks
-passed. The required `bbx-temporal-bootstrap-048` reuse-values check was attempted
+passed. Delivery contracts cover both signer consumers, optional read-only
+whole-directory mounts, managed install/upgrade hooks, external ESO, historical
+values, custom references and the OpenShift restricted profile. Reserved directory
+overrides fail closed, and no sidecar or function fixture mounts signer files.
+The required `bbx-temporal-bootstrap-048` reuse-values check was attempted
 but remains a CI gate: the locked `yaml` package is absent, and retrying with the
 sandbox's installed YAML parser reached GNU tar extraction, which failed with
 `Function not implemented`. This is no evidence of a successful reuse-values

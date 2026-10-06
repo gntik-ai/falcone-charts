@@ -11,8 +11,8 @@ import { withPriorKafkaNetworkPolicy } from './blackbox/fixtures/kafka-networkpo
 // #980: include tenant audience wiring and the read-only config-copy root filesystem, preserving main's pod identities.
 // #45: include the reviewed root-path identity repair before subtracting only flow-audit additions.
 // #17: retain the secured observability defaults when subtracting flow-audit additions.
-// #972: retain the reviewed function policy, signer Secret references and OpenBao bootstrap.
-const priorBaseline = '2ba0dd028187fc0cd9ced752dc2a57b7e95181ecc818062c595f4a3a5d44b550'
+// #972: retain the reviewed function policy, refreshable signer directories and OpenBao bootstrap.
+const priorBaseline = '95e9bff694df90d50368e1cf4998d69a1f562a405488088c7b049031be8fe73a'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',

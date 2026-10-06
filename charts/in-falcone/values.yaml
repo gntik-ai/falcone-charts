@@ -34,8 +34,8 @@ global:
     operatorServiceAccount: ""
   # References only: OpenBao bootstrap idempotently seeds an Ed25519 private-key
   # (PKCS#8 PEM), key-id and public-only jwks on installs and upgrades.
-  # ESO delivers all three atomically; only the control-plane container consumes
-  # this Secret. Function revisions receive only the public JWKS from that app.
+  # ESO delivers all three atomically to refreshable directories in control-plane
+  # and control-plane-executor. Function revisions receive only the public JWKS.
   functionInvocation:
     secretName: in-falcone-function-invocation
     remoteKey: platform/functions/invocation
