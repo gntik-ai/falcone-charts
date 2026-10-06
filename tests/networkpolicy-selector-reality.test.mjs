@@ -19,7 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { yamlDocuments } from './blackbox/fixtures/blackbox.mjs';
@@ -270,6 +270,34 @@ check('functions allow only Knative ingress and cluster DNS egress by default in
     assert.equal(policy.metadata.namespace, 'falcone-test', label);
     assert.equal(policy.metadata.labels['app.kubernetes.io/managed-by'], 'Helm', label);
     assert.deepEqual(policy.spec, expectedFunctionSpec(), label);
+  }
+});
+
+check('function policy selects a fixture pod and preserves isolation in every shipped values overlay', () => {
+  // These are umbrella-chart overlays; deploy/helm contains unrelated service charts.
+  // Discover files so newly shipped profiles cannot silently escape this contract.
+  const overlays = [
+    ...readdirSync(resolve(chart, 'values'), { recursive: true })
+      .filter((file) => file.endsWith('.yaml'))
+      .map((file) => `charts/in-falcone/values/${file}`),
+    ...['deploy/kind', 'deploy/openshift', 'tests/e2e'].flatMap((directory) =>
+      readdirSync(resolve(root, directory))
+        .filter((file) => /^values.*\.yaml$/.test(file))
+        .map((file) => `${directory}/${file}`)),
+  ].sort();
+  const templates = podTemplateLabels(functionFixture);
+  for (const overlay of overlays) {
+    const args = ['-f', overlay];
+    // Match the existing source e2e invocation, whose environment is outside the enum.
+    if (overlay === 'tests/e2e/values-flows-e2e.yaml') args.push('--skip-schema-validation');
+    const policies = functionPolicies(yamlDocuments(run('helm', [
+      'template', 'falcone', chart, '--namespace', 'falcone-test', ...args,
+      '--show-only', 'templates/functions/networkpolicy.yaml',
+    ])));
+    assert.equal(policies.length, 1, overlay);
+    assert.deepEqual(policies[0].spec, expectedFunctionSpec(), overlay);
+    assert.equal(matching(templates, policies[0].spec.podSelector.matchLabels).length, 1,
+      `${overlay}: function policy must select the fixture's pod template`);
   }
 });
 

@@ -103,3 +103,20 @@ the control plane, and retain the previous public key until old revisions and
 in-flight invocations have drained. Runtime image publication and promotion,
 ESO reconciliation, control-plane rollout and live cold-start/CNI evidence remain
 release gates.
+
+## Repository review evidence (2026-10-06)
+
+The selector-reality suite now discovers all 25 shipped umbrella-chart values
+overlays, including topology, platform, airgap, kind and e2e overlays. Each must
+render exactly one function policy with the default ingress/egress bounds and a
+selector matching the function fixture's pod template. The existing toggle,
+explicit-egress, unsafe-input and historical-values checks remain in place.
+
+Scoped signer-delivery, bootstrap, flow-audit and offline executor-upgrade checks
+passed. The required `bbx-temporal-bootstrap-048` reuse-values check was attempted
+but remains a CI gate: the locked `yaml` package is absent, and retrying with the
+sandbox's installed YAML parser reached GNU tar extraction, which failed with
+`Function not implemented`. This is no evidence of a successful reuse-values
+upgrade. Rerun with locked dependencies and working archive extraction in PR CI.
+The live Helm/Argo upgrade matrix and policy-enforcing cluster acceptance also
+remain release gates; no cluster operation was performed during this review.
