@@ -12,7 +12,7 @@ const bindings = {
   FN_INVOCATION_KEY_ID: 'key-id',
   FN_INVOCATION_JWKS: 'jwks',
 };
-const signerNames = ['control-plane', 'control-plane-executor'];
+const signerNames = ['control-plane'];
 const signerVolume = 'falcone-function-invocation';
 const signerDirectory = '/var/run/falcone/function-invocation';
 
@@ -44,6 +44,7 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   assert.equal(stores[0].spec.provider.vault.auth.kubernetes.role, 'eso-role');
 
   const signers = [];
+  let executorFound = false;
   for (const o of [...objects, ...fixture]) {
     const pod = o.kind === 'CronJob' ? o.spec?.jobTemplate?.spec?.template?.spec
       : o.spec?.template?.spec;
@@ -62,6 +63,7 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
         `${o.metadata.name} must not receive the signer Secret`);
     }
     for (const container of [...(pod.containers ?? []), ...(pod.initContainers ?? [])]) {
+      if (container.name === 'control-plane-executor') executorFound = true;
       const env = container.env ?? [];
       const signer = signerPod && signerNames.includes(container.name);
       assert.ok(env.every((entry) => !(entry.name in bindings)),
@@ -84,6 +86,7 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
     }
   }
   assert.deepEqual(signers.sort(), [...signerNames].sort());
+  assert.ok(executorFound, 'the executor must render and pass all non-signer checks');
   for (const o of objects.filter((o) => o.kind === 'ConfigMap' || o.kind === 'Secret')) {
     assert.ok(!Object.keys(o.data ?? {}).some((key) => key in bindings),
       'Helm must not store invocation keys in shared config or generate key material');
@@ -91,7 +94,7 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   }
 }
 
-test('only both signer consumers mount refreshable keys, allowing startup before ESO in shipped profiles', () => {
+test('only control-plane mounts refreshable keys; executor receives no signer files in shipped profiles', () => {
   const profiles = [
     { args: [] }, { args: ['--set', 'temporal.ui.enabled=false'] },
     { args: ['-f', 'charts/in-falcone/values/staging.yaml'], managed: false },

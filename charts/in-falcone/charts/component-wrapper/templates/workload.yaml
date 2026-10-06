@@ -90,9 +90,11 @@
 {{- $webhookDatabaseCredentials := default (dict) $webhookDatabase.credentials -}}
 {{- $webhookDatabasePrincipals := default (dict) $webhookDatabase.principals -}}
 {{- $isControlPlane := and (eq (.Values.wrapper.componentId | default "") "control-plane") (gt (len $webhookKey) 0) -}}
-{{- /* #972: signer configuration is never shared through envFrom or runtime
-       ConfigMaps. Defaults also cover Helm releases predating this contract. */ -}}
-{{- $isFunctionSigner := has (.Values.wrapper.componentId | default "") (list "control-plane" "control-plane-executor") -}}
+{{- /* #972: only control-plane signs invocations. The executor runs tenant code
+       and must never receive signing material. Signer configuration is never
+       shared through envFrom or runtime ConfigMaps. Defaults also cover Helm
+       releases predating this contract. */ -}}
+{{- $isFunctionSigner := eq (.Values.wrapper.componentId | default "") "control-plane" -}}
 {{- $functionInvocation := default (dict) .Values.global.functionInvocation -}}
 {{- $functionInvocationSecret := $functionInvocation.secretName | default "in-falcone-function-invocation" -}}
 {{- $functionInvocationVolume := "falcone-function-invocation" -}}

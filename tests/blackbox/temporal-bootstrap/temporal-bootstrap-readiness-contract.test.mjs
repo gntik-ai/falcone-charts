@@ -2421,7 +2421,17 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
       && document.metadata.name === `${releaseName}-${name}`);
     const pod = signerDeployment?.spec.template.spec;
     const signerContainer = pod?.containers.find((container) => container.name === name);
-    assert.ok(signerContainer, 'historical reuse-values must retain both function signer consumers');
+    assert.ok(signerContainer, `historical reuse-values must retain ${name}`);
+    if (name === 'control-plane-executor') {
+      assert.ok(signerContainer.env.every((entry) => !entry.name.startsWith('FN_INVOCATION_')),
+        'executor must not receive signer configuration under reuse-values');
+      assert.ok((signerContainer.volumeMounts ?? []).every((mount) => mount.name !== 'falcone-function-invocation'),
+        'executor must not mount signer files under reuse-values');
+      assert.ok((pod.volumes ?? []).every((volume) => volume.name !== 'falcone-function-invocation'
+        && volume.secret?.secretName !== 'in-falcone-function-invocation'),
+        'executor must not receive the signer Secret under reuse-values');
+      continue;
+    }
     assert.deepEqual(signerContainer.env.filter((entry) => entry.name.startsWith('FN_INVOCATION_')),
       [{ name: 'FN_INVOCATION_SECRET_DIR', value: '/var/run/falcone/function-invocation' }]);
     assert.deepEqual(signerContainer.volumeMounts.filter((mount) => mount.name === 'falcone-function-invocation'),
