@@ -603,7 +603,7 @@ spec:
           secret:
             secretName: {{ $functionInvocationSecret | quote }}
             optional: true
-            defaultMode: 0440
+            defaultMode: 288
             items:
               {{- range $key := list "private-key" "key-id" "jwks" }}
               - key: {{ $key }}
