@@ -543,9 +543,17 @@ test('sanitized revision-20 fixture preserves the real bundled topology while ca
     .sort()
   const expected = fixture.falconeIntegrationResources
     .map((object) => `${object.kind}/${object.namespace ?? 'in-falcone-staging'}/${object.name}`)
+    // Preserve the historical inventory; #972 adds exactly one integration.
+    .concat('ExternalSecret/in-falcone-staging/platform-function-invocation')
     .sort()
   assert.deepEqual(integrations, expected)
-  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 14)
+  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 15)
+  const signer = named(objects, 'ExternalSecret', 'platform-function-invocation', 'in-falcone-staging')
+  assert.deepEqual(signer.spec.secretStoreRef,
+    { name: 'openbao-backend', kind: 'ClusterSecretStore' })
+  assert.equal(signer.spec.target.name, 'in-falcone-function-invocation')
+  assert.equal(signer.spec.target.creationPolicy, 'Orphan')
+  assert.equal(signer.spec.target.deletionPolicy, 'Retain')
   assert.ok(!objects.some((object) => object.metadata?.namespace === 'external-secrets'))
 })
 
@@ -705,11 +713,24 @@ test('executable OpenBao reconciliation omits static reviewer fields, rereads co
   try {
     captureProcess('role', role)
     if (role.result.status !== 0 || !/result=changed/.test(combined(role.result))) violations.push('security-token-field-drift-ignored')
+    const roleWrite = role.calls.find((line) => /^write auth\/kubernetes\/role\/eso-role\b/.test(line)) ?? ''
+    if (!/token_policies=platform,functions,gateway,iam,function-invocation(?:\s|$)/.test(roleWrite)) violations.push('signer-policy-not-bound')
+    if (!/token_no_default_policy=true(?:\s|$)/.test(roleWrite)) violations.push('default-policy-not-excluded')
     for (const field of ['token_max_ttl', 'token_explicit_max_ttl', 'token_period', 'token_num_uses', 'token_no_default_policy', 'token_type']) {
       if (!role.calls.some((line) => line.includes(`-field=${field}`))) violations.push(`role-field-not-normalized:${field}`)
     }
   } finally {
     role.cleanup()
+  }
+
+  const policies = runOpenBaoReconciler(script, 'role-policy-remains-static')
+  try {
+    captureProcess('policies', policies)
+    if (policies.result.status === 0) violations.push('unconverged-policy-metadata-accepted')
+    if (!/ROLE_VERIFY_FAILED/.test(combined(policies.result))) violations.push('policy-readback-code-missing')
+    if (policies.calls.some((line) => /auth\/kubernetes\/login.*role=eso-role/.test(line))) violations.push('canary-before-policy-convergence')
+  } finally {
+    policies.cleanup()
   }
 
   const lookup = runOpenBaoReconciler(script, 'lookup-invalid')
