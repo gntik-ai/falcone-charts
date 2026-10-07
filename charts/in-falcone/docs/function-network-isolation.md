@@ -36,7 +36,12 @@ Existing functions need the source change's ownership-checked
 `PATCH /v1/functions/actions/{id}` re-roll to acquire the pod label and public-key
 environment. Reapplying the same definition is idempotent. Configure the signer
 first through control-plane-only External Secrets/OpenBao; private signing
-material must never reach a function. Coordinate runtime enforcement, public-key
+material must never reach a function. Roll out the credential-signing control
+plane before re-rolling functions onto an enforcing runtime. Confirm signer
+reconciliation through status and a legitimate invocation before the re-roll;
+an enforcing runtime paired with a control plane that cannot sign rejects all
+invocations. Then re-roll every existing owned function through PATCH, and prove
+a cold-start invocation writes exactly one activation. Coordinate public-key
 overlap rotation and re-roll using the source repository's
 `docs/installation/function-invocation-isolation.md`. This policy requires no
 image change and disabling its toggle does not disable runtime authentication.
@@ -134,3 +139,11 @@ reuse-values upgrade claimed by this review. Rerun with locked dependencies in
 PR CI.
 The live Helm/Argo upgrade matrix and policy-enforcing cluster acceptance also
 remain release gates; no cluster operation was performed during this review.
+
+The follow-up review from commit `2e668ff` repeated all 17 selector-reality
+checks, signer-delivery and bootstrap suites, and strict umbrella-chart Helm
+lint successfully. No template correction was required. The rollout guidance
+now explicitly orders signer readiness before runtime enforcement and requires
+the cold-start activation check after re-rolling existing functions. The
+`bbx-temporal-bootstrap-048` attempt still cannot load the absent locked `yaml`
+package, so it remains unverified locally and required in PR CI.
