@@ -116,38 +116,39 @@ remain release gates.
 
 ## Repository review evidence (2026-10-07)
 
-The selector-reality suite now discovers all 25 shipped umbrella-chart values
-overlays, including topology, platform, airgap, kind and e2e overlays. Each must
+Revalidated the assigned implementation at commit `7f2a078` without changing
+templates, values, image references or safety gates. The selector-reality suite
+discovers all 25 shipped umbrella-chart values overlays, including topology,
+platform, airgap, kind and e2e overlays. Each must
 render exactly one function policy with the default ingress/egress bounds and a
 selector matching the function fixture's pod template. The existing toggle,
 explicit-egress, unsafe-input and historical-values checks remain in place.
 
-Scoped signer-delivery, bootstrap, flow-audit and offline executor-upgrade checks
-passed. Delivery contracts cover control-plane-only signing, optional read-only
-whole-directory mounts, managed install/upgrade hooks, external ESO, historical
+All 17 selector-reality checks, signer-delivery, signer-bootstrap, flow-audit,
+offline executor-upgrade and strict Helm lint passed again. Delivery contracts
+cover control-plane-only signing, optional read-only whole-directory mounts,
+managed install/upgrade hooks, external ESO, historical
 values, custom references and the OpenShift restricted profile. Reserved directory
 overrides fail closed, and no executor, sidecar or function fixture mounts signer
-files. Review of the existing chart implementation required no template changes.
-All 17 selector-reality checks passed, as did signer-delivery, signer-bootstrap,
-flow-audit and offline executor-upgrade checks. PR CI now explicitly runs the
-signer-delivery, signer-bootstrap and selector-reality suites; the blackbox runner
+files. PR CI explicitly runs the signer-delivery, signer-bootstrap and
+selector-reality suites; the blackbox runner
 does not discover these top-level test files.
-The required `bbx-temporal-bootstrap-048` reuse-values check was attempted
-but could not start: the locked `yaml` package is absent and package installation
-requires unavailable network access. It remains a CI gate, with no successful
-reuse-values upgrade claimed by this review. Rerun with locked dependencies in
-PR CI.
-The live Helm/Argo upgrade matrix and policy-enforcing cluster acceptance also
-remain release gates; no cluster operation was performed during this review.
 
-The follow-up review of commit `93a65e0` strengthens the explicit-egress check
-with Kubernetes selector evaluation. In each tested profile, the configured
-destination admits the rendered control-plane pod, DNS and workspace data, but
+The required `bbx-temporal-bootstrap-048` reuse-values check was attempted again
+but could not load because the locked `yaml` package is absent. It is recorded as
+skipped locally; dependency installation needs unavailable network access.
+It remains a CI gate, with no successful reuse-values upgrade claimed by this
+review. Rerun with locked dependencies in PR CI.
+
+The explicit-egress check evaluates Kubernetes selectors. In each tested profile,
+the configured destination admits the rendered control-plane pod, DNS and
+workspace data, but
 rejects function pods even when they carry allowed destination labels. It also
 rejects all tested destinations in default and configured Knative data-plane
 namespaces. The check accounts for namespace/pod selector intersection and
-separate peers, which Kubernetes combines as alternatives. No template
-correction was required. All 17 selector-reality checks, 14 signer checks, 15
-offline executor-upgrade checks, flow-audit regression and strict Helm lint
-passed. The `bbx-temporal-bootstrap-048` attempt still cannot load the absent
-locked `yaml` package, so it remains unverified locally and required in PR CI.
+separate peers, which Kubernetes combines as alternatives.
+
+The live Helm/Argo upgrade matrix needs a disposable Docker/kind cluster and was
+skipped locally. ESO reconciliation, projected signer delivery, cross-tenant
+denial and cold-start activation evidence need a policy-enforcing cluster and
+remain release gates. No cluster operation was performed during this review.
