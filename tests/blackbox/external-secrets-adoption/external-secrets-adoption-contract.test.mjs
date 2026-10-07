@@ -112,7 +112,19 @@ test('externally managed ESO renders only Falcone-owned integration resources an
   assert.ok(objects.some((object) => object.kind === 'Namespace' && object.metadata?.name === 'eso-system'), 'Falcone must retain its separate authentication namespace')
 
   assert.equal(objects.filter((object) => object.kind === 'ClusterSecretStore' && object.metadata?.name === 'openbao-backend').length, 1)
-  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 14)
+  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 15)
+  const invocationSecrets = objects.filter((object) => object.kind === 'ExternalSecret'
+    && object.metadata?.name === 'platform-function-invocation')
+  assert.equal(invocationSecrets.length, 1, 'externally managed ESO must retain the function invocation signer integration')
+  const invocationSecret = invocationSecrets[0]
+  assert.equal(invocationSecret.metadata.namespace, 'falcone-bbx')
+  assert.equal(invocationSecret.metadata.annotations?.['helm.sh/hook'], undefined,
+    'the signer integration must remain a tracked resource with externally managed ESO')
+  assert.deepEqual(invocationSecret.spec.secretStoreRef,
+    { name: 'openbao-backend', kind: 'ClusterSecretStore' })
+  assert.equal(invocationSecret.spec.target.name, 'in-falcone-function-invocation')
+  assert.equal(invocationSecret.spec.target.creationPolicy, 'Orphan')
+  assert.equal(invocationSecret.spec.target.deletionPolicy, 'Retain')
 
   const openbaoPolicy = objects.find((object) => object.kind === 'NetworkPolicy' && object.metadata?.name === 'openbao-access-policy')
   assert.ok(openbaoPolicy, 'OpenBao ingress policy is missing')
