@@ -11,31 +11,31 @@
 # for the Argo-managed render. Do not hand-pin digests here.
 controlPlane:
   image:
-    tag: sha-fecb3a0
+    tag: sha-7d6f184
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-control-plane
   functionExecutor:
     runtimeImage:
-      tag: sha-fecb3a0
+      tag: sha-7d6f184
       digest: ""
       repository: ghcr.io/gntik-ai/in-falcone-fn-runtime
 controlPlaneExecutor:
   image:
-    tag: sha-fecb3a0
+    tag: sha-7d6f184
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-control-plane-executor
 webConsole:
   image:
-    tag: sha-fecb3a0
+    tag: sha-7d6f184
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-web-console
 workflowWorker:
   image:
-    tag: sha-fecb3a0
+    tag: sha-7d6f184
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-workflow-worker
 mcp:
   runtimeImage:
-    tag: sha-fecb3a0
+    tag: sha-7d6f184
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-mcp-runtime
