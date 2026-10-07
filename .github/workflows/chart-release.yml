@@ -111,6 +111,10 @@ jobs:
         run: sh tests/webhook-database-chart-ci.test.sh
       - name: Validate flow-audit chart additions and reuse-values rendering
         run: node --test tests/flow-audit-chart.test.mjs
+      - name: Validate function isolation and invocation signer delivery
+        run: |
+          node --test tests/function-invocation-secret-delivery.test.mjs tests/function-invocation-bootstrap.test.mjs
+          node tests/networkpolicy-selector-reality.test.mjs
       - name: Lint and render independent Falcone charts
         shell: bash
         run: |

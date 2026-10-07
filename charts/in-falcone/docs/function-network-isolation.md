@@ -109,7 +109,7 @@ and in-flight invocations have drained. Runtime image publication and promotion,
 ESO reconciliation, projected-volume delivery and live cold-start/CNI evidence
 remain release gates.
 
-## Repository review evidence (2026-10-06)
+## Repository review evidence (2026-10-07)
 
 The selector-reality suite now discovers all 25 shipped umbrella-chart values
 overlays, including topology, platform, airgap, kind and e2e overlays. Each must
@@ -122,12 +122,15 @@ passed. Delivery contracts cover control-plane-only signing, optional read-only
 whole-directory mounts, managed install/upgrade hooks, external ESO, historical
 values, custom references and the OpenShift restricted profile. Reserved directory
 overrides fail closed, and no executor, sidecar or function fixture mounts signer
-files. The default render differs from the previous attempt only by removing the
-executor's signer directory environment variable, mount and volume.
+files. Review of the existing chart implementation required no template changes.
+All 17 selector-reality checks passed, as did signer-delivery, signer-bootstrap,
+flow-audit and offline executor-upgrade checks. PR CI now explicitly runs the
+signer-delivery, signer-bootstrap and selector-reality suites; the blackbox runner
+does not discover these top-level test files.
 The required `bbx-temporal-bootstrap-048` reuse-values check was attempted
-but remains a CI gate: the locked `yaml` package is absent. The previous attempt's
-fallback parser also reached GNU tar extraction, which failed with
-`Function not implemented`. This is no evidence of a successful reuse-values
-upgrade. Rerun with locked dependencies and working archive extraction in PR CI.
+but could not start: the locked `yaml` package is absent and package installation
+requires unavailable network access. It remains a CI gate, with no successful
+reuse-values upgrade claimed by this review. Rerun with locked dependencies in
+PR CI.
 The live Helm/Argo upgrade matrix and policy-enforcing cluster acceptance also
 remain release gates; no cluster operation was performed during this review.
