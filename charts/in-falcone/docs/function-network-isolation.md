@@ -140,10 +140,14 @@ PR CI.
 The live Helm/Argo upgrade matrix and policy-enforcing cluster acceptance also
 remain release gates; no cluster operation was performed during this review.
 
-The follow-up review from commit `2e668ff` repeated all 17 selector-reality
-checks, signer-delivery and bootstrap suites, and strict umbrella-chart Helm
-lint successfully. No template correction was required. The rollout guidance
-now explicitly orders signer readiness before runtime enforcement and requires
-the cold-start activation check after re-rolling existing functions. The
-`bbx-temporal-bootstrap-048` attempt still cannot load the absent locked `yaml`
-package, so it remains unverified locally and required in PR CI.
+The follow-up review of commit `93a65e0` strengthens the explicit-egress check
+with Kubernetes selector evaluation. In each tested profile, the configured
+destination admits the rendered control-plane pod, DNS and workspace data, but
+rejects function pods even when they carry allowed destination labels. It also
+rejects all tested destinations in default and configured Knative data-plane
+namespaces. The check accounts for namespace/pod selector intersection and
+separate peers, which Kubernetes combines as alternatives. No template
+correction was required. All 17 selector-reality checks, 14 signer checks, 15
+offline executor-upgrade checks, flow-audit regression and strict Helm lint
+passed. The `bbx-temporal-bootstrap-048` attempt still cannot load the absent
+locked `yaml` package, so it remains unverified locally and required in PR CI.

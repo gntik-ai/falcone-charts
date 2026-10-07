@@ -233,6 +233,31 @@ function functionPolicies(objects) {
     && object.spec?.podSelector?.matchLabels?.['in-falcone.io/component'] === 'function');
 }
 
+// Evaluate Kubernetes selector semantics so isolation checks cover destinations,
+// including absent selectors and OR peers, rather than only manifest shape.
+function selectorMatches(selector, labels) {
+  return Object.entries(selector.matchLabels ?? {}).every(([key, value]) => labels[key] === value)
+    && (selector.matchExpressions ?? []).every(({ key, operator, values = [] }) => {
+      switch (operator) {
+        case 'In': return Object.hasOwn(labels, key) && values.includes(labels[key]);
+        case 'NotIn': return !Object.hasOwn(labels, key) || !values.includes(labels[key]);
+        case 'Exists': return Object.hasOwn(labels, key);
+        case 'DoesNotExist': return !Object.hasOwn(labels, key);
+        default: assert.fail(`unknown selector operator: ${operator}`);
+      }
+    });
+}
+
+function functionEgressAdmits(policy, namespace, labels) {
+  return (policy.spec.egress ?? []).some((rule) => !rule.to || rule.to.some((peer) => {
+    assert.equal(peer.ipBlock, undefined, 'function egress must use explicit pod destinations');
+    const namespaceMatches = peer.namespaceSelector
+      ? selectorMatches(peer.namespaceSelector, { 'kubernetes.io/metadata.name': namespace })
+      : namespace === policy.metadata.namespace;
+    return namespaceMatches && (!peer.podSelector || selectorMatches(peer.podSelector, labels));
+  }));
+}
+
 const defaultFunctionGateways = ['knative-serving', 'kourier-system'];
 
 function expectedFunctionSpec(gateways = defaultFunctionGateways, allowedEgress = []) {
@@ -329,6 +354,23 @@ check('explicit function egress excludes functions and all data-plane namespaces
     ]));
     const [policy] = functionPolicies(objects);
     assert.deepEqual(policy.spec, expectedFunctionSpec(gateways, peers), label);
+    const controlPlane = podTemplateLabels(objects).find(({ name }) => name === 'falcone-control-plane');
+    assert.ok(controlPlane, `${label}: intended control-plane destination must render`);
+    assert.equal(functionEgressAdmits(policy, 'falcone-test', controlPlane.labels), true, label);
+    assert.equal(functionEgressAdmits(policy, 'kube-system', { 'k8s-app': 'kube-dns' }), true, label);
+    assert.equal(functionEgressAdmits(policy, 'workspace-data', { shared: 'true' }), true, label);
+    const destinationLabels = [controlPlane.labels, { 'k8s-app': 'kube-dns' }, { shared: 'true' }];
+    for (const namespace of ['falcone-test', 'kube-system', 'workspace-data', ...defaultFunctionGateways, ...gateways]) {
+      for (const labels of destinationLabels) {
+        assert.equal(functionEgressAdmits(policy, namespace, {
+          ...labels, ...functionFixture[0].spec.template.metadata.labels,
+        }), false, `${label}: function pod must be denied in ${namespace}, even with destination labels`);
+        if ([...defaultFunctionGateways, ...gateways].includes(namespace)) {
+          assert.equal(functionEgressAdmits(policy, namespace, labels), false,
+            `${label}: data-plane destination must be denied in ${namespace}`);
+        }
+      }
+    }
     for (const rule of policy.spec.egress) {
       for (const peer of rule.to) {
         // Both selectors belong to the SAME peer (AND), never separate OR peers.
