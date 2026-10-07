@@ -12,7 +12,7 @@ import { withPriorKafkaNetworkPolicy } from './blackbox/fixtures/kafka-networkpo
 // #45: include the reviewed root-path identity repair before subtracting only flow-audit additions.
 // #17: retain the secured observability defaults when subtracting flow-audit additions.
 // #972: retain the reviewed function policy, refreshable signer directories and OpenBao bootstrap.
-const priorBaseline = 'd439e379a04e363546c8af4575b26ee0926b10262746a9b16552a5bae17db920'
+const priorBaseline = 'bb3ebbee52090ea4b9b9ec65eb5e3e32937bba775d954d58effb56309b8895ae'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',

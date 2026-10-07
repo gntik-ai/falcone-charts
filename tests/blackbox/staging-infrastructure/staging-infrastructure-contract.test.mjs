@@ -254,7 +254,7 @@ test('upgrade reconciler selects rotating local reviewer mode and forbids KV or 
   assert.match(script, /reviewer_set=.*token_reviewer_jwt_set/)
   assert.match(script, /desired_name="eso-openbao-auth"/)
   assert.match(script, /desired_namespace="eso-system"/)
-  assert.match(script, /desired_policies="functions,gateway,iam,platform"/)
+  assert.match(script, /desired_policies="function-invocation,functions,gateway,iam,platform"/)
   assert.match(script, /auth\/token\/lookup-self/)
   assert.match(script, /auth\/token\/revoke-self/)
 

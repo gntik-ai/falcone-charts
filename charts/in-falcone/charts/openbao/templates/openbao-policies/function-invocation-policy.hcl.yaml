@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-policy-function-invocation
+  namespace: {{ .Values.openbao.namespace }}
+data:
+  function-invocation.hcl: |{{ include "openbao.policy.functionInvocation" . | nindent 4 }}

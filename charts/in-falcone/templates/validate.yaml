@@ -83,9 +83,9 @@
 {{- if or (gt (len $functionSecretName) 253) (not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $functionSecretName)) -}}
   {{- fail "global.functionInvocation.secretName must be a DNS subdomain name" -}}
 {{- end -}}
-{{- $functionRemoteKey := $functionInvocation.remoteKey | default "platform/functions/invocation" -}}
-{{- if not (regexMatch "^platform/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$" $functionRemoteKey) -}}
-  {{- fail "global.functionInvocation.remoteKey must be a platform OpenBao KV path" -}}
+{{- $functionRemoteKey := $functionInvocation.remoteKey | default "control-plane/function-invocation" -}}
+{{- if not (regexMatch "^control-plane/function-invocation(/[a-zA-Z0-9_-]+)*$" $functionRemoteKey) -}}
+  {{- fail "global.functionInvocation.remoteKey must be an isolated control-plane/function-invocation OpenBao KV path" -}}
 {{- end -}}
 {{- $functionEnvNames := list "FN_INVOCATION_PRIVATE_KEY" "FN_INVOCATION_KEY_ID" "FN_INVOCATION_JWKS" "FN_INVOCATION_SECRET_DIR" -}}
 {{- range $componentName := $components -}}

@@ -56,7 +56,7 @@ spec:
               desired_name={{ .Values.eso.serviceAccountName | default "eso-openbao-auth" | quote }}
               desired_namespace={{ .Values.eso.namespace | default "eso-system" | quote }}
               desired_ttl={{ .Values.openbao.authReconcile.roleTTLSeconds | int | quote }}
-              desired_policies="functions,gateway,iam,platform"
+              desired_policies="function-invocation,functions,gateway,iam,platform"
               desired_audience=""
               desired_alias_name_source="serviceaccount_uid"
               desired_token_max_ttl="$desired_ttl"
@@ -172,6 +172,10 @@ spec:
               fi
               {{- end }}
 
+              # Existing policy gates remain mandatory. The new signer policy is
+              # installed by bootstrap at weight -2, after this metadata-only Job
+              # (weight -3) repairs Kubernetes auth. Binding it here is safe:
+              # a missing policy grants no access until bootstrap publishes it.
               for policy in platform functions gateway iam; do
                 bao policy list 2>/dev/null | grep -qx "$policy" || fail REQUIRED_POLICY_NAME_MISSING
               done
@@ -224,7 +228,7 @@ spec:
                 bao write "auth/kubernetes/role/$role" \
                   bound_service_account_names="$desired_name" \
                   bound_service_account_namespaces="$desired_namespace" \
-                  token_policies=platform,functions,gateway,iam \
+                  token_policies=platform,functions,gateway,iam,function-invocation \
                   token_ttl="${desired_ttl}s" \
                   audience="$desired_audience" \
                   alias_name_source="$desired_alias_name_source" \

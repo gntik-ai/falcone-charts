@@ -222,7 +222,7 @@ function assertReachabilityFailureBoundary(result, context) {
 }
 
 // bbx-repair-staging-061 | fn-openbao-eso-token-policy-metadata | OpenSpec #### Scenario: Auth reconcile excludes the default policy from ESO tokens
-test('rendered auth reconcile excludes default and validates exactly the four ESO policies', () => {
+test('rendered auth reconcile excludes default and validates exactly the five ESO policies', () => {
   const { objects } = render(umbrellaChart, [
     '-f', stagingValues,
     '--set', 'openbao.openbao.authReconcile.allowRecoveryRoot=true',
@@ -242,7 +242,7 @@ test('rendered auth reconcile excludes default and validates exactly the four ES
 
   assert.match(script, /desired_token_no_default_policy="true"/)
   assert.doesNotMatch(script, /desired_token_no_default_policy="false"/)
-  assert.match(script, /desired_policies="functions,gateway,iam,platform"/)
+  assert.match(script, /desired_policies="function-invocation,functions,gateway,iam,platform"/)
   assert.match(
     script,
     /\[ "\$\(normalize_list "\$\(field token_policies "auth\/kubernetes\/role\/\$role"\)"\)" = "\$desired_policies" \] \|\| fail ROLE_VERIFY_FAILED/,
@@ -251,7 +251,7 @@ test('rendered auth reconcile excludes default and validates exactly the four ES
   assert.match(
     script,
     /\[ "\$lookup_policies" = "\$desired_policies" \][\s\\]+&& \[ "\$lookup_ttl" -gt 0 \]/,
-    'the canary lookup must require exact normalized equality with only the four desired policies',
+    'the canary lookup must require exact normalized equality with only the five desired policies',
   )
 })
 

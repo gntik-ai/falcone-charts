@@ -38,7 +38,7 @@ global:
   # only. The executor gets no signer Secret; function revisions get public JWKS.
   functionInvocation:
     secretName: in-falcone-function-invocation
-    remoteKey: platform/functions/invocation
+    remoteKey: control-plane/function-invocation
   # One immutable SeaweedFS image contract is inherited by the vendored
   # data-plane workloads and by control-plane-created IAM Jobs.
   seaweedfs:

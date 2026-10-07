@@ -47,6 +47,18 @@ test('install and upgrade share signer bootstrap before ESO without weakening au
   assert.ok(upgrade.spec.template.spec.volumes.every((v) => !v.secret?.secretName.includes('recovery')));
   const policy = upgradeObjects.find((o) => o.kind === 'ConfigMap' && o.metadata.name === 'openbao-policy-auth-reconcile');
   assert.doesNotMatch(policy.data['auth-reconcile.hcl'], /secret\/data/);
+  const signerPolicy = upgradeObjects.find((o) => o.kind === 'ConfigMap'
+    && o.metadata.name === 'openbao-policy-function-invocation').data['function-invocation.hcl'].trim();
+  for (const job of [install, upgrade]) {
+    const body = seedBody(job);
+    assert.ok(body.includes(signerPolicy), 'bootstrap embeds the exact rendered signer policy');
+    assert.ok(body.indexOf('bao policy write function-invocation') < body.indexOf('bao kv get'),
+      'dedicated signer access must be provisioned before key delivery');
+  }
+  const reconcile = upgradeObjects.find((o) => o.kind === 'Job' && o.metadata.name === 'openbao-auth-reconcile');
+  assert.ok(Number(reconcile.metadata.annotations['helm.sh/hook-weight'])
+    < Number(upgrade.metadata.annotations['helm.sh/hook-weight']),
+  'auth repairs precede bootstrap policy writes without granting the reconciler policy-write access');
 });
 
 test('GitOps upgrades and customized references retain bootstrap ordering and paths', () => {
@@ -56,13 +68,13 @@ test('GitOps upgrades and customized references retain bootstrap ordering and pa
     '--set', 'global.webhookDatabase.migration.backupVerified=true',
     '--set', 'global.webhookDatabase.migration.parityVerified=true',
     '--set', 'global.webhookDatabase.migration.backupReference=bbx-function-bootstrap',
-    '--set', 'global.functionInvocation.remoteKey=platform/functions/custom',
+    '--set', 'global.functionInvocation.remoteKey=control-plane/function-invocation/custom',
   ]).objects;
   assert.ok(!objects.some((o) => o.kind === 'Job' && o.metadata.name === 'openbao-init'));
   const job = objects.find((o) => o.kind === 'Job' && o.metadata.name === 'openbao-function-invocation-seed');
   assert.ok(job);
   assert.match(script(job.spec.template.spec.containers.find((c) => c.name === 'function-invocation-seed')),
-    /invocation_path="secret\/platform\/functions\/custom"/);
+    /invocation_path="secret\/control-plane\/function-invocation\/custom"/);
 });
 
 // Execute the rendered shell with an offline KV stub. Generated test keys are
@@ -75,6 +87,11 @@ const record = path.join(process.env.BBX_DIR, 'record.json');
 const calls = path.join(process.env.BBX_DIR, 'calls');
 const mode = process.env.BBX_MODE;
 fs.appendFileSync(calls, args.slice(0, 2).join(' ') + '\\n');
+if (args[0] === 'policy' && args[1] === 'write') {
+  if (args[2] !== 'function-invocation' || mode === 'policy-denied') process.exit(1);
+  fs.writeFileSync(path.join(process.env.BBX_DIR, 'stored-policy.hcl'), fs.readFileSync(args[3]));
+  process.exit(0);
+}
 if (args[0] !== 'kv') process.exit(1);
 if (args[1] === 'get') {
   if (mode === 'denied' || !fs.existsSync(record)) process.exit(1);
@@ -97,7 +114,7 @@ if (args[1] === 'get') {
 } else process.exit(1);
 `;
 
-for (const mode of ['absent', 'existing', 'incomplete', 'race', 'denied']) {
+for (const mode of ['absent', 'existing', 'incomplete', 'race', 'denied', 'policy-denied']) {
   test(`rendered signer bootstrap: ${mode}`, async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'falcone-function-bootstrap-'));
     const initial = { 'private-key': 'preserved', 'key-id': 'retained', jwks: 'overlap' };
@@ -108,7 +125,7 @@ for (const mode of ['absent', 'existing', 'incomplete', 'race', 'denied']) {
         writeFileSync(resolve(directory, 'record.json'), JSON.stringify(mode === 'existing' ? initial : { 'key-id': 'retained' }));
       }
       const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, BBX_DIR: directory, BBX_MODE: mode };
-      const rewrite = (text) => text.replaceAll('/function-invocation', directory).replaceAll('sleep 1', 'sleep 0.02');
+      const rewrite = (text) => text.replaceAll('=/function-invocation', '=' + directory).replaceAll('sleep 1', 'sleep 0.02');
       generator = spawn('sh', ['-ec', rewrite(script(upgrade.spec.template.spec.containers.find((c) => c.name === 'function-invocation-key-generator')))],
         { env, stdio: ['ignore', 'pipe', 'pipe'] });
       let generatorOutput = '';
@@ -118,7 +135,7 @@ for (const mode of ['absent', 'existing', 'incomplete', 'race', 'denied']) {
       // Run only the shared seed section; no cluster access or authentication.
       const seed = 'invocation_path=' + seedBody(upgrade) + 'echo "Function invocation signer converged"';
       const result = run('sh', ['-ec', rewrite(seed)], { env, timeout: 10_000 });
-      if (mode === 'denied' || mode === 'incomplete') {
+      if (mode === 'denied' || mode === 'incomplete' || mode === 'policy-denied') {
         assert.notEqual(result.status, 0);
         generator.kill();
       } else {
@@ -128,6 +145,15 @@ for (const mode of ['absent', 'existing', 'incomplete', 'race', 'denied']) {
         assert.equal(existsSync(resolve(directory, 'private-key')), false, 'ephemeral key file is removed');
       }
       assert.doesNotMatch(result.stdout + result.stderr + generatorOutput, /BEGIN PRIVATE KEY|"keys"|"d"/);
+      const calls = readFileSync(resolve(directory, 'calls'), 'utf8');
+      assert.ok(calls.startsWith('policy write\n'), 'publish the dedicated policy before any KV request');
+      if (mode === 'policy-denied') {
+        assert.ok(!calls.includes('kv '), 'denied policy publication must stop before generating or storing keys');
+        assert.equal(existsSync(resolve(directory, 'record.json')), false);
+      } else {
+        assert.match(readFileSync(resolve(directory, 'stored-policy.hcl'), 'utf8'),
+          /path "secret\/data\/control-plane\/function-invocation"/);
+      }
       const recordFile = resolve(directory, 'record.json');
       if (mode === 'absent') {
         const record = JSON.parse(readFileSync(recordFile));

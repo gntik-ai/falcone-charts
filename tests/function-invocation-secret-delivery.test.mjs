@@ -16,8 +16,64 @@ const signerNames = ['control-plane'];
 const signerVolume = 'falcone-function-invocation';
 const signerDirectory = '/var/run/falcone/function-invocation';
 
+function verifySignerPolicies(objects, remoteKey) {
+  const policies = new Map(objects.filter((o) => o.kind === 'ConfigMap')
+    .flatMap((o) => Object.entries(o.data ?? {})
+      .filter(([key]) => key.endsWith('.hcl'))
+      .map(([key, value]) => [key.slice(0, -4), value])));
+  assert.equal(policies.get('function-invocation').trim(),
+    `path "secret/data/${remoteKey}" {\n  capabilities = ["read"]\n}`);
+  const identities = objects.find((o) => o.kind === 'ConfigMap'
+    && o.data?.['platform-service-account-names']).data;
+  const install = objects.find((o) => o.kind === 'Job' && o.metadata.name === 'openbao-init');
+  const script = install.spec.template.spec.containers.find((c) => c.name === 'openbao-init')
+    .args[0].replaceAll('\\\n', ' ');
+  const roles = [...script.matchAll(/bao write auth\/kubernetes\/role\/([\w-]+)([\s\S]*?)>\/dev\/null/g)]
+    .map(([, name, body]) => {
+      const names = body.match(/bound_service_account_names=("[^"]*"|'[^']*'|[^\s]+)/)[1]
+        .replace(/^['"]|['"]$/g, '')
+        .replace(/\$\(auth_identity ([\w-]+)\)/g, (_, key) => {
+          assert.ok(identities[key], `missing rendered identity ${key}`);
+          return identities[key];
+        }).split(',');
+      const attached = body.match(/(?:token_policies|policies)=([^\s]+)/)[1].split(',');
+      return { name, names, attached };
+    });
+  assert.equal(roles.length, 7, 'inspect every bootstrap role, including ESO and the reconciler');
+  assert.deepEqual(roles.filter((r) => r.attached.includes('function-invocation')).map((r) => r.name),
+    ['eso-role'], 'only ESO may carry the dedicated signer read policy');
+  const tenantAccounts = objects.filter((o) => o.kind === 'ServiceAccount'
+    && /-(?:control-plane-executor|workflow-worker)$/.test(o.metadata.name)).map((o) => o.metadata.name);
+  assert.equal(tenantAccounts.length, 2, 'both tenant-code identities must be checked');
+  const matches = (pattern, path) => new RegExp('^' + pattern.split('/')
+    .map((segment) => segment === '+' ? '[^/]+' : segment.split('*')
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'))
+    .join('/') + '$').test(path);
+  for (const account of tenantAccounts) {
+    const bound = roles.filter((r) => r.names.some((name) => matches(name, account)));
+    assert.ok(bound.length, `${account} must have its actual OpenBao bindings inspected`);
+    for (const role of bound) for (const policy of role.attached) {
+      assert.ok(policies.has(policy), `inspect policy ${policy} bound to ${account}`);
+      for (const [, path, body] of policies.get(policy).matchAll(/path "([^"]+)"\s*\{([^}]+)\}/g)) {
+        if (!/"(?:read|create|update|delete|sudo)"/.test(body)) continue;
+        for (const protectedPath of [`secret/data/${remoteKey}`, `secret/metadata/${remoteKey}`,
+          'sys/policies/acl/function-invocation', 'auth/kubernetes/role/eso-role']) {
+          assert.ok(!matches(path, protectedPath),
+            `${account} via ${role.name}/${policy} must not access or grant signer authority`);
+        }
+      }
+    }
+  }
+  const reconciler = objects.find((o) => o.kind === 'Job' && o.metadata.name === 'openbao-auth-reconcile');
+  const reconcileScript = reconciler.spec.template.spec.containers
+    .find((c) => c.name === 'auth-metadata-reconciler').args[0];
+  assert.match(reconcileScript, /desired_policies="function-invocation,functions,gateway,iam,platform"/);
+  assert.doesNotMatch(reconcileScript, /bao policy write function-invocation/,
+    'the metadata-only reconciler cannot publish signer policy or read the key');
+}
+
 function verify(objects, { secretName = 'in-falcone-function-invocation',
-  remoteKey = 'platform/functions/invocation', managed = true } = {}) {
+  remoteKey = 'control-plane/function-invocation', managed = true } = {}) {
   const externals = objects.filter((o) => o.kind === 'ExternalSecret'
     && o.metadata.name === 'platform-function-invocation');
   assert.equal(externals.length, 1);
@@ -42,6 +98,10 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   assert.equal(stores[0].spec.provider.vault.path, 'secret');
   assert.equal(stores[0].spec.provider.vault.version, 'v2');
   assert.equal(stores[0].spec.provider.vault.auth.kubernetes.role, 'eso-role');
+  // Upgrade renders omit openbao-init; install profiles prove every SA binding.
+  if (objects.some((o) => o.kind === 'Job' && o.metadata.name === 'openbao-init')) {
+    verifySignerPolicies(objects, remoteKey);
+  }
 
   const signers = [];
   let executorFound = false;
@@ -109,8 +169,8 @@ test('only control-plane mounts refreshable keys; executor receives no signer fi
 test('custom references bind ESO and the signer to the same Secret and OpenBao path', () => {
   verify(render(umbrellaChart, [
     '--set', 'global.functionInvocation.secretName=custom-function-signer',
-    '--set', 'global.functionInvocation.remoteKey=platform/functions/custom',
-  ]).objects, { secretName: 'custom-function-signer', remoteKey: 'platform/functions/custom' });
+    '--set', 'global.functionInvocation.remoteKey=control-plane/function-invocation/custom',
+  ]).objects, { secretName: 'custom-function-signer', remoteKey: 'control-plane/function-invocation/custom' });
 });
 
 test('adopted ESO keeps signer ExternalSecret tracked without hooks', () => {
@@ -166,7 +226,10 @@ test('inline key material and env overrides fail closed, including without schem
     ['controlPlane.config.inline.FN_INVOCATION_JWKS=invalid', /reserved FN_INVOCATION/],
     ['global.transportSecurity.env[0].name=FN_INVOCATION_PRIVATE_KEY', /reserved FN_INVOCATION/],
     ['global.transportSecurity.env[0].name=FN_INVOCATION_SECRET_DIR', /reserved FN_INVOCATION/],
-    ['global.functionInvocation.remoteKey=workspaces/foreign', /platform OpenBao/],
+    ['global.functionInvocation.remoteKey=workspaces/foreign', /isolated control-plane/],
+    ['global.functionInvocation.remoteKey=platform/functions/invocation', /isolated control-plane/],
+    ['global.functionInvocation.remoteKey=control-plane/other-secret', /isolated control-plane/],
+    ['global.functionInvocation.remoteKey=control-plane/function-invocation/../escape', /isolated control-plane/],
   ];
   for (const [setting, error] of cases) {
     const result = run('helm', ['template', 'falcone-bbx', umbrellaChart,

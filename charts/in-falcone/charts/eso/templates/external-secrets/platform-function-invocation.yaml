@@ -28,6 +28,6 @@ spec:
     {{- range $property := list "private-key" "key-id" "jwks" }}
     - secretKey: {{ $property | quote }}
       remoteRef:
-        key: {{ $invocation.remoteKey | default "platform/functions/invocation" | quote }}
+        key: {{ $invocation.remoteKey | default "control-plane/function-invocation" | quote }}
         property: {{ $property | quote }}
     {{- end }}

@@ -55,13 +55,29 @@ network or return 401. Repository render tests do not establish this live eviden
 
 ## Invocation signer delivery
 
-OpenBao bootstrap seeds the KV v2 record `secret/platform/functions/invocation`
+OpenBao bootstrap seeds the KV v2 record `secret/control-plane/function-invocation`
 on fresh installs and upgrades without manual provisioning. Fresh installs use
 `openbao-init`; upgrades (including GitOps upgrade semantics) use
 `openbao-function-invocation-seed` after auth reconciliation and before ESO hooks.
 The upgrade Job authenticates through the existing `openbao-bootstrap` identity
 and `openbao-init-role`, without mounting recovery credentials or expanding the
 metadata-only auth reconciler's permissions.
+
+The signer path is outside `platform/*`, which the executor and workflow worker
+can read through `platform-role`. The dedicated `function-invocation` policy grants
+read access to the exact configured signer path and is attached only to `eso-role`.
+The existing init policy allows the isolated bootstrap identity to provision it.
+Neither tenant-code identity can access the signer path or change its policy or
+ESO role. Chart validation rejects paths outside `control-plane/function-invocation`
+and its descendants, including the previous `platform/functions/invocation` path.
+
+On upgrades, the metadata-only auth reconciler retains exact ESO policy checks,
+adding the signer policy name to the role. The later seed Job publishes that
+policy from embedded package bytes before touching the signer record. A binding
+to a policy that does not yet exist grants no access; publication failure stops
+bootstrap before key delivery. This ordering repairs Kubernetes auth before the
+seed logs in and keeps policy writes out of the routine reconciler. Fresh installs
+publish the policy during init. No old signer is read or copied from `platform/`.
 
 Its properties are `private-key` (Ed25519 PKCS#8 PEM), `key-id` (the active signing
 key's `kid`) and `jwks` (a JSON public-only Ed25519 JWKS containing that `kid`).
@@ -72,7 +88,7 @@ zero prevents replacement, including concurrent bootstraps and transient read
 failures. Existing records, key IDs and overlapping public keys are preserved;
 an incomplete existing record fails closed rather than silently rotating keys.
 Never put these contents in Helm values, Git, logs or function definitions.
-`global.functionInvocation.remoteKey` changes the KV path within `platform/`;
+`global.functionInvocation.remoteKey` changes the KV path within `control-plane/function-invocation`;
 `global.functionInvocation.secretName` changes the target Secret name. Missing
 values use the same defaults during `helm upgrade --reuse-values`.
 
@@ -152,3 +168,27 @@ The live Helm/Argo upgrade matrix needs a disposable Docker/kind cluster and was
 skipped locally. ESO reconciliation, projected signer delivery, cross-tenant
 denial and cold-start activation evidence need a policy-enforcing cluster and
 remain release gates. No cluster operation was performed during this review.
+
+## Signer-policy follow-up (2026-10-07)
+
+The dedicated signer path and policy close the executor/workflow-worker OpenBao
+read path identified by the independent checker. Render tests inspect all seven
+bootstrap roles and every attached policy for both tenant-code identities,
+including policy/role mutation authority. They cover shipped deployment profiles,
+custom signer paths and defaults missing from historical values. Bootstrap tests
+also require denied policy publication to stop before any KV request.
+
+Signer delivery/bootstrap, selector reality, flow-audit, external-ESO adoption,
+offline executor upgrades and the updated auth-metadata render contracts pass.
+The external-ESO and staging shell-syntax checks used a temporary local adapter
+to pass the same script through `sh -n -c` because this sandbox does not close
+the subprocess stdin pipe; the repository tests and CI remain intact.
+
+The required reuse-values test still cannot load the absent locked `yaml` package.
+Full r24 recovery attempts fail at fixture package extraction with
+`REPAIR_PACKAGE_PULL_FAILED`; the same failure reproduces at the supplied
+pre-fix HEAD, and sandbox tar extraction reports `Function not implemented`.
+Rerun these checks, schema validation and live Helm/Argo upgrade checks in PR CI.
+Live ESO delivery, function re-roll, cold-start activations and cross-tenant CNI
+isolation remain release checks. Operations must confirm the DNS-only egress
+default and review the previously reported init-generator stale-marker retry case.

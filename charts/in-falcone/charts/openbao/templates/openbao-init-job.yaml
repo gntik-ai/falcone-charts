@@ -190,7 +190,7 @@ spec:
                 token_reviewer_jwt="" >/dev/null
               bao secrets enable -path=secret kv-v2 >/dev/null 2>&1 || true
               bao audit enable file file_path=/openbao/audit/openbao-audit.log >/dev/null 2>&1 || true
-              for policy in init platform tenant functions gateway iam auth-reconcile; do
+              for policy in init platform tenant functions gateway iam auth-reconcile function-invocation; do
                 bao policy write "$policy" "/config/policies/${policy}.hcl" >/dev/null
               done
 
@@ -229,7 +229,7 @@ spec:
               bao write auth/kubernetes/role/eso-role \
                 bound_service_account_names='{{ .Values.eso.serviceAccountName | default "eso-openbao-auth" }}' \
                 bound_service_account_namespaces='{{ .Values.eso.namespace | default "eso-system" }}' \
-                policies=platform,functions,gateway,iam ttl={{ .Values.eso.tokenTTL | default "24h" }} >/dev/null
+                policies=platform,functions,gateway,iam,function-invocation ttl={{ .Values.eso.tokenTTL | default "24h" }} >/dev/null
 
               kv_merge secret/platform/postgresql \
                 username="$(cred in-falcone-postgresql POSTGRESQL_USERNAME)" \
@@ -341,4 +341,6 @@ spec:
                   name: openbao-policy-iam
               - configMap:
                   name: openbao-policy-auth-reconcile
+              - configMap:
+                  name: openbao-policy-function-invocation
 {{- end }}

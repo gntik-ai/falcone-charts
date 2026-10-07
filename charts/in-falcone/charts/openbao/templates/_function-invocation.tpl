@@ -1,9 +1,25 @@
+{{/* This exact-path read policy is bound only to ESO, never platform-role. */}}
+{{- define "openbao.policy.functionInvocation" -}}
+path "secret/data/{{ (.Values.global.functionInvocation | default dict).remoteKey | default "control-plane/function-invocation" }}" {
+  capabilities = ["read"]
+}
+{{- end -}}
+
 {{/* Shared install/upgrade bootstrap. CAS=0 never replaces a retained signer. */}}
 {{- define "openbao.functionInvocation.seed" -}}
 set +x
 umask 077
-invocation_path={{ printf "secret/%s" ((.Values.global.functionInvocation | default dict).remoteKey | default "platform/functions/invocation") | quote }}
+invocation_path={{ printf "secret/%s" ((.Values.global.functionInvocation | default dict).remoteKey | default "control-plane/function-invocation") | quote }}
 invocation_dir=/function-invocation
+# Bootstrap owns policy writes; the auth reconciler remains metadata-only.
+# Embed package bytes so upgrades cannot consume a stale live ConfigMap.
+cat > "$invocation_dir/policy.hcl" <<'FALCONE_FUNCTION_INVOCATION_POLICY'
+{{ include "openbao.policy.functionInvocation" . }}
+FALCONE_FUNCTION_INVOCATION_POLICY
+bao policy write function-invocation "$invocation_dir/policy.hcl" >/dev/null 2>&1 || {
+  echo "Function invocation signer policy provisioning failed" >&2; exit 1;
+}
+rm -f "$invocation_dir/policy.hcl"
 invocation_complete() {
   for property in private-key key-id jwks; do
     bao kv get -field="$property" "$invocation_path" >/dev/null 2>&1 || return 1
