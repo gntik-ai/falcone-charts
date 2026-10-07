@@ -1,0 +1,15 @@
+# Runtime-created pod contract from falcone apps/control-plane/function-executor.mjs
+# buildFunctionKsvcManifest: spec.template.metadata.labels, verified by
+# tests/unit/function-invocation-auth.test.mjs (manifest and ownership-checked PATCH).
+# The parent-only in-falcone.function label is intentionally insufficient (#972).
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: function-selector-fixture
+  labels:
+    in-falcone.function: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        in-falcone.io/component: function

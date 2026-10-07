@@ -2402,6 +2402,56 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #972: signer references must also survive real pre-contract stored values.
+  assert.equal(historical.global.functionInvocation, undefined);
+  const signerExternal = exactDocuments.find((document) => document.kind === 'ExternalSecret'
+    && document.metadata.name === 'platform-function-invocation');
+  assert.ok(signerExternal, 'historical reuse-values must deliver invocation keys through ESO');
+  assert.equal(signerExternal.spec.target.name, 'in-falcone-function-invocation');
+  assert.equal(signerExternal.spec.target.creationPolicy, 'Orphan',
+    'reuse-values hook replacement must preserve the signer Secret');
+  assert.equal(signerExternal.spec.target.deletionPolicy, 'Retain');
+  const signerSeed = exactDocuments.find((document) => document.kind === 'Job'
+    && document.metadata.name === 'openbao-function-invocation-seed');
+  assert.ok(signerSeed, 'historical reuse-values must provision the missing signer before ESO');
+  assert.equal(signerSeed.spec.template.spec.serviceAccountName, 'openbao-bootstrap');
+  assert.equal(signerSeed.metadata.annotations['helm.sh/hook-weight'], '-2');
+  for (const name of ['control-plane', 'control-plane-executor']) {
+    const signerDeployment = exactDocuments.find((document) => document.kind === 'Deployment'
+      && document.metadata.name === `${releaseName}-${name}`);
+    const pod = signerDeployment?.spec.template.spec;
+    const signerContainer = pod?.containers.find((container) => container.name === name);
+    assert.ok(signerContainer, `historical reuse-values must retain ${name}`);
+    if (name === 'control-plane-executor') {
+      assert.ok(signerContainer.env.every((entry) => !entry.name.startsWith('FN_INVOCATION_')),
+        'executor must not receive signer configuration under reuse-values');
+      assert.ok((signerContainer.volumeMounts ?? []).every((mount) => mount.name !== 'falcone-function-invocation'),
+        'executor must not mount signer files under reuse-values');
+      assert.ok((pod.volumes ?? []).every((volume) => volume.name !== 'falcone-function-invocation'
+        && volume.secret?.secretName !== 'in-falcone-function-invocation'),
+        'executor must not receive the signer Secret under reuse-values');
+      continue;
+    }
+    assert.deepEqual(signerContainer.env.filter((entry) => entry.name.startsWith('FN_INVOCATION_')),
+      [{ name: 'FN_INVOCATION_SECRET_DIR', value: '/var/run/falcone/function-invocation' }]);
+    assert.deepEqual(signerContainer.volumeMounts.filter((mount) => mount.name === 'falcone-function-invocation'),
+      [{ name: 'falcone-function-invocation', mountPath: '/var/run/falcone/function-invocation', readOnly: true }]);
+    assert.deepEqual(pod.volumes.find((volume) => volume.name === 'falcone-function-invocation').secret, {
+      secretName: 'in-falcone-function-invocation', optional: true, defaultMode: 0o440,
+      items: ['private-key', 'key-id', 'jwks'].map((key) => ({ key, path: key })),
+    });
+  }
+  // #972: real stored values predate function isolation; upgrades still render it.
+  assert.equal(historical.functions, undefined);
+  const functionPolicies = exactDocuments.filter((document) => document.kind === 'NetworkPolicy'
+    && document.metadata.name === `${releaseName}-function-internal-only`);
+  assert.equal(functionPolicies.length, 1, 'historical reuse-values must isolate function pods');
+  assert.deepEqual(functionPolicies[0].spec.podSelector.matchLabels,
+    { 'in-falcone.io/component': 'function' });
+  assert.deepEqual(functionPolicies[0].spec.policyTypes, ['Ingress', 'Egress']);
+  assert.equal(functionPolicies[0].spec.egress.length, 1, 'historical defaults permit DNS only');
+  assert.deepEqual(functionPolicies[0].spec.egress[0].ports,
+    [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }]);
   // #16: stored defaults predate Kafka isolation; reuse-values must apply it too.
   assert.equal(historical.kafka.networkPolicy, undefined);
   const kafkaPolicies = exactDocuments.filter((document) => document.kind === 'NetworkPolicy'

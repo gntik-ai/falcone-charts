@@ -46,6 +46,15 @@ case "$*" in
     ;;
   write*"auth/kubernetes/role/eso-role"*)
     printf '%s' written >"$state_dir/role-written"
+    # Persist the actual write so readback and canary checks exercise policy
+    # convergence from a legacy role, rather than a fixed expected response.
+    if [ "$scenario" != "role-policy-remains-static" ]; then
+      for arg in "$@"; do
+        case "$arg" in
+          token_policies=*) printf '%s' "${arg#token_policies=}" >"$state_dir/role-policies" ;;
+        esac
+      done
+    fi
     exit 0
     ;;
   write*"auth/kubernetes/role/openbao-init-role"*|write*"auth/kubernetes/role/openbao-auth-reconcile-role"*)
@@ -73,7 +82,13 @@ if [ -n "$field" ]; then
       ;;
     auth/kubernetes/role/eso-role:bound_service_account_names) printf 'eso-openbao-auth\n' ;;
     auth/kubernetes/role/eso-role:bound_service_account_namespaces) printf 'eso-system\n' ;;
-    auth/kubernetes/role/eso-role:token_policies) printf '[functions, gateway, iam, platform]\n' ;;
+    auth/kubernetes/role/eso-role:token_policies)
+      if [ -f "$state_dir/role-policies" ]; then
+        printf '[%s]\n' "$(cat "$state_dir/role-policies")"
+      else
+        printf '[functions, gateway, iam, platform]\n'
+      fi
+      ;;
     auth/kubernetes/role/eso-role:token_ttl) printf '86400\n' ;;
     auth/kubernetes/role/eso-role:token_max_ttl)
       if [ "$scenario" = "role-token-field-drift" ] && [ ! -f "$state_dir/role-written" ]; then printf '172800\n'; else printf '86400\n'; fi
@@ -94,6 +109,9 @@ case "$*" in
   read*"auth/token/lookup-self"*)
     if [ "$scenario" = "lookup-invalid" ]; then
       printf '{"data":{"policies":["default"],"ttl":30}}\n'
+    elif [ -f "$state_dir/role-policies" ]; then
+      policies="$(sed 's/,/","/g' "$state_dir/role-policies")"
+      printf '{"data":{"policies":["%s"],"ttl":3600}}\n' "$policies"
     else
       printf '{"data":{"policies":["functions","gateway","iam","platform"],"ttl":3600}}\n'
     fi

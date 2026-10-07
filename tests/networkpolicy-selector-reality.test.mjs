@@ -19,13 +19,16 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { yamlDocuments } from './blackbox/fixtures/blackbox.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const chart = resolve(root, 'charts/in-falcone');
+const functionFixture = yamlDocuments(readFileSync(
+  resolve(root, 'tests/blackbox/fixtures/function-ksvc.yaml'), 'utf8',
+));
 let passed = 0;
 
 function check(name, fn) {
@@ -145,10 +148,26 @@ function selectorSites(objects) {
 const renders = PROFILES.map((profile) => {
   const text = run('helm', ['template', 'falcone', chart, '--namespace', 'falcone-test', ...profile.args]);
   const objects = yamlDocuments(text);
-  return { ...profile, text, objects, templates: podTemplateLabels(objects), sites: selectorSites(objects) };
+  return {
+    ...profile, text, objects,
+    templates: podTemplateLabels([...objects, ...functionFixture]), sites: selectorSites(objects),
+  };
 });
 
 const used = new Set();
+
+check('function policy selects the runtime pod fixture in every profile, never just ksvc metadata', () => {
+  for (const { label, objects } of renders) {
+    const policies = functionPolicies(objects);
+    assert.equal(policies.length, 1, label);
+    const selector = policies[0].spec.podSelector.matchLabels;
+    assert.deepEqual(selector, { 'in-falcone.io/component': 'function' });
+    assert.equal(matching(podTemplateLabels(functionFixture), selector).length, 1, label);
+    const parentOnly = structuredClone(functionFixture);
+    delete parentOnly[0].spec.template.metadata.labels;
+    assert.equal(matching(podTemplateLabels(parentOnly), selector).length, 0, label);
+  }
+});
 
 check('every values profile renders NetworkPolicies and pods to check', () => {
   for (const { label, sites, templates } of renders) {
@@ -208,6 +227,234 @@ function kafkaPolicies(objects) {
   return objects.filter((object) => object?.kind === 'NetworkPolicy'
     && object.spec?.podSelector?.matchLabels?.['app.kubernetes.io/name'] === 'kafka');
 }
+
+function functionPolicies(objects) {
+  return objects.filter((object) => object?.kind === 'NetworkPolicy'
+    && object.spec?.podSelector?.matchLabels?.['in-falcone.io/component'] === 'function');
+}
+
+// Evaluate Kubernetes selector semantics so isolation checks cover destinations,
+// including absent selectors and OR peers, rather than only manifest shape.
+function selectorMatches(selector, labels) {
+  return Object.entries(selector.matchLabels ?? {}).every(([key, value]) => labels[key] === value)
+    && (selector.matchExpressions ?? []).every(({ key, operator, values = [] }) => {
+      switch (operator) {
+        case 'In': return Object.hasOwn(labels, key) && values.includes(labels[key]);
+        case 'NotIn': return !Object.hasOwn(labels, key) || !values.includes(labels[key]);
+        case 'Exists': return Object.hasOwn(labels, key);
+        case 'DoesNotExist': return !Object.hasOwn(labels, key);
+        default: assert.fail(`unknown selector operator: ${operator}`);
+      }
+    });
+}
+
+function functionEgressAdmits(policy, namespace, labels) {
+  return (policy.spec.egress ?? []).some((rule) => !rule.to || rule.to.some((peer) => {
+    assert.equal(peer.ipBlock, undefined, 'function egress must use explicit pod destinations');
+    const namespaceMatches = peer.namespaceSelector
+      ? selectorMatches(peer.namespaceSelector, { 'kubernetes.io/metadata.name': namespace })
+      : namespace === policy.metadata.namespace;
+    return namespaceMatches && (!peer.podSelector || selectorMatches(peer.podSelector, labels));
+  }));
+}
+
+const defaultFunctionGateways = ['knative-serving', 'kourier-system'];
+
+function expectedFunctionSpec(gateways = defaultFunctionGateways, allowedEgress = []) {
+  const namespaces = [...new Set([...defaultFunctionGateways, ...gateways])];
+  const peer = (namespace, labels) => ({
+    namespaceSelector: {
+      matchLabels: { 'kubernetes.io/metadata.name': namespace },
+      matchExpressions: [{ key: 'kubernetes.io/metadata.name', operator: 'NotIn', values: namespaces }],
+    },
+    podSelector: {
+      matchLabels: labels,
+      matchExpressions: [{ key: 'in-falcone.io/component', operator: 'NotIn', values: ['function'] }],
+    },
+  });
+  return {
+    podSelector: { matchLabels: { 'in-falcone.io/component': 'function' } },
+    policyTypes: ['Ingress', 'Egress'],
+    ingress: gateways.length ? [{ from: gateways.map((namespace) => ({
+      namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } },
+    })) }] : [],
+    egress: [
+      { to: [peer('kube-system', { 'k8s-app': 'kube-dns' })],
+        ports: [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }] },
+      ...allowedEgress.map((entry) => ({
+        to: [peer(entry.namespace ?? 'falcone-test', entry.podLabels)], ports: entry.ports,
+      })),
+    ],
+  };
+}
+
+check('functions allow only Knative ingress and cluster DNS egress by default in every profile', () => {
+  for (const { label, objects } of renders) {
+    const [policy] = functionPolicies(objects);
+    assert.equal(policy.metadata.name, 'falcone-function-internal-only', label);
+    assert.equal(policy.metadata.namespace, 'falcone-test', label);
+    assert.equal(policy.metadata.labels['app.kubernetes.io/managed-by'], 'Helm', label);
+    assert.deepEqual(policy.spec, expectedFunctionSpec(), label);
+  }
+});
+
+check('function policy selects a fixture pod and preserves isolation in every shipped values overlay', () => {
+  // These are umbrella-chart overlays; deploy/helm contains unrelated service charts.
+  // Discover files so newly shipped profiles cannot silently escape this contract.
+  const overlays = [
+    ...readdirSync(resolve(chart, 'values'), { recursive: true })
+      .filter((file) => file.endsWith('.yaml'))
+      .map((file) => `charts/in-falcone/values/${file}`),
+    ...['deploy/kind', 'deploy/openshift', 'tests/e2e'].flatMap((directory) =>
+      readdirSync(resolve(root, directory))
+        .filter((file) => /^values.*\.yaml$/.test(file))
+        .map((file) => `${directory}/${file}`)),
+  ].sort();
+  const templates = podTemplateLabels(functionFixture);
+  for (const overlay of overlays) {
+    const args = ['-f', overlay];
+    // Match the existing source e2e invocation, whose environment is outside the enum.
+    if (overlay === 'tests/e2e/values-flows-e2e.yaml') args.push('--skip-schema-validation');
+    const policies = functionPolicies(yamlDocuments(run('helm', [
+      'template', 'falcone', chart, '--namespace', 'falcone-test', ...args,
+      '--show-only', 'templates/functions/networkpolicy.yaml',
+    ])));
+    assert.equal(policies.length, 1, overlay);
+    assert.deepEqual(policies[0].spec, expectedFunctionSpec(), overlay);
+    assert.equal(matching(templates, policies[0].spec.podSelector.matchLabels).length, 1,
+      `${overlay}: function policy must select the fixture's pod template`);
+  }
+});
+
+check('disabling function isolation removes only its manifest in every profile', () => {
+  for (const { label, args, text } of renders) {
+    const disabled = run('helm', [
+      'template', 'falcone', chart, '--namespace', 'falcone-test', ...args,
+      '--set', 'functions.networkPolicy.enabled=false',
+    ]);
+    assert.equal(functionPolicies(yamlDocuments(disabled)).length, 0, label);
+    const withoutPolicy = text.split(/(?=^---\n)/m)
+      .filter((document) => !document.includes('# Source: in-falcone/templates/functions/networkpolicy.yaml\n'))
+      .join('');
+    assert.ok(disabled === withoutPolicy, `${label}: disabling function policy changed other rendered bytes`);
+  }
+});
+
+check('explicit function egress excludes functions and all data-plane namespaces even with broad labels', () => {
+  const gateways = ['custom-knative'];
+  const peers = [
+    { podLabels: { 'app.kubernetes.io/name': 'control-plane' }, ports: [{ protocol: 'TCP', port: 8080 }] },
+    { namespace: 'workspace-data', podLabels: { shared: 'true' }, ports: [{ protocol: 'TCP', port: 5432 }] },
+  ];
+  for (const { label, args } of renders) {
+    const objects = yamlDocuments(run('helm', [
+      'template', 'falcone', chart, '--namespace', 'falcone-test', ...args,
+      '--set-json', `functions.networkPolicy.gatewayNamespaces=${JSON.stringify(gateways)}`,
+      '--set-json', `functions.networkPolicy.allowedEgress=${JSON.stringify(peers)}`,
+    ]));
+    const [policy] = functionPolicies(objects);
+    assert.deepEqual(policy.spec, expectedFunctionSpec(gateways, peers), label);
+    const controlPlane = podTemplateLabels(objects).find(({ name }) => name === 'falcone-control-plane');
+    assert.ok(controlPlane, `${label}: intended control-plane destination must render`);
+    assert.equal(functionEgressAdmits(policy, 'falcone-test', controlPlane.labels), true, label);
+    assert.equal(functionEgressAdmits(policy, 'kube-system', { 'k8s-app': 'kube-dns' }), true, label);
+    assert.equal(functionEgressAdmits(policy, 'workspace-data', { shared: 'true' }), true, label);
+    const destinationLabels = [controlPlane.labels, { 'k8s-app': 'kube-dns' }, { shared: 'true' }];
+    for (const namespace of ['falcone-test', 'kube-system', 'workspace-data', ...defaultFunctionGateways, ...gateways]) {
+      for (const labels of destinationLabels) {
+        assert.equal(functionEgressAdmits(policy, namespace, {
+          ...labels, ...functionFixture[0].spec.template.metadata.labels,
+        }), false, `${label}: function pod must be denied in ${namespace}, even with destination labels`);
+        if ([...defaultFunctionGateways, ...gateways].includes(namespace)) {
+          assert.equal(functionEgressAdmits(policy, namespace, labels), false,
+            `${label}: data-plane destination must be denied in ${namespace}`);
+        }
+      }
+    }
+    for (const rule of policy.spec.egress) {
+      for (const peer of rule.to) {
+        // Both selectors belong to the SAME peer (AND), never separate OR peers.
+        assert.ok(peer.namespaceSelector && peer.podSelector, label);
+        const namespaceExclusion = peer.namespaceSelector.matchExpressions[0];
+        assert.equal(namespaceExclusion.operator, 'NotIn');
+        assert.deepEqual(namespaceExclusion.values, [...defaultFunctionGateways, ...gateways]);
+        assert.deepEqual(peer.podSelector.matchExpressions, [
+          { key: 'in-falcone.io/component', operator: 'NotIn', values: ['function'] },
+        ]);
+      }
+    }
+  }
+});
+
+check('empty function ingress namespaces deny all ingress while retaining DNS', () => {
+  const objects = yamlDocuments(run('helm', [
+    'template', 'falcone', chart, '--namespace', 'falcone-test',
+    '--set-json', 'functions.networkPolicy.gatewayNamespaces=[]',
+  ]));
+  assert.deepEqual(functionPolicies(objects)[0].spec, expectedFunctionSpec([]));
+});
+
+check('unsafe function egress and invalid types fail closed with and without schema validation', () => {
+  const cases = [
+    ['functions.networkPolicy.enabled', '"true"'],
+    ['functions.networkPolicy.gatewayNamespaces', '[""]'],
+    ['functions.networkPolicy.allowedEgress', '[{}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{},"ports":[{"port":8080}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":0}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":65536}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":"8080"}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":8080,"endPort":65535}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"app":"data"},"ports":[{"port":80,"protocol":"INVALID"}]}]'],
+    ['functions.networkPolicy.allowedEgress', '[{"podLabels":{"in-falcone.io/component":"function"},"ports":[{"port":8080}]}]'],
+    ...[...defaultFunctionGateways, 'custom-knative'].map((namespace) => [
+      'functions.networkPolicy.allowedEgress',
+      JSON.stringify([{ namespace, podLabels: { app: 'data' }, ports: [{ port: 8080 }] }]),
+    ]),
+  ];
+  for (const schemaArgs of [[], ['--skip-schema-validation']]) {
+    for (const [key, value] of cases) {
+      const result = spawnSync('helm', [
+        'template', 'falcone', chart, '--namespace', 'falcone-test', ...schemaArgs,
+        '--set-json', 'functions.networkPolicy.gatewayNamespaces=["custom-knative"]',
+        '--set-json', `${key}=${value}`,
+      ], { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024 });
+      assert.notEqual(result.status, 0, `${key}=${value} must fail closed`);
+      assert.match(result.stderr, /functions/);
+      assert.equal(result.stdout.trim(), '', 'invalid function policy must emit no manifests');
+    }
+  }
+});
+
+check('historical defaults without function settings retain isolation and explicit overrides', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'falcone-function-historical-'));
+  try {
+    const historicalChart = resolve(directory, 'in-falcone');
+    cpSync(chart, historicalChart, { recursive: true });
+    const valuesPath = resolve(historicalChart, 'values.yaml');
+    const [values] = yamlDocuments(readFileSync(valuesPath, 'utf8'));
+    delete values.functions;
+    writeFileSync(valuesPath, JSON.stringify(values));
+    const peer = { podLabels: { app: 'data' }, ports: [{ port: 8080 }] };
+    const cases = [
+      { args: [], expected: expectedFunctionSpec() },
+      { args: ['--set', 'functions.networkPolicy.enabled=false'], expected: null },
+      { args: ['--set', 'functions.networkPolicy.enabled=true'], expected: expectedFunctionSpec() },
+      { args: ['--set-json', 'functions.networkPolicy.gatewayNamespaces=[]'], expected: expectedFunctionSpec([]) },
+      { args: ['--set-json', `functions.networkPolicy.allowedEgress=${JSON.stringify([peer])}`],
+        expected: expectedFunctionSpec(defaultFunctionGateways, [peer]) },
+    ];
+    for (const { args, expected } of cases) {
+      const policies = functionPolicies(yamlDocuments(run('helm', [
+        'template', 'falcone', historicalChart, '--namespace', 'falcone-test', ...args,
+      ])));
+      assert.equal(policies.length, expected === null ? 0 : 1);
+      if (expected) assert.deepEqual(policies[0].spec, expected);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function appPeer(name) {
   return { podSelector: { matchLabels: { 'app.kubernetes.io/name': name } } };

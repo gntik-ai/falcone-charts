@@ -473,7 +473,31 @@ class Offline(unittest.TestCase):
                                 and item["metadata"]["name"].endswith("-gateway-policy"))]
                 self.assertTrue(gateway(before) == gateway(after), "gateway verifier must remain unchanged")
                 old_control = select(before, "Deployment", RELEASE + "-control-plane")
-                new_control = select(after, "Deployment", RELEASE + "-control-plane")
+                new_control = copy.deepcopy(select(after, "Deployment", RELEASE + "-control-plane"))
+                old_container = next(item for item in old_control["spec"]["template"]["spec"]["containers"]
+                                     if item["name"] == "control-plane")
+                new_container = next(item for item in new_control["spec"]["template"]["spec"]["containers"]
+                                     if item["name"] == "control-plane")
+                # #972 adds a refreshable optional signer directory, without
+                # changing inherited TLS configuration or exposing keys in env.
+                signer_env = [{"name": "FN_INVOCATION_SECRET_DIR",
+                               "value": "/var/run/falcone/function-invocation"}]
+                self.assertTrue(new_container["env"] == signer_env + old_container["env"],
+                                "control-plane env must add only the signer directory")
+                new_container["env"] = new_container["env"][len(signer_env):]
+                mounts = new_container["volumeMounts"]
+                self.assertEqual(mounts.pop(0), {
+                    "name": "falcone-function-invocation",
+                    "mountPath": "/var/run/falcone/function-invocation", "readOnly": True,
+                })
+                volumes = new_control["spec"]["template"]["spec"]["volumes"]
+                self.assertEqual(volumes.pop(0), {
+                    "name": "falcone-function-invocation", "secret": {
+                        "secretName": "in-falcone-function-invocation", "optional": True,
+                        "defaultMode": 0o440,
+                        "items": [{"key": key, "path": key} for key in ("private-key", "key-id", "jwks")],
+                    },
+                })
                 self.assertTrue(old_control == new_control, "control-plane TLS configuration must be preserved")
 
     def test_tls_jwt_source_rejects_ambiguous_entries(self):

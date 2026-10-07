@@ -1,5 +1,112 @@
 {{- define "in-falcone.validate" -}}
+{{- $functions := .Values.functions | default dict -}}
+{{- $functionPolicy := $functions.networkPolicy | default dict -}}
+{{- if not (kindIs "bool" (dig "enabled" true $functionPolicy)) -}}
+  {{- fail "functions.networkPolicy.enabled must be a boolean" -}}
+{{- end -}}
+{{- $functionGateways := dig "gatewayNamespaces" (list "knative-serving" "kourier-system") $functionPolicy -}}
+{{- if not (kindIs "slice" $functionGateways) -}}
+  {{- fail "functions.networkPolicy.gatewayNamespaces must be a list" -}}
+{{- end -}}
+{{- range $namespace := $functionGateways -}}
+  {{- if not (kindIs "string" $namespace) -}}
+    {{- fail "functions.networkPolicy.gatewayNamespaces entries must be namespace names" -}}
+  {{- end -}}
+  {{- if or (gt (len $namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $namespace)) -}}
+    {{- fail "functions.networkPolicy.gatewayNamespaces entries must be namespace names" -}}
+  {{- end -}}
+{{- end -}}
+{{- $functionEgress := dig "allowedEgress" (list) $functionPolicy -}}
+{{- if not (kindIs "slice" $functionEgress) -}}
+  {{- fail "functions.networkPolicy.allowedEgress must be a list" -}}
+{{- end -}}
+{{- range $peer := $functionEgress -}}
+  {{- if not (kindIs "map" $peer) -}}
+    {{- fail "functions.networkPolicy.allowedEgress entries must be pod destinations" -}}
+  {{- end -}}
+  {{- $namespace := $peer.namespace | default $.Release.Namespace -}}
+  {{- if not (kindIs "string" $namespace) -}}
+    {{- fail "functions.networkPolicy.allowedEgress namespace must be a namespace name" -}}
+  {{- end -}}
+  {{- if or (gt (len $namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $namespace)) -}}
+    {{- fail "functions.networkPolicy.allowedEgress namespace must be a namespace name" -}}
+  {{- end -}}
+  {{- if has $namespace (concat (list "knative-serving" "kourier-system") $functionGateways) -}}
+    {{- fail "functions.networkPolicy.allowedEgress cannot target a Knative data-plane namespace" -}}
+  {{- end -}}
+  {{- $labels := $peer.podLabels | default dict -}}
+  {{- if or (not (kindIs "map" $labels)) (eq (len $labels) 0) -}}
+    {{- fail "functions.networkPolicy.allowedEgress requires nonempty podLabels" -}}
+  {{- end -}}
+  {{- range $key, $value := $labels -}}
+    {{- if not (kindIs "string" $value) -}}
+      {{- fail "functions.networkPolicy.allowedEgress podLabels values must be strings" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if eq (dig "in-falcone.io/component" "" $labels) "function" -}}
+    {{- fail "functions.networkPolicy.allowedEgress cannot target function pods" -}}
+  {{- end -}}
+  {{- $ports := $peer.ports | default list -}}
+  {{- if or (not (kindIs "slice" $ports)) (eq (len $ports) 0) -}}
+    {{- fail "functions.networkPolicy.allowedEgress requires nonempty ports" -}}
+  {{- end -}}
+  {{- range $port := $ports -}}
+    {{- if not (kindIs "map" $port) -}}
+      {{- fail "functions.networkPolicy.allowedEgress ports must be port objects" -}}
+    {{- end -}}
+    {{- /* Keep explicit port grants bounded even when schema validation is skipped. */ -}}
+    {{- range $key, $_ := $port -}}
+      {{- if not (has $key (list "port" "protocol")) -}}
+        {{- fail "functions.networkPolicy.allowedEgress ports accept only port and protocol" -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $number := $port.port | default 0 -}}
+    {{- if or (kindIs "string" $number) (not (regexMatch "^[0-9]+$" (toString $number))) -}}
+      {{- fail "functions.networkPolicy.allowedEgress port must be an integer from 1 to 65535" -}}
+    {{- end -}}
+    {{- if or (lt (int $number) 1) (gt (int $number) 65535) -}}
+      {{- fail "functions.networkPolicy.allowedEgress port must be an integer from 1 to 65535" -}}
+    {{- end -}}
+    {{- if not (has ($port.protocol | default "TCP") (list "TCP" "UDP" "SCTP")) -}}
+      {{- fail "functions.networkPolicy.allowedEgress protocol must be TCP, UDP or SCTP" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- $components := list "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" -}}
+{{- $functionInvocation := .Values.global.functionInvocation | default dict -}}
+{{- range $key, $_ := $functionInvocation -}}
+  {{- if not (has $key (list "secretName" "remoteKey")) -}}
+    {{- fail "global.functionInvocation accepts Secret/OpenBao references only, never key material" -}}
+  {{- end -}}
+{{- end -}}
+{{- $functionSecretName := $functionInvocation.secretName | default "in-falcone-function-invocation" -}}
+{{- if or (gt (len $functionSecretName) 253) (not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $functionSecretName)) -}}
+  {{- fail "global.functionInvocation.secretName must be a DNS subdomain name" -}}
+{{- end -}}
+{{- $functionRemoteKey := $functionInvocation.remoteKey | default "control-plane/function-invocation" -}}
+{{- if not (regexMatch "^control-plane/function-invocation(/[a-zA-Z0-9_-]+)*$" $functionRemoteKey) -}}
+  {{- fail "global.functionInvocation.remoteKey must be an isolated control-plane/function-invocation OpenBao KV path" -}}
+{{- end -}}
+{{- $functionEnvNames := list "FN_INVOCATION_PRIVATE_KEY" "FN_INVOCATION_KEY_ID" "FN_INVOCATION_JWKS" "FN_INVOCATION_SECRET_DIR" -}}
+{{- range $componentName := $components -}}
+  {{- $component := index $.Values $componentName | default dict -}}
+  {{- range $entry := ($component.env | default list) -}}
+    {{- if has ($entry.name | default "") $functionEnvNames -}}
+      {{- fail "component env must not override reserved FN_INVOCATION entries; configure global.functionInvocation references only" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $inline := dig "config" "inline" dict $component -}}
+  {{- range $name := $functionEnvNames -}}
+    {{- if hasKey $inline $name -}}
+      {{- fail "component config.inline must not define reserved FN_INVOCATION entries; configure global.functionInvocation references only" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- range $entry := (dig "transportSecurity" "env" list .Values.global) -}}
+  {{- if has ($entry.name | default "") $functionEnvNames -}}
+    {{- fail "global.transportSecurity.env must not define reserved FN_INVOCATION entries; configure global.functionInvocation references only" -}}
+  {{- end -}}
+{{- end -}}
 {{- $coreServiceAliases := list "bootstrap" "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "seaweedfs" "grafana" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" "eso" "openbao" "temporal" "mcp" -}}
 {{- $supportedExposureKinds := list "Ingress" "LoadBalancer" "Route" -}}
 {{- $webhookKey := .Values.global.webhookSigningKey -}}

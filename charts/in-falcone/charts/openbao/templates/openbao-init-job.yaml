@@ -11,6 +11,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
 spec:
   backoffLimit: 6
+  activeDeadlineSeconds: 1800
   ttlSecondsAfterFinished: 300
   template:
     metadata:
@@ -20,8 +21,9 @@ spec:
       serviceAccountName: openbao-bootstrap
       restartPolicy: OnFailure
       {{- include "openbao.imagePullSecrets" . | nindent 6 }}
-      securityContext: {{- toYaml .Values.openbao.jobPodSecurityContext | nindent 8 }}
+      securityContext: {{- toYaml (merge (deepCopy .Values.openbao.jobPodSecurityContext) (dict "fsGroup" (.Values.openbao.jobPodSecurityContext.runAsUser | default 1000))) | nindent 8 }}
       containers:
+        {{- include "openbao.functionInvocation.generator" . | nindent 8 }}
         - name: platform-credential-loader
           image: {{ include "openbao.image" (dict "root" . "image" .Values.openbao.credentialSync.image) | quote }}
           imagePullPolicy: {{ .Values.openbao.credentialSync.image.pullPolicy }}
@@ -188,7 +190,7 @@ spec:
                 token_reviewer_jwt="" >/dev/null
               bao secrets enable -path=secret kv-v2 >/dev/null 2>&1 || true
               bao audit enable file file_path=/openbao/audit/openbao-audit.log >/dev/null 2>&1 || true
-              for policy in init platform tenant functions gateway iam auth-reconcile; do
+              for policy in init platform tenant functions gateway iam auth-reconcile function-invocation; do
                 bao policy write "$policy" "/config/policies/${policy}.hcl" >/dev/null
               done
 
@@ -227,7 +229,7 @@ spec:
               bao write auth/kubernetes/role/eso-role \
                 bound_service_account_names='{{ .Values.eso.serviceAccountName | default "eso-openbao-auth" }}' \
                 bound_service_account_namespaces='{{ .Values.eso.namespace | default "eso-system" }}' \
-                policies=platform,functions,gateway,iam ttl={{ .Values.eso.tokenTTL | default "24h" }} >/dev/null
+                policies=platform,functions,gateway,iam,function-invocation ttl={{ .Values.eso.tokenTTL | default "24h" }} >/dev/null
 
               kv_merge secret/platform/postgresql \
                 username="$(cred in-falcone-postgresql POSTGRESQL_USERNAME)" \
@@ -265,6 +267,7 @@ spec:
                 password="$(cred in-falcone-temporal password)" \
                 database="$(cred in-falcone-temporal database)" \
                 visibility-database="$(cred in-falcone-temporal visibility-database)"
+              {{- include "openbao.functionInvocation.seed" . | nindent 14 }}
               kv_merge secret/gateway/apisix \
                 admin-key="$(cred in-falcone-apisix-admin admin-key)"
               kv_merge secret/gateway/shared \
@@ -299,7 +302,12 @@ spec:
             - name: auth-identities
               mountPath: /openbao-auth-identities
               readOnly: true
+            - name: function-invocation
+              mountPath: /function-invocation
       volumes:
+        - name: function-invocation
+          emptyDir:
+            medium: Memory
         - name: tls
           secret:
             secretName: {{ .Values.openbao.tls.secretName }}
@@ -333,4 +341,6 @@ spec:
                   name: openbao-policy-iam
               - configMap:
                   name: openbao-policy-auth-reconcile
+              - configMap:
+                  name: openbao-policy-function-invocation
 {{- end }}

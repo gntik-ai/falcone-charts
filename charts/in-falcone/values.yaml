@@ -32,6 +32,13 @@ global:
     # Exact controller ServiceAccount used only for TokenRequest in externally
     # managed mode. Falcone never creates or mutates this identity.
     operatorServiceAccount: ""
+  # References only: OpenBao bootstrap idempotently seeds an Ed25519 private-key
+  # (PKCS#8 PEM), key-id and public-only jwks on installs and upgrades.
+  # ESO delivers all three atomically to a refreshable directory in control-plane
+  # only. The executor gets no signer Secret; function revisions get public JWKS.
+  functionInvocation:
+    secretName: in-falcone-function-invocation
+    remoteKey: control-plane/function-invocation
   # One immutable SeaweedFS image contract is inherited by the vendored
   # data-plane workloads and by control-plane-created IAM Jobs.
   seaweedfs:
@@ -5286,6 +5293,25 @@ temporal:
       limits:
         cpu: 500m
         memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Function sandbox isolation (#972). Runtime-created ksvc pod templates carry
+# in-falcone.io/component: function; this chart installs the targeted policy.
+# ---------------------------------------------------------------------------
+functions:
+  networkPolicy:
+    enabled: true
+    # Knative ingress/activator namespaces, never admitted as egress destinations.
+    gatewayNamespaces:
+      - knative-serving
+      - kourier-system
+    # Default: DNS only (kube-system pods labelled k8s-app: kube-dns, TCP/UDP 53).
+    # Explicit pod destinations require podLabels and ports; namespace defaults
+    # to the release namespace. Functions and data-plane namespaces are excluded.
+    # Example: [{podLabels: {app.kubernetes.io/name: control-plane},
+    #            ports: [{protocol: TCP, port: 8080}]}]
+    # See docs/function-network-isolation.md before enabling service access.
+    allowedEgress: []
 
 # ---------------------------------------------------------------------------
 # MCP server hosting (ADR-12). Reuses Knative (each MCP server = a ksvc), so this

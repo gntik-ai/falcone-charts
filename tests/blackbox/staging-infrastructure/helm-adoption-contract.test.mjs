@@ -87,8 +87,20 @@ function renderedExternalSecrets() {
     .filter((object) => object.kind === 'ExternalSecret'
       && object.metadata?.namespace === 'in-falcone-staging')
     .sort((left, right) => left.metadata.name.localeCompare(right.metadata.name))
-  assert.deepEqual(items.map((item) => item.metadata.name), exactNames)
-  return items
+  // #972 adds a signer integration to the upgrade, not to the revision-20 live
+  // inventory. Assert the complete new render before reconstructing that exact
+  // historical inventory; adoption must still reject any extra live identity.
+  assert.deepEqual(items.map((item) => item.metadata.name),
+    [...exactNames, 'platform-function-invocation'].sort())
+  const signer = items.find((item) => item.metadata.name === 'platform-function-invocation')
+  assert.equal(signer.metadata.annotations?.['helm.sh/hook'], undefined,
+    'the new signer integration must be Helm-tracked when ESO is externally managed')
+  assert.deepEqual(signer.spec.secretStoreRef,
+    { name: 'openbao-backend', kind: 'ClusterSecretStore' })
+  assert.equal(signer.spec.target.name, 'in-falcone-function-invocation')
+  assert.equal(signer.spec.target.creationPolicy, 'Orphan')
+  assert.equal(signer.spec.target.deletionPolicy, 'Retain')
+  return exactNames.map((name) => items.find((item) => item.metadata.name === name))
 }
 
 function liveDefaultedItem(rendered, index) {
