@@ -73,7 +73,7 @@ function verifySignerPolicies(objects, remoteKey) {
 }
 
 function verify(objects, { secretName = 'in-falcone-function-invocation',
-  remoteKey = 'control-plane/function-invocation', managed = true } = {}) {
+  remoteKey = 'control-plane/function-invocation' } = {}) {
   const externals = objects.filter((o) => o.kind === 'ExternalSecret'
     && o.metadata.name === 'platform-function-invocation');
   assert.equal(externals.length, 1);
@@ -88,9 +88,9 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
   assert.deepEqual(external.spec.data, Object.values(bindings).map((key) => ({
     secretKey: key, remoteRef: { key: remoteKey, property: key },
   })));
-  assert.equal(external.metadata.annotations?.['helm.sh/hook'],
-    managed ? 'post-install,post-upgrade' : undefined);
-  if (managed) assert.equal(external.metadata.annotations['helm.sh/hook-weight'], '5');
+  // #62: a post hook after the seed Job with both managed and adopted ESO.
+  assert.equal(external.metadata.annotations?.['helm.sh/hook'], 'post-install,post-upgrade');
+  assert.equal(external.metadata.annotations['helm.sh/hook-weight'], '5');
 
   const stores = objects.filter((o) => o.kind === 'ClusterSecretStore'
     && o.metadata.name === 'openbao-backend');
@@ -157,13 +157,13 @@ function verify(objects, { secretName = 'in-falcone-function-invocation',
 test('only control-plane mounts refreshable keys; executor receives no signer files in shipped profiles', () => {
   const profiles = [
     { args: [] }, { args: ['--set', 'temporal.ui.enabled=false'] },
-    { args: ['-f', 'charts/in-falcone/values/staging.yaml'], managed: false },
+    { args: ['-f', 'charts/in-falcone/values/staging.yaml'] },
     { args: ['-f', 'charts/in-falcone/values/prod.yaml'] },
     { args: ['-f', 'deploy/kind/values-kind.yaml'] },
     { args: ['-f', 'tests/e2e/values-flows-e2e.yaml', '--skip-schema-validation'] },
     { args: ['--set', 'global.podSecurity.openshiftRestricted=true'] },
   ];
-  for (const { args, managed = true } of profiles) verify(render(umbrellaChart, args).objects, { managed });
+  for (const { args } of profiles) verify(render(umbrellaChart, args).objects);
 });
 
 test('custom references bind ESO and the signer to the same Secret and OpenBao path', () => {
@@ -173,12 +173,12 @@ test('custom references bind ESO and the signer to the same Secret and OpenBao p
   ]).objects, { secretName: 'custom-function-signer', remoteKey: 'control-plane/function-invocation/custom' });
 });
 
-test('adopted ESO keeps signer ExternalSecret tracked without hooks', () => {
+test('adopted ESO renders the signer ExternalSecret as the same post hook', () => {
   verify(render(umbrellaChart, [
     '--set', 'eso.external-secrets.enabled=false',
     '--set', 'global.externalSecrets.operatorNamespace=external-eso',
     '--set', 'global.externalSecrets.operatorServiceAccount=external-secrets',
-  ]).objects, { managed: false });
+  ]).objects);
 });
 
 test('managed ESO upgrade hooks retain the signer Secret without an ownerReference', () => {
