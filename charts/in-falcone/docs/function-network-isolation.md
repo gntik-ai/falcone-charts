@@ -98,8 +98,11 @@ refreshes the target Secret with `creationPolicy: Orphan` and
 `deletionPolicy: Retain`; no pre-created Secret or inline-key fallback is needed.
 The target has no ExternalSecret owner reference, so replacing the managed hook
 on upgrades cannot garbage-collect signing keys during a control-plane rollout.
-It follows existing post-install/post-upgrade hook ordering with bundled ESO,
-and is an ordinary tracked resource with an administrator-owned ESO controller.
+It is a post-install/post-upgrade hook (weight 5) with both bundled and
+administrator-owned ESO, so it is reconciled only after the seed Job (weight -2)
+has written the record and policy. As an ordinary resource under Argo CD it would
+stay Degraded and block the PostSync seed (#62). Unlike the other ExternalSecrets
+(#908), `helm uninstall` therefore leaves it behind; its target is retained anyway.
 Confirm reconciliation using status only, without retrieving Secret contents.
 Only `control-plane` mounts the Secret at `/var/run/falcone/function-invocation`
 and receives only the directory path in `FN_INVOCATION_SECRET_DIR`.

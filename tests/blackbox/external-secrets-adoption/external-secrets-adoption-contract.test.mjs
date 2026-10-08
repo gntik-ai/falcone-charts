@@ -118,8 +118,10 @@ test('externally managed ESO renders only Falcone-owned integration resources an
   assert.equal(invocationSecrets.length, 1, 'externally managed ESO must retain the function invocation signer integration')
   const invocationSecret = invocationSecrets[0]
   assert.equal(invocationSecret.metadata.namespace, 'falcone-bbx')
-  assert.equal(invocationSecret.metadata.annotations?.['helm.sh/hook'], undefined,
-    'the signer integration must remain a tracked resource with externally managed ESO')
+  // #62: a hook in both modes, unlike the other ExternalSecrets (#908); see bbx-external-eso-005.
+  assert.equal(invocationSecret.metadata.annotations?.['helm.sh/hook'], 'post-install,post-upgrade',
+    'the signer integration must be a post hook with externally managed ESO')
+  assert.equal(invocationSecret.metadata.annotations?.['helm.sh/hook-weight'], '5')
   assert.deepEqual(invocationSecret.spec.secretStoreRef,
     { name: 'openbao-backend', kind: 'ClusterSecretStore' })
   assert.equal(invocationSecret.spec.target.name, 'in-falcone-function-invocation')
@@ -144,4 +146,43 @@ test('externally managed ESO renders only Falcone-owned integration resources an
   assert.match(script, /external_eso_service_account="external-secrets"/)
   assert.match(script, /availableReplicas/)
   assert.match(script, /api-resources --api-group=external-secrets\.io/)
+})
+
+const upgradeArgs = [
+  '--is-upgrade', '--set', 'deployment.upgrade.currentVersion=0.3.1',
+  '--set', 'global.webhookDatabase.migration.backupVerified=true',
+  '--set', 'global.webhookDatabase.migration.parityVerified=true',
+  '--set-string', 'global.webhookDatabase.migration.backupReference=bbx-external-eso-005',
+]
+
+function hookOrder(objects) {
+  const find = (kind, name) => objects.find((object) => object.kind === kind && object.metadata?.name === name)
+  const resources = {
+    auth: find('Job', 'openbao-auth-reconcile'),
+    seed: find('Job', 'openbao-function-invocation-seed'),
+    secret: find('ExternalSecret', 'platform-function-invocation'),
+  }
+  for (const [role, object] of Object.entries(resources)) {
+    assert.ok(object, `${role} resource is missing`)
+    assert.equal(object.metadata.annotations?.['helm.sh/hook'], 'post-install,post-upgrade',
+      `${role} must run in the post-install/post-upgrade (Argo CD PostSync) phase`)
+  }
+  return Object.fromEntries(Object.entries(resources)
+    .map(([role, object]) => [role, Number(object.metadata.annotations['helm.sh/hook-weight'])]))
+}
+
+// bbx-external-eso-005 | fn-external-eso-owner-boundary | issue #62
+test('externally managed ESO upgrades seed the signer before its ExternalSecret reconciles', () => {
+  // As an ordinary resource the ExternalSecret stayed Degraded (403, nothing seeded) and
+  // Argo CD never started the PostSync seed; it must be a later hook than the seed.
+  for (const args of [[...externalEsoArgs, ...upgradeArgs],
+    [...externalEsoArgs, '--set', 'global.gitops.upgradeSemantics=true', ...upgradeArgs.slice(1)]]) {
+    const weights = hookOrder(renderWithCrds(args).objects)
+    assert.equal(weights.auth, -3)
+    assert.equal(weights.seed, -2)
+    assert.equal(weights.secret, 5)
+    assert.ok(weights.auth < weights.seed && weights.seed < weights.secret)
+  }
+  const managed = hookOrder(renderWithCrds(upgradeArgs).objects)
+  assert.ok(managed.seed < managed.secret, 'managed ESO keeps the same ordering')
 })

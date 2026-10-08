@@ -93,8 +93,10 @@ function renderedExternalSecrets() {
   assert.deepEqual(items.map((item) => item.metadata.name),
     [...exactNames, 'platform-function-invocation'].sort())
   const signer = items.find((item) => item.metadata.name === 'platform-function-invocation')
-  assert.equal(signer.metadata.annotations?.['helm.sh/hook'], undefined,
-    'the new signer integration must be Helm-tracked when ESO is externally managed')
+  // #62: the signer integration is a post hook after its seed Job, even with external ESO.
+  assert.equal(signer.metadata.annotations?.['helm.sh/hook'], 'post-install,post-upgrade',
+    'the new signer integration must be a post hook when ESO is externally managed')
+  assert.equal(signer.metadata.annotations?.['helm.sh/hook-weight'], '5')
   assert.deepEqual(signer.spec.secretStoreRef,
     { name: 'openbao-backend', kind: 'ClusterSecretStore' })
   assert.equal(signer.spec.target.name, 'in-falcone-function-invocation')
