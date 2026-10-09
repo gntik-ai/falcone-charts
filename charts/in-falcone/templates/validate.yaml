@@ -73,6 +73,52 @@
   {{- end -}}
 {{- end -}}
 {{- $components := list "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" -}}
+{{- $invitation := dict -}}
+{{- if hasKey .Values.global "invitationEmailHmac" -}}
+  {{- $invitation = .Values.global.invitationEmailHmac -}}
+{{- end -}}
+{{- if not (kindIs "map" $invitation) -}}
+  {{- fail "global.invitationEmailHmac accepts OpenBao/ESO references only" -}}
+{{- end -}}
+{{- range $key, $_ := $invitation -}}
+  {{- if not (has $key (list "secretName" "remoteKey")) -}}
+    {{- fail "global.invitationEmailHmac accepts OpenBao/ESO references only, never key material" -}}
+  {{- end -}}
+{{- end -}}
+{{- $invitationSecretName := dig "secretName" "in-falcone-invitation-email-hmac" $invitation -}}
+{{- if not (kindIs "string" $invitationSecretName) -}}
+  {{- fail "global.invitationEmailHmac.secretName must be a nonempty DNS subdomain name" -}}
+{{- end -}}
+{{- if or (gt (len $invitationSecretName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $invitationSecretName)) -}}
+  {{- fail "global.invitationEmailHmac.secretName must be a nonempty DNS subdomain name" -}}
+{{- end -}}
+{{- $invitationRemoteKey := dig "remoteKey" "iam/invitation-email-hmac" $invitation -}}
+{{- if not (kindIs "string" $invitationRemoteKey) -}}
+  {{- fail "global.invitationEmailHmac.remoteKey must reference the invitation HMAC OpenBao record" -}}
+{{- end -}}
+{{- if not (regexMatch "^iam/invitation-email-hmac(/[a-zA-Z0-9_-]+)*$" $invitationRemoteKey) -}}
+  {{- fail "global.invitationEmailHmac.remoteKey must reference the invitation HMAC OpenBao record" -}}
+{{- end -}}
+{{- $invitationEnvNames := list "INVITATION_EMAIL_HMAC_KEY" "INVITATION_EMAIL_HMAC_KEY_ID" -}}
+{{- range $componentName := $components -}}
+  {{- $component := index $.Values $componentName | default dict -}}
+  {{- range $entry := ($component.env | default list) -}}
+    {{- if has ($entry.name | default "") $invitationEnvNames -}}
+      {{- fail "component env must not override reserved INVITATION_EMAIL_HMAC entries; configure global.invitationEmailHmac references only" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $inline := dig "config" "inline" dict $component -}}
+  {{- range $name := $invitationEnvNames -}}
+    {{- if hasKey $inline $name -}}
+      {{- fail "component config.inline must not define reserved INVITATION_EMAIL_HMAC entries; configure global.invitationEmailHmac references only" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- range $entry := (dig "transportSecurity" "env" list .Values.global) -}}
+  {{- if has ($entry.name | default "") $invitationEnvNames -}}
+    {{- fail "global.transportSecurity.env must not define reserved INVITATION_EMAIL_HMAC entries; configure global.invitationEmailHmac references only" -}}
+  {{- end -}}
+{{- end -}}
 {{- $functionInvocation := .Values.global.functionInvocation | default dict -}}
 {{- range $key, $_ := $functionInvocation -}}
   {{- if not (has $key (list "secretName" "remoteKey")) -}}

@@ -229,6 +229,24 @@
             }
           }
         },
+        "invitationEmailHmac": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretName", "remoteKey"],
+          "description": "OpenBao/ESO references only; no invitation HMAC key material is accepted in values.",
+          "properties": {
+            "secretName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+            },
+            "remoteKey": {
+              "type": "string",
+              "pattern": "^iam/invitation-email-hmac(/[a-zA-Z0-9_-]+)*$"
+            }
+          }
+        },
         "webhookSigningKey": {
           "type": "object",
           "additionalProperties": false,

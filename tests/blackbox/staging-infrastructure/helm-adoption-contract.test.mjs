@@ -15,6 +15,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { assertInvitationHmacExternalSecret } from '../fixtures/invitation-hmac-snapshot.mjs'
 
 import {
   assertSuccess,
@@ -87,11 +88,12 @@ function renderedExternalSecrets() {
     .filter((object) => object.kind === 'ExternalSecret'
       && object.metadata?.namespace === 'in-falcone-staging')
     .sort((left, right) => left.metadata.name.localeCompare(right.metadata.name))
-  // #972 adds a signer integration to the upgrade, not to the revision-20 live
+  // #972 and #975 add integrations to the upgrade, not to the revision-20 live
   // inventory. Assert the complete new render before reconstructing that exact
   // historical inventory; adoption must still reject any extra live identity.
   assert.deepEqual(items.map((item) => item.metadata.name),
-    [...exactNames, 'platform-function-invocation'].sort())
+    [...exactNames, 'platform-function-invocation', 'iam-invitation-email-hmac'].sort())
+  assertInvitationHmacExternalSecret(items, 'in-falcone-staging', false)
   const signer = items.find((item) => item.metadata.name === 'platform-function-invocation')
   // #62: the signer integration is a post hook after its seed Job, even with external ESO.
   assert.equal(signer.metadata.annotations?.['helm.sh/hook'], 'post-install,post-upgrade',

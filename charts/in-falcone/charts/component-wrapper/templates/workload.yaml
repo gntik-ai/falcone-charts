@@ -95,6 +95,8 @@
        shared through envFrom or runtime ConfigMaps. Defaults also cover Helm
        releases predating this contract. */ -}}
 {{- $isFunctionSigner := eq (.Values.wrapper.componentId | default "") "control-plane" -}}
+{{- $invitationEmailHmac := .Values.global.invitationEmailHmac | default dict -}}
+{{- $invitationEmailHmacSecret := dig "secretName" "in-falcone-invitation-email-hmac" $invitationEmailHmac -}}
 {{- $functionInvocation := default (dict) .Values.global.functionInvocation -}}
 {{- $functionInvocationSecret := $functionInvocation.secretName | default "in-falcone-function-invocation" -}}
 {{- $functionInvocationVolume := "falcone-function-invocation" -}}
@@ -347,6 +349,21 @@ spec:
           {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer }}
           env:
             {{- if $isFunctionSigner }}
+            {{- /* Managed ESO creates this Secret in post hooks, after Helm
+                   --wait. Let the container start without it; invitation routes
+                   fail closed until ESO syncs and a rollout reloads the env. */}}
+            - name: INVITATION_EMAIL_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $invitationEmailHmacSecret | quote }}
+                  key: key
+                  optional: true
+            - name: INVITATION_EMAIL_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $invitationEmailHmacSecret | quote }}
+                  key: key-id
+                  optional: true
             {{- /* Managed ESO reconciles after Helm --wait. The optional whole
                    directory is refreshed by kubelet after delivery/rotation;
                    the signer reads it lazily, without a container restart. */}}

@@ -2402,6 +2402,36 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #975: stored releases predate invitation HMAC references; ESO and the
+  // control-plane env bindings must still render under real --reuse-values.
+  assert.equal(historical.global.invitationEmailHmac, undefined);
+  const invitationExternal = exactDocuments.filter((document) => document.kind === 'ExternalSecret'
+    && document.metadata.name === 'iam-invitation-email-hmac');
+  assert.equal(invitationExternal.length, 1, 'historical reuse-values must deliver invitation keys through ESO');
+  assert.deepEqual(invitationExternal[0].spec.secretStoreRef,
+    { name: 'openbao-backend', kind: 'ClusterSecretStore' });
+  assert.equal(invitationExternal[0].spec.target.name, 'in-falcone-invitation-email-hmac');
+  assert.equal(invitationExternal[0].spec.target.creationPolicy, 'Orphan');
+  assert.equal(invitationExternal[0].spec.target.deletionPolicy, 'Retain');
+  assert.deepEqual(invitationExternal[0].spec.data, [
+    { secretKey: 'key', remoteRef: { key: 'iam/invitation-email-hmac', property: 'key' } },
+    { secretKey: 'key-id', remoteRef: { key: 'iam/invitation-email-hmac', property: 'key-id' } },
+  ]);
+  for (const name of ['control-plane', 'control-plane-executor']) {
+    const deployment = exactDocuments.find((document) => document.kind === 'Deployment'
+      && document.metadata.name === `${releaseName}-${name}`);
+    const container = deployment?.spec.template.spec.containers.find((entry) => entry.name === name);
+    assert.ok(container, `historical reuse-values must retain ${name}`);
+    assert.deepEqual(container.env.filter((entry) => entry.name.startsWith('INVITATION_EMAIL_HMAC_')),
+      name === 'control-plane' ? [
+        { name: 'INVITATION_EMAIL_HMAC_KEY', valueFrom: {
+          secretKeyRef: { name: 'in-falcone-invitation-email-hmac', key: 'key', optional: true },
+        } },
+        { name: 'INVITATION_EMAIL_HMAC_KEY_ID', valueFrom: {
+          secretKeyRef: { name: 'in-falcone-invitation-email-hmac', key: 'key-id', optional: true },
+        } },
+      ] : [], 'only control-plane receives the invitation HMAC references');
+  }
   // #972: signer references must also survive real pre-contract stored values.
   assert.equal(historical.global.functionInvocation, undefined);
   const signerExternal = exactDocuments.find((document) => document.kind === 'ExternalSecret'

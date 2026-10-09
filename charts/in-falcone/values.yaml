@@ -39,6 +39,15 @@ global:
   functionInvocation:
     secretName: in-falcone-function-invocation
     remoteKey: control-plane/function-invocation
+  # References only. Provision a random key of at least 32 bytes and a nonempty
+  # key-id in OpenBao; ESO is the sole creator of the target Secret. Both entries
+  # are optional at container startup so Helm --wait can reach managed ESO's
+  # post hooks. Invitation routes return 503 without valid key material. After
+  # initial ESO synchronization or key rotation, roll out control-plane through
+  # the Helm adapter to load the env references; check ESO status only.
+  invitationEmailHmac:
+    secretName: in-falcone-invitation-email-hmac
+    remoteKey: iam/invitation-email-hmac
   # One immutable SeaweedFS image contract is inherited by the vendored
   # data-plane workloads and by control-plane-created IAM Jobs.
   seaweedfs:
