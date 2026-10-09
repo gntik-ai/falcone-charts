@@ -58,8 +58,8 @@ function verifyDelivery(objects, secretName = 'in-falcone-invitation-email-hmac'
       if (object.kind === 'Deployment' && container.name === 'control-plane') {
         recipients++;
         assert.deepEqual(env, Object.entries(bindings).map(([name, key]) => ({
-          name, valueFrom: { secretKeyRef: { name: secretName, key, optional: false } },
-        })), 'both key and key id must be required at startup');
+          name, valueFrom: { secretKeyRef: { name: secretName, key, optional: true } },
+        })), 'startup must permit ESO post hooks to deliver the key and key id');
       } else {
         assert.deepEqual(env, [], `${object.metadata.name}/${container.name} must not receive HMAC material`);
         assert.ok(!JSON.stringify(container).includes(secretName));
@@ -71,7 +71,7 @@ function verifyDelivery(objects, secretName = 'in-falcone-invitation-email-hmac'
     && object.metadata.name === secretName), 'Helm must never generate the HMAC Secret');
 }
 
-test('only control-plane receives the required OpenBao/ESO invitation key and key id', () => {
+test('only control-plane receives the OpenBao/ESO invitation key and key id', () => {
   verifyDelivery(documents(render()));
   verifyDelivery(documents(render([
     '--set', 'global.invitationEmailHmac.secretName=custom-invitation-hmac',
@@ -126,5 +126,41 @@ test('missing references and attempts to bypass ESO fail closed even without sch
   for (const setting of ['global.invitationEmailHmac.secretName=',
     'global.invitationEmailHmac.remoteKey=', 'global.invitationEmailHmac.key=forbidden']) {
     assert.notEqual(render(['--set-string', setting]).status, 0, setting);
+  }
+});
+
+test('Helm --wait can start workloads before managed ESO post hooks create their Secrets', () => {
+  for (const args of [[], [
+    '--is-upgrade', '--set', 'deployment.upgrade.currentVersion=0.3.1',
+    '--set', 'global.webhookDatabase.migration.backupVerified=true',
+    '--set', 'global.webhookDatabase.migration.parityVerified=true',
+    '--set', 'global.webhookDatabase.migration.backupReference=bbx-invitation-backup',
+  ]]) {
+    const objects = documents(render(args));
+    const hookSecrets = objects.filter((object) => object.kind === 'ExternalSecret'
+      && /post-(install|upgrade)/.test(object.metadata.annotations?.['helm.sh/hook'] ?? '')
+      && object.spec.target.creationPolicy !== 'Merge'
+      && !objects.some((candidate) => candidate.kind === 'Secret'
+        && candidate.metadata.name === object.spec.target.name
+        && !candidate.metadata.annotations?.['helm.sh/hook']))
+      .map((object) => object.spec.target.name);
+    assert.ok(hookSecrets.includes('in-falcone-invitation-email-hmac'),
+      'managed ESO delivers the invitation key only after Helm waits for workloads');
+    for (const object of objects) {
+      if (object.metadata.annotations?.['helm.sh/hook']) continue;
+      const pod = object.kind === 'CronJob' ? object.spec?.jobTemplate?.spec?.template?.spec
+        : object.kind === 'Pod' ? object.spec : object.spec?.template?.spec;
+      if (!pod) continue;
+      for (const container of [...(pod.containers ?? []), ...(pod.initContainers ?? [])]) {
+        const references = [
+          ...(container.env ?? []).map((entry) => entry.valueFrom?.secretKeyRef),
+          ...(container.envFrom ?? []).map((entry) => entry.secretRef),
+        ].filter((reference) => reference && hookSecrets.includes(reference.name));
+        for (const reference of references) {
+          assert.equal(reference.optional, true,
+            `${object.metadata.name}/${container.name} must start before post hooks create ${reference.name}`);
+        }
+      }
+    }
   }
 });

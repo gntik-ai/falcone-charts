@@ -41,9 +41,10 @@ global:
     remoteKey: control-plane/function-invocation
   # References only. Provision a random key of at least 32 bytes and a nonempty
   # key-id in OpenBao; ESO is the sole creator of the target Secret. Both entries
-  # are required by control-plane at startup. Restart it after key rotation.
-  # Managed ESO uses post hooks: synchronize this Secret through ESO before a
-  # --wait rollout, so the startup requirement does not block its delivery hook.
+  # are optional at container startup so Helm --wait can reach managed ESO's
+  # post hooks. Invitation routes return 503 without valid key material. After
+  # initial ESO synchronization or key rotation, roll out control-plane through
+  # the Helm adapter to load the env references; check ESO status only.
   invitationEmailHmac:
     secretName: in-falcone-invitation-email-hmac
     remoteKey: iam/invitation-email-hmac

@@ -349,19 +349,21 @@ spec:
           {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer }}
           env:
             {{- if $isFunctionSigner }}
-            {{- /* #975: required startup references; only ESO supplies material. */}}
+            {{- /* Managed ESO creates this Secret in post hooks, after Helm
+                   --wait. Let the container start without it; invitation routes
+                   fail closed until ESO syncs and a rollout reloads the env. */}}
             - name: INVITATION_EMAIL_HMAC_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ $invitationEmailHmacSecret | quote }}
                   key: key
-                  optional: false
+                  optional: true
             - name: INVITATION_EMAIL_HMAC_KEY_ID
               valueFrom:
                 secretKeyRef:
                   name: {{ $invitationEmailHmacSecret | quote }}
                   key: key-id
-                  optional: false
+                  optional: true
             {{- /* Managed ESO reconciles after Helm --wait. The optional whole
                    directory is refreshed by kubelet after delivery/rotation;
                    the signer reads it lazily, without a container restart. */}}
