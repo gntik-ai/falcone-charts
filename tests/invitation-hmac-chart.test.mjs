@@ -145,6 +145,17 @@ test('invitation HMAC Secret references reject malformed DNS subdomain labels', 
   ])), 'invite-key.tenant-1');
 });
 
+test('malformed invitation HMAC configuration cannot silently use reference defaults', () => {
+  for (const value of ['false', '0', '""', '[]']) {
+    for (const schemaArgs of [[], ['--skip-schema-validation']]) {
+      const result = render([...schemaArgs, '--set-json',
+        `global.invitationEmailHmac=${value}`]);
+      assert.notEqual(result.status, 0, `${value} must fail rather than silently use defaults`);
+      assert.match(result.stderr, /invitationEmailHmac/);
+    }
+  }
+});
+
 test('Helm --wait can start workloads before managed ESO post hooks create their Secrets', () => {
   for (const args of [[], [
     '--is-upgrade', '--set', 'deployment.upgrade.currentVersion=0.3.1',

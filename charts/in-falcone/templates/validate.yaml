@@ -73,7 +73,10 @@
   {{- end -}}
 {{- end -}}
 {{- $components := list "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" -}}
-{{- $invitation := .Values.global.invitationEmailHmac | default dict -}}
+{{- $invitation := dict -}}
+{{- if hasKey .Values.global "invitationEmailHmac" -}}
+  {{- $invitation = .Values.global.invitationEmailHmac -}}
+{{- end -}}
 {{- if not (kindIs "map" $invitation) -}}
   {{- fail "global.invitationEmailHmac accepts OpenBao/ESO references only" -}}
 {{- end -}}
