@@ -482,9 +482,19 @@ class Offline(unittest.TestCase):
                 # changing inherited TLS configuration or exposing keys in env.
                 signer_env = [{"name": "FN_INVOCATION_SECRET_DIR",
                                "value": "/var/run/falcone/function-invocation"}]
-                self.assertTrue(new_container["env"] == signer_env + old_container["env"],
-                                "control-plane env must add only the signer directory")
-                new_container["env"] = new_container["env"][len(signer_env):]
+                # #975 adds only OpenBao/ESO references for invitation HMACs.
+                invitation_env = [{
+                    "name": name, "valueFrom": {"secretKeyRef": {
+                        "name": "in-falcone-invitation-email-hmac", "key": key, "optional": True,
+                    }},
+                } for name, key in (
+                    ("INVITATION_EMAIL_HMAC_KEY", "key"),
+                    ("INVITATION_EMAIL_HMAC_KEY_ID", "key-id"),
+                )]
+                additions = invitation_env + signer_env
+                self.assertTrue(new_container["env"] == additions + old_container["env"],
+                                "control-plane env must add only signer and invitation references")
+                new_container["env"] = new_container["env"][len(additions):]
                 mounts = new_container["volumeMounts"]
                 self.assertEqual(mounts.pop(0), {
                     "name": "falcone-function-invocation",
