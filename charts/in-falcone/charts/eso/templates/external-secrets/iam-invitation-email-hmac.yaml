@@ -1,0 +1,31 @@
+{{- /* Use the existing managed/adopted ESO lifecycle. Helm accepts references
+       only and never generates or reads invitation key material. */ -}}
+{{- $es := index .Values "external-secrets" | default dict -}}
+{{- $esoManaged := true -}}
+{{- if hasKey $es "enabled" }}{{- $esoManaged = $es.enabled }}{{- end -}}
+{{- $invitation := .Values.global.invitationEmailHmac | default dict -}}
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: iam-invitation-email-hmac
+  namespace: {{ .Release.Namespace }}
+  {{- if $esoManaged }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+  {{- end }}
+spec:
+  refreshInterval: {{ .Values.eso.refreshInterval | default "1h" | quote }}
+  secretStoreRef: { name: openbao-backend, kind: ClusterSecretStore }
+  target:
+    name: {{ dig "secretName" "in-falcone-invitation-email-hmac" $invitation | quote }}
+    creationPolicy: Orphan
+    deletionPolicy: Retain
+    immutable: false
+  data:
+    {{- range $property := list "key" "key-id" }}
+    - secretKey: {{ $property | quote }}
+      remoteRef:
+        key: {{ dig "remoteKey" "iam/invitation-email-hmac" $invitation | quote }}
+        property: {{ $property | quote }}
+    {{- end }}
