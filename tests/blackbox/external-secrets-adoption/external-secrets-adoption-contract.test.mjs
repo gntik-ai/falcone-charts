@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { assertInvitationHmacExternalSecret } from '../fixtures/invitation-hmac-snapshot.mjs'
 
 import {
   assertSuccess,
@@ -112,7 +113,8 @@ test('externally managed ESO renders only Falcone-owned integration resources an
   assert.ok(objects.some((object) => object.kind === 'Namespace' && object.metadata?.name === 'eso-system'), 'Falcone must retain its separate authentication namespace')
 
   assert.equal(objects.filter((object) => object.kind === 'ClusterSecretStore' && object.metadata?.name === 'openbao-backend').length, 1)
-  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 15)
+  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 16)
+  assertInvitationHmacExternalSecret(objects, 'falcone-bbx', false)
   const invocationSecrets = objects.filter((object) => object.kind === 'ExternalSecret'
     && object.metadata?.name === 'platform-function-invocation')
   assert.equal(invocationSecrets.length, 1, 'externally managed ESO must retain the function invocation signer integration')

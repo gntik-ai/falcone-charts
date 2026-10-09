@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 
 import { allContainers } from './blackbox.mjs'
 
-// Check the exact #975 additions before restoring the immutable umbrella baseline.
-// Any other resource or workload change remains covered by the existing hashes.
-export function withPriorInvitationHmac(objects) {
-  const prior = structuredClone(objects)
-  const externals = prior.filter((object) => object.kind === 'ExternalSecret'
+export function assertInvitationHmacExternalSecret(objects, namespace, managed = true) {
+  const externals = objects.filter((object) => object.kind === 'ExternalSecret'
     && object.metadata.name === 'iam-invitation-email-hmac')
   assert.equal(externals.length, 1, 'invitation HMAC delivery must exist exactly once')
   assert.deepEqual(externals[0], {
@@ -14,8 +11,10 @@ export function withPriorInvitationHmac(objects) {
     kind: 'ExternalSecret',
     metadata: {
       name: 'iam-invitation-email-hmac',
-      namespace: 'falcone-bbx',
-      annotations: { 'helm.sh/hook': 'post-install,post-upgrade', 'helm.sh/hook-weight': '5' },
+      namespace,
+      ...(managed ? {
+        annotations: { 'helm.sh/hook': 'post-install,post-upgrade', 'helm.sh/hook-weight': '5' },
+      } : {}),
     },
     spec: {
       refreshInterval: '1h',
@@ -30,6 +29,14 @@ export function withPriorInvitationHmac(objects) {
       ],
     },
   })
+  return externals[0]
+}
+
+// Check the exact #975 additions before restoring the immutable umbrella baseline.
+// Any other resource or workload change remains covered by the existing hashes.
+export function withPriorInvitationHmac(objects) {
+  const prior = structuredClone(objects)
+  const external = assertInvitationHmacExternalSecret(prior, 'falcone-bbx')
   const expectedEnv = [
     { name: 'INVITATION_EMAIL_HMAC_KEY', valueFrom: {
       secretKeyRef: { name: 'in-falcone-invitation-email-hmac', key: 'key', optional: true },
@@ -52,5 +59,5 @@ export function withPriorInvitationHmac(objects) {
     }
   }
   assert.equal(recipients, 1, 'only control-plane receives invitation HMAC references')
-  return prior.filter((object) => object !== externals[0])
+  return prior.filter((object) => object !== external)
 }

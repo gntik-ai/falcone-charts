@@ -16,6 +16,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { assertInvitationHmacExternalSecret } from '../fixtures/invitation-hmac-snapshot.mjs'
 
 import {
   assertSuccess,
@@ -543,11 +544,13 @@ test('sanitized revision-20 fixture preserves the real bundled topology while ca
     .sort()
   const expected = fixture.falconeIntegrationResources
     .map((object) => `${object.kind}/${object.namespace ?? 'in-falcone-staging'}/${object.name}`)
-    // Preserve the historical inventory; #972 adds exactly one integration.
-    .concat('ExternalSecret/in-falcone-staging/platform-function-invocation')
+    // Preserve the historical inventory; #972 and #975 add exactly these integrations.
+    .concat('ExternalSecret/in-falcone-staging/platform-function-invocation',
+      'ExternalSecret/in-falcone-staging/iam-invitation-email-hmac')
     .sort()
   assert.deepEqual(integrations, expected)
-  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 15)
+  assert.equal(objects.filter((object) => object.kind === 'ExternalSecret').length, 16)
+  assertInvitationHmacExternalSecret(objects, 'in-falcone-staging', false)
   const signer = named(objects, 'ExternalSecret', 'platform-function-invocation', 'in-falcone-staging')
   assert.deepEqual(signer.spec.secretStoreRef,
     { name: 'openbao-backend', kind: 'ClusterSecretStore' })
