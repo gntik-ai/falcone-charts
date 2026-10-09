@@ -129,6 +129,22 @@ test('missing references and attempts to bypass ESO fail closed even without sch
   }
 });
 
+test('invitation HMAC Secret references reject malformed DNS subdomain labels', () => {
+  for (const name of ['invite..hmac', 'invite.-hmac', 'invite-.hmac']) {
+    for (const schemaArgs of [[], ['--skip-schema-validation']]) {
+      const result = render([...schemaArgs, '--set-string',
+        `global.invitationEmailHmac.secretName=${name}`]);
+      assert.notEqual(result.status, 0, `${name} must fail before emitting invalid Secret references`);
+      assert.match(result.stderr, /invitationEmailHmac[\s\S]*secretName/);
+      assert.match(result.stderr, schemaArgs.length
+        ? /nonempty DNS subdomain name/ : /values don't meet the specifications/);
+    }
+  }
+  verifyDelivery(documents(render([
+    '--set-string', 'global.invitationEmailHmac.secretName=invite-key.tenant-1',
+  ])), 'invite-key.tenant-1');
+});
+
 test('Helm --wait can start workloads before managed ESO post hooks create their Secrets', () => {
   for (const args of [[], [
     '--is-upgrade', '--set', 'deployment.upgrade.currentVersion=0.3.1',

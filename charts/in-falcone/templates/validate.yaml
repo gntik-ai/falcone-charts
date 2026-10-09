@@ -86,7 +86,7 @@
 {{- if not (kindIs "string" $invitationSecretName) -}}
   {{- fail "global.invitationEmailHmac.secretName must be a nonempty DNS subdomain name" -}}
 {{- end -}}
-{{- if or (gt (len $invitationSecretName) 253) (not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $invitationSecretName)) -}}
+{{- if or (gt (len $invitationSecretName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $invitationSecretName)) -}}
   {{- fail "global.invitationEmailHmac.secretName must be a nonempty DNS subdomain name" -}}
 {{- end -}}
 {{- $invitationRemoteKey := dig "remoteKey" "iam/invitation-email-hmac" $invitation -}}
