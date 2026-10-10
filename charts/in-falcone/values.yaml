@@ -2186,14 +2186,14 @@ postgresql:
   # dedicatedTenantImage: recommended image for operator-provisioned dedicated-DB
   # tenant Postgres instances (database_per_tenant — e.g. the dpf_01regulateddedicated
   # deployment profile / profileClass "dedicated", capability pvc_01pgdedicated).
-  # Such tenants may enable the `vector` extension for KNN similarity search, which the
-  # default PostgreSQL image above does NOT bundle; the provisioning pre-flight
-  # (postgres-applier.mjs) rejects `CREATE EXTENSION vector` on an image that lacks the
-  # pgvector control files. This key is an OPERATOR CONTRACT — a named, greppable record
-  # of the recommended image — NOT a value the chart templates apply automatically.
-  # Dedicated-DB instances are operator-provisioned (not per-tenant StatefulSets rendered
-  # by this chart); set this image in your own provisioning tooling. The shared-instance
-  # default `postgresql.image` is unaffected.
+  # The default PostgreSQL image above does NOT bundle the `vector` extension for KNN
+  # similarity search; the provisioning pre-flight (postgres-applier.mjs) rejects
+  # `CREATE EXTENSION vector` on an image that lacks the pgvector control files.
+  # This key records the recommended image; chart templates do not apply it automatically.
+  # The chart deploys postgresqlVector separately, but no workload is routed to it yet:
+  # workspace databases and executor connections use the shared PGHOST instance.
+  # Dedicated-DB mode does not select a separate host. Routing to a pgvector-capable
+  # instance is deferred; the shared-instance default `postgresql.image` is unaffected.
   dedicatedTenantImage:
     repository: pgvector/pgvector
     tag: pg17
@@ -2273,14 +2273,13 @@ postgresql:
         drop:
           - ALL
 
-# Dedicated pgvector Postgres (add-pgvector-image-for-vector-search, #602). Core dedicated-DB
-# instance on the pgvector/pgvector image for tenants that use the `vector` extension for KNN
-# similarity search — which the shared bitnami `postgresql` instance deliberately lacks (vector is a
-# dedicated-DB capability by design; the provisioning pre-flight rejects CREATE EXTENSION vector on
-# the shared instance with an actionable message naming this image). This realises the
-# `postgresql.dedicatedTenantImage` operator contract as an actually-deployable instance. A
-# dedicated-DB workspace whose connection DSN resolves to this instance gets working
-# `CREATE EXTENSION vector` + KNN (proven real-stack in tests/env/executor/vector-search-knn-rls).
+# Dedicated pgvector Postgres (add-pgvector-image-for-vector-search, #602). The chart deploys
+# this instance on the pgvector/pgvector image, but no workload is routed to it yet.
+# Workspace databases and executor connections use the shared PGHOST instance, whose default
+# PostgreSQL image lacks the `vector` extension. Dedicated-DB mode does not select this host;
+# routing to a pgvector-capable instance is deferred (fix-vector-capability-unavailable, #983).
+# Deploying this component alone does not enable tenant vector search. The executor reports
+# CAPABILITY_UNAVAILABLE when the resolved workspace instance lacks the vector capability.
 # Uses the OFFICIAL postgres image contract (POSTGRES_*, /var/lib/postgresql, uid 999),
 # like the documentdb engine. Admin creds come from the operator-supplied in-falcone-postgresql-vector
 # Secret (POSTGRES_USER/POSTGRES_PASSWORD), mirroring in-falcone-postgresql / in-falcone-documentdb.
