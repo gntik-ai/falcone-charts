@@ -36,6 +36,6 @@ workflowWorker:
     repository: ghcr.io/gntik-ai/in-falcone-workflow-worker
 mcp:
   runtimeImage:
-    tag: sha-0914433
+    tag: sha-b71aa66
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-mcp-runtime
