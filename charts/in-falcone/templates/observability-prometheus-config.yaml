@@ -13,6 +13,9 @@
 {{- $alerts := get $audit "alerts" | default dict -}}
 {{- $alertsEnabled := true -}}
 {{- if hasKey $alerts "enabled" -}}{{- $alertsEnabled = get $alerts "enabled" -}}{{- end -}}
+{{- $scrapeLimits := get (.Values.observability | default dict) "scrapeLimits" | default dict -}}
+{{- $sampleLimit := get $scrapeLimits "sampleLimit" | default 1000000 | int -}}
+{{- $labelValueLengthLimit := get $scrapeLimits "labelValueLengthLimit" | default 512 | int -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -37,12 +40,16 @@ data:
           - targets: ['localhost:9090']
       - job_name: falcone-control-plane
         metrics_path: /metrics
+        sample_limit: {{ $sampleLimit }}
+        label_value_length_limit: {{ $labelValueLengthLimit }}
         static_configs:
           - targets: ['{{ $cp }}']
             labels:
               component: control-plane
       - job_name: falcone-control-plane-executor
         metrics_path: /metrics
+        sample_limit: {{ $sampleLimit }}
+        label_value_length_limit: {{ $labelValueLengthLimit }}
         static_configs:
           - targets: ['{{ printf "%s.%s.svc.cluster.local:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "controlPlaneExecutor")) $ns ((.Values.controlPlaneExecutor.service).port | default 8080) }}']
             labels:
@@ -64,6 +71,8 @@ data:
         annotated, so they are never scraped — no dead targets.
       */}}
       - job_name: falcone-pods
+        sample_limit: {{ $sampleLimit }}
+        label_value_length_limit: {{ $labelValueLengthLimit }}
         kubernetes_sd_configs:
           - role: pod
             namespaces:

@@ -109,8 +109,8 @@ jobs:
         run: test -f charts/in-falcone/charts/component-wrapper/Chart.yaml && test -f charts/in-falcone/charts/seaweedfs/Chart.yaml
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority
         run: sh tests/webhook-database-chart-ci.test.sh
-      - name: Validate flow-audit chart additions and reuse-values rendering
-        run: node --test tests/flow-audit-chart.test.mjs
+      - name: Validate flow-audit and observability scrape limits
+        run: node --test tests/flow-audit-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs
       - name: Validate invitation HMAC OpenBao and ESO delivery
         run: node --test tests/invitation-hmac-chart.test.mjs
       - name: Validate function isolation and invocation signer delivery

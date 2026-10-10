@@ -3320,6 +3320,12 @@ grafana:
     limits: { cpu: 500m, memory: 512Mi }
 
 observability:
+  # Per target, shared by control-plane, executor and annotated Falcone pod scrapes.
+  # 1M samples leaves headroom above ~191 templates x 8 methods x 10 statuses x 15
+  # HTTP samples (229,200), plus other metrics. Missing stored keys use these defaults.
+  scrapeLimits:
+    sampleLimit: 1000000
+    labelValueLengthLimit: 512
   networkPolicy:
     # Ingress only; scrape and DNS egress stay unrestricted. kindnet does not enforce this.
     enabled: true

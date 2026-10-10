@@ -8,6 +8,7 @@ import { withPriorIdentityRule } from './blackbox/keycloak-realm/public-identity
 import { withPriorTemporalWeb } from './blackbox/fixtures/temporal-web-snapshot.mjs'
 import { withPriorKafkaNetworkPolicy } from './blackbox/fixtures/kafka-networkpolicy-snapshot.mjs'
 import { withPriorInvitationHmac } from './blackbox/fixtures/invitation-hmac-snapshot.mjs'
+import { withPriorScrapeLimits } from './blackbox/fixtures/observability-scrape-limits-snapshot.mjs'
 
 // #980: include tenant audience wiring and the read-only config-copy root filesystem, preserving main's pod identities.
 // #45: include the reviewed root-path identity repair before subtracting only flow-audit additions.
@@ -71,9 +72,9 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   if (Object.keys(priorObservability.spec.template.metadata.annotations).length === 0) {
     delete priorObservability.spec.template.metadata.annotations
   }
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(priorObjects))))))), priorBaseline)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(priorObjects)))))))), priorBaseline)
   const expected = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/umbrella-default-render.sha256'), 'utf8').trim()
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(objects))))))), expected)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(objects)))))))), expected)
 
   const topic = added.find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
   assert.equal(topic.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC').value,

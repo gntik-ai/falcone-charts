@@ -2402,6 +2402,19 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #982: stored releases predate the scrape limits; reuse-values must retain
+  // the bounded defaults on all three Falcone jobs without changing targets.
+  assert.equal(historical.observability.scrapeLimits, undefined);
+  const prometheusConfig = exactDocuments.find((document) => document.kind === 'ConfigMap'
+    && document.metadata.name === `${releaseName}-prometheus-config`);
+  assert.ok(prometheusConfig, 'historical reuse-values must retain the mounted scrape config');
+  const scrapeJobs = parseRenderedDocuments(prometheusConfig.data['prometheus.yml'])[0].scrape_configs;
+  for (const name of ['falcone-control-plane', 'falcone-control-plane-executor', 'falcone-pods']) {
+    const job = scrapeJobs.find((entry) => entry.job_name === name);
+    assert.ok(job, `historical reuse-values must retain ${name}`);
+    assert.equal(job.sample_limit, 1000000);
+    assert.equal(job.label_value_length_limit, 512);
+  }
   // #975: stored releases predate invitation HMAC references; ESO and the
   // control-plane env bindings must still render under real --reuse-values.
   assert.equal(historical.global.invitationEmailHmac, undefined);
