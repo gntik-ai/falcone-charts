@@ -1189,6 +1189,20 @@
         {
           "type": "object",
           "properties": {
+            "scrapeLimits": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "properties": {
+                "sampleLimit": {
+                  "type": ["integer", "null"],
+                  "minimum": 1
+                },
+                "labelValueLengthLimit": {
+                  "type": ["integer", "null"],
+                  "minimum": 1
+                }
+              }
+            },
             "networkPolicy": {
               "$ref": "#/definitions/telemetryIngressPolicy"
             }
