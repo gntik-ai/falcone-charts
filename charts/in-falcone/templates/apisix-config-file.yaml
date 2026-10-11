@@ -7,13 +7,20 @@
   canonical content; an init container copies it into a writable emptyDir that
   is then mounted over the config.yaml path (see values/staging.yaml).
 
-  The only functional delta from the stock standalone config is
+  The metrics delta from the stock standalone config is
   plugin_attr.prometheus.enable_export_server=false. APISIX 3.10 defaults that
   to true, which makes the Prometheus plugin register NO public-api handler, so
   the /apisix/prometheus/metrics route (1011-metrics in apisix.yaml) returns a
   clean 404 and the Prometheus scrape target is permanently DOWN. Disabling the
   dedicated export server lets the public-api plugin serve the metrics on the
   gateway port that Falcone actually scrapes.
+
+  Access-log hygiene (falcone#1118): flow event streams retain ?apikey= until
+  the u5 cutover. Replace the stock query-bearing request and upstream URI
+  fields with the request method, normalized path and protocol, retaining the
+  other APISIX 3.10 fields. This applies gateway-wide, including kind. Nginx
+  error logs can still include raw request lines on upstream errors/timeouts;
+  this override only controls access logs.
 */ -}}
 {{- if .Values.apisix.initContainers }}
 apiVersion: v1
@@ -36,6 +43,9 @@ data:
             role: admin
     apisix:
       extra_lua_path: /usr/local/apisix/falcone/?.lua
+    nginx_config:
+      http:
+        access_log_format: "$remote_addr - $remote_user [$time_local] $http_host \"$request_method $uri $server_protocol\" $status $body_bytes_sent $request_time \"$http_referer\" \"$http_user_agent\" $upstream_addr $upstream_status $upstream_response_time \"$upstream_scheme://$upstream_host$uri\""
     # Explicitly retain the APISIX 3.10 built-ins when enabling the custom
     # plugin; setting plugins replaces the stock list rather than extending it.
     plugins:
