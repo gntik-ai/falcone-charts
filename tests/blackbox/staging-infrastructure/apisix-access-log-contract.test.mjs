@@ -39,7 +39,6 @@ function renderedConfig(chart, args = []) {
 function assertAccessLogContract(config) {
   const format = config.nginx_config?.http?.access_log_format
   assert.equal(typeof format, 'string', 'config.yaml must set nginx_config.http.access_log_format')
-  assert.equal(format, expectedAccessLogFormat, 'access log must preserve the stock field layout without literal YAML quoting')
   const variables = [...format.matchAll(/\$\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?/g)].map((match) => match[1])
   for (const variable of variables) {
     assert.ok(
@@ -48,6 +47,7 @@ function assertAccessLogContract(config) {
       `access log contains query-bearing variable ${variable}`,
     )
   }
+  assert.equal(format, expectedAccessLogFormat, 'access log must preserve the stock field layout without literal YAML quoting')
   for (const required of [
     'request_method', 'uri', 'server_protocol', 'status', 'request_time', 'upstream_addr',
     'remote_addr', 'remote_user', 'time_local', 'http_host', 'body_bytes_sent',
@@ -95,12 +95,12 @@ test('APISIX access-log contract rejects missing format and query-bearing variab
       {
         name: 'raw request variable',
         template: original.replace('$request_method $uri $server_protocol', '$request'),
-        failure: /access log must preserve the stock field layout/,
+        failure: /access log contains query-bearing variable request$/,
       },
       {
         name: 'query-bearing upstream URI',
         template: original.replace('$upstream_host$uri', '$upstream_host$upstream_uri'),
-        failure: /access log must preserve the stock field layout/,
+        failure: /access log contains query-bearing variable upstream_uri$/,
       },
     ]
     for (const mutation of mutations) {
