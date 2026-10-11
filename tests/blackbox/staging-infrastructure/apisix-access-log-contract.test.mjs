@@ -1,0 +1,63 @@
+/**
+ * Regression contract for falcone#1118.
+ *
+ * Flow event streams retain query-key authentication until the u5 cutover.
+ * The rendered gateway config must log normalized paths without query-bearing
+ * variables, while preserving the standalone and Prometheus contracts.
+ */
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import test from 'node:test'
+
+import { render, repoRoot, umbrellaChart, yamlDocuments } from '../fixtures/blackbox.mjs'
+
+const profiles = [
+  ['default', []],
+  ['staging', ['-f', `${umbrellaChart}/values/staging.yaml`]],
+  ['prod', ['-f', `${umbrellaChart}/values/prod.yaml`]],
+  ['airgap', ['-f', `${umbrellaChart}/values/airgap.yaml`]],
+  ['kind', ['-f', `${repoRoot}/deploy/kind/values-kind.yaml`]],
+]
+
+for (const [profile, args] of profiles) {
+  test(`${profile} APISIX access logs omit query strings and retain gateway configuration`, () => {
+    const { objects } = render(umbrellaChart, args)
+    const configMap = objects.find((object) => (
+      object?.kind === 'ConfigMap' && /-apisix-config-file$/.test(object?.metadata?.name ?? '')
+    ))
+    assert.ok(configMap, 'apisix-config-file ConfigMap was not rendered')
+    const [config] = yamlDocuments(configMap.data['config.yaml'])
+    const format = config.nginx_config?.http?.access_log_format
+    assert.equal(typeof format, 'string', 'config.yaml must set nginx_config.http.access_log_format')
+    const variables = [...format.matchAll(/\$\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?/g)].map((match) => match[1])
+    for (const variable of variables) {
+      assert.ok(
+        !['request', 'request_uri', 'args', 'query_string', 'upstream_uri'].includes(variable)
+          && !variable.startsWith('arg_'),
+        `access log contains query-bearing variable ${variable}`,
+      )
+    }
+    for (const required of [
+      'request_method', 'uri', 'server_protocol', 'status', 'request_time', 'upstream_addr',
+      'remote_addr', 'remote_user', 'time_local', 'http_host', 'body_bytes_sent',
+      'http_referer', 'http_user_agent', 'upstream_status', 'upstream_response_time',
+      'upstream_scheme', 'upstream_host',
+    ]) {
+      assert.ok(variables.includes(required), `access log must retain ${required}`)
+    }
+    assert.match(format, /\$request_method \$uri \$server_protocol/)
+    assert.deepEqual(config.deployment, {
+      role: 'data_plane',
+      role_data_plane: { config_provider: 'yaml' },
+      admin: { admin_key: [{ name: 'admin', key: '', role: 'admin' }] },
+    })
+    assert.deepEqual(config.apisix, { extra_lua_path: '/usr/local/apisix/falcone/?.lua' })
+    // Known-good ordered plugin list from the assigned pre-fix chart (138cda13).
+    assert.equal(
+      createHash('sha256').update(config.plugins.join('\n')).digest('hex'),
+      'b9a90fecae64cacab5b6a0b4d4f14f1fef021ff40b4f9ee29b0b28247146e3f6',
+      'the APISIX plugin list must remain unchanged',
+    )
+    assert.deepEqual(config.plugin_attr, { prometheus: { enable_export_server: false } })
+  })
+}
