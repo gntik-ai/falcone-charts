@@ -78,7 +78,7 @@ for (const [profile, args] of profiles) {
   })
 }
 
-test('APISIX access-log contract rejects missing format and query-bearing variables (falcone#1118)', () => {
+test('APISIX access-log contract rejects missing format, query-bearing variables and literal YAML quoting (falcone#1118)', () => {
   const work = mkdtempSync(resolve(tmpdir(), 'falcone-apisix-log-negative-bbx-'))
   const chart = resolve(work, 'in-falcone')
   try {
@@ -101,6 +101,14 @@ test('APISIX access-log contract rejects missing format and query-bearing variab
         name: 'query-bearing upstream URI',
         template: original.replace('$upstream_host$uri', '$upstream_host$upstream_uri'),
         failure: /access log contains query-bearing variable upstream_uri$/,
+      },
+      {
+        name: 'folded scalar retaining YAML quotes and escapes',
+        template: original.replace(
+          /^([ \t]+)access_log_format: (.*)$/m,
+          '$1access_log_format: >-\n$1  $2',
+        ),
+        failure: /access log must preserve the stock field layout without literal YAML quoting/,
       },
     ]
     for (const mutation of mutations) {
