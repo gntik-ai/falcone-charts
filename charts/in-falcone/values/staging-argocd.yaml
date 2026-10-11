@@ -16,7 +16,7 @@ controlPlane:
     repository: ghcr.io/gntik-ai/in-falcone-control-plane
   functionExecutor:
     runtimeImage:
-      tag: sha-62cc35a
+      tag: sha-a60b6a6
       digest: ""
       repository: ghcr.io/gntik-ai/in-falcone-fn-runtime
 controlPlaneExecutor:
