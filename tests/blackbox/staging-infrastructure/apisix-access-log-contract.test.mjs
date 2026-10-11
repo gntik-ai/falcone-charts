@@ -11,6 +11,10 @@ import test from 'node:test'
 
 import { render, repoRoot, umbrellaChart, yamlDocuments } from '../fixtures/blackbox.mjs'
 
+// APISIX 3.10's stock field layout, with query-bearing request/upstream URI
+// fields replaced by method, normalized path and protocol (falcone#1118).
+const expectedAccessLogFormat = '$remote_addr - $remote_user [$time_local] $http_host "$request_method $uri $server_protocol" $status $body_bytes_sent $request_time "$http_referer" "$http_user_agent" $upstream_addr $upstream_status $upstream_response_time "$upstream_scheme://$upstream_host$uri"'
+
 const profiles = [
   ['default', []],
   ['staging', ['-f', `${umbrellaChart}/values/staging.yaml`]],
@@ -29,6 +33,7 @@ for (const [profile, args] of profiles) {
     const [config] = yamlDocuments(configMap.data['config.yaml'])
     const format = config.nginx_config?.http?.access_log_format
     assert.equal(typeof format, 'string', 'config.yaml must set nginx_config.http.access_log_format')
+    assert.equal(format, expectedAccessLogFormat, 'access log must preserve the stock field layout without literal YAML quoting')
     const variables = [...format.matchAll(/\$\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?/g)].map((match) => match[1])
     for (const variable of variables) {
       assert.ok(
