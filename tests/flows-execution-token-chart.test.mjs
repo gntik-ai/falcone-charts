@@ -77,6 +77,32 @@ function verifyDelivery(objects, secretName = 'in-falcone-flow-execution-token',
   }
 }
 
+test('the flow ACL passes ConfigMap secret checks without scanner exceptions', (t) => {
+  const version = spawnSync('trivy', ['--version'], { encoding: 'utf8' });
+  if (version.error?.code === 'ENOENT') {
+    t.skip('Trivy is not installed; PR security scanning must verify the policy');
+    return;
+  }
+  assert.equal(version.status, 0, version.stderr);
+  const policy = documents(render()).find((o) => o.kind === 'ConfigMap'
+    && o.metadata.name === 'openbao-policy-flow-execution-token');
+  const directory = mkdtempSync(join(tmpdir(), 'falcone-flow-policy-scan-'));
+  try {
+    const file = join(directory, 'policy.yaml');
+    writeFileSync(file, JSON.stringify(policy));
+    const scan = spawnSync('trivy', ['config', '--skip-check-update', '--format', 'json', file],
+      { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+    assert.equal(scan.status, 0, scan.stderr);
+    const results = JSON.parse(scan.stdout).Results;
+    assert.ok(results?.length, 'Trivy must actually scan the rendered ConfigMap');
+    const failures = results.flatMap((result) => result.Misconfigurations ?? [])
+      .filter((finding) => /(?:^|-)KSV-0109$/.test(finding.ID));
+    assert.deepEqual(failures, [], 'the policy must pass the ConfigMap secret check');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('executor and worker share one OpenBao/ESO flow execution Secret on install and legacy upgrades', () => {
   const defaults = documents(render());
   verifyDelivery(defaults);
@@ -119,12 +145,15 @@ test('only the ESO role gains read access to the isolated execution-token OpenBa
     const policy = objects.find((o) => o.kind === 'ConfigMap'
       && o.metadata.name === 'openbao-policy-flow-execution-token');
     assert.ok(policy, 'the ESO integration needs an OpenBao policy for its record');
-    assert.equal(policy.data['flow-execution-token.hcl'].trim(),
+    assert.equal(policy.data['policy.hcl'].trim(),
       `path "secret/data/${remoteKey}" {\n  capabilities = ["read"]\n}`);
     const bootstrap = objects.find((o) => o.kind === 'Job' && o.metadata.name === 'openbao-init');
     const pod = bootstrap.spec.template.spec;
-    assert.ok(pod.volumes.find((v) => v.name === 'policies').projected.sources
-      .some((s) => s.configMap?.name === policy.metadata.name));
+    const policySource = pod.volumes.find((v) => v.name === 'policies').projected.sources
+      .find((s) => s.configMap?.name === policy.metadata.name);
+    assert.deepEqual(policySource?.configMap.items,
+      [{ key: 'policy.hcl', path: 'flow-execution-token.hcl' }],
+      'install bootstrap must mount the ACL at the existing policy filename');
     const container = pod.containers.find((c) => c.name === 'openbao-init');
     const script = [...container.command, ...(container.args ?? [])].join('\n');
     assert.match(script, /for policy in[^\n]* flow-execution-token; do/);
@@ -139,8 +168,10 @@ test('only the ESO role gains read access to the isolated execution-token OpenBa
   const publisher = upgraded.find((o) => o.kind === 'Job'
     && o.metadata.name === 'openbao-function-invocation-seed');
   const pod = publisher.spec.template.spec;
-  assert.ok(pod.volumes.some((v) => v.configMap?.name === 'openbao-policy-flow-execution-token'),
-    'upgrades must also publish the flow read policy through the existing bootstrap identity');
+  const upgradeSource = pod.volumes.find((v) => v.configMap?.name === 'openbao-policy-flow-execution-token');
+  assert.deepEqual(upgradeSource?.configMap.items,
+    [{ key: 'policy.hcl', path: 'flow-execution-token.hcl' }],
+    'upgrade bootstrap must mount the ACL at the existing policy filename');
   assert.match(pod.containers.find((c) => c.name === 'function-invocation-seed').args.join('\n'),
     /bao policy write flow-execution-token \/flow-token-policy\/flow-execution-token.hcl/);
 });

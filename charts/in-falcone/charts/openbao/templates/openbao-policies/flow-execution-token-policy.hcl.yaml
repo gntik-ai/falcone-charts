@@ -5,7 +5,7 @@ metadata:
   name: openbao-policy-flow-execution-token
   namespace: {{ .Values.openbao.namespace }}
 data:
-  flow-execution-token.hcl: |
+  policy.hcl: |
     path "secret/data/{{ dig "remoteKey" "flows/execution-token-secret" $flow }}" {
       capabilities = ["read"]
     }
