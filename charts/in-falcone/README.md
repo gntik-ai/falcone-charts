@@ -1,5 +1,8 @@
 # in-falcone chart
 
+Shared executor/worker flow signing-key delivery, ESO readiness, rollout order,
+and rollback constraints are in the [flow execution-token secret runbook](docs/flow-execution-token-secret.md).
+
 Operational guidance for Temporal bootstrap lifecycle, readiness, fail-forward
 recovery, and admin-tools image migration is in the [Temporal bootstrap
 readiness runbook](docs/temporal-bootstrap-readiness.md).

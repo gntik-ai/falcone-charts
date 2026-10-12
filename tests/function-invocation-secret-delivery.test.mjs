@@ -67,7 +67,7 @@ function verifySignerPolicies(objects, remoteKey) {
   const reconciler = objects.find((o) => o.kind === 'Job' && o.metadata.name === 'openbao-auth-reconcile');
   const reconcileScript = reconciler.spec.template.spec.containers
     .find((c) => c.name === 'auth-metadata-reconciler').args[0];
-  assert.match(reconcileScript, /desired_policies="function-invocation,functions,gateway,iam,platform"/);
+  assert.match(reconcileScript, /desired_policies="flow-execution-token,function-invocation,functions,gateway,iam,platform"/);
   assert.doesNotMatch(reconcileScript, /bao policy write function-invocation/,
     'the metadata-only reconciler cannot publish signer policy or read the key');
 }

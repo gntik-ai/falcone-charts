@@ -88,11 +88,11 @@ function renderedExternalSecrets() {
     .filter((object) => object.kind === 'ExternalSecret'
       && object.metadata?.namespace === 'in-falcone-staging')
     .sort((left, right) => left.metadata.name.localeCompare(right.metadata.name))
-  // #972 and #975 add integrations to the upgrade, not to the revision-20 live
+  // #972, #975 and #976 add integrations to the upgrade, not to the revision-20 live
   // inventory. Assert the complete new render before reconstructing that exact
   // historical inventory; adoption must still reject any extra live identity.
   assert.deepEqual(items.map((item) => item.metadata.name),
-    [...exactNames, 'platform-function-invocation', 'iam-invitation-email-hmac'].sort())
+    [...exactNames, 'platform-function-invocation', 'iam-invitation-email-hmac', 'flows-execution-token'].sort())
   assertInvitationHmacExternalSecret(items, 'in-falcone-staging', false)
   const signer = items.find((item) => item.metadata.name === 'platform-function-invocation')
   // #62: the signer integration is a post hook after its seed Job, even with external ESO.

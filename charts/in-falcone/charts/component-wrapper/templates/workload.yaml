@@ -97,6 +97,9 @@
 {{- $isFunctionSigner := eq (.Values.wrapper.componentId | default "") "control-plane" -}}
 {{- $invitationEmailHmac := .Values.global.invitationEmailHmac | default dict -}}
 {{- $invitationEmailHmacSecret := dig "secretName" "in-falcone-invitation-email-hmac" $invitationEmailHmac -}}
+{{- $isFlowTokenConsumer := has (.Values.wrapper.componentId | default "") (list "control-plane-executor" "workflow-worker") -}}
+{{- $flowExecutionToken := .Values.global.flowExecutionToken | default dict -}}
+{{- $flowExecutionTokenSecret := dig "secretName" "in-falcone-flow-execution-token" $flowExecutionToken -}}
 {{- $functionInvocation := default (dict) .Values.global.functionInvocation -}}
 {{- $functionInvocationSecret := $functionInvocation.secretName | default "in-falcone-function-invocation" -}}
 {{- $functionInvocationVolume := "falcone-function-invocation" -}}
@@ -346,8 +349,18 @@ spec:
           ports:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer }}
+          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer $isFlowTokenConsumer }}
           env:
+            {{- if $isFlowTokenConsumer }}
+            {{- /* Managed ESO creates the Secret after Helm --wait. Production
+                   minting/validation fails closed until a rollout reloads it. */}}
+            - name: FLOW_EXECUTION_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $flowExecutionTokenSecret | quote }}
+                  key: FLOW_EXECUTION_TOKEN_SECRET
+                  optional: true
+            {{- end }}
             {{- if $isFunctionSigner }}
             {{- /* Managed ESO creates this Secret in post hooks, after Helm
                    --wait. Let the container start without it; invitation routes
