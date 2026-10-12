@@ -194,10 +194,20 @@ test('fresh install writes platform policy while routine reconciler retains no p
   assert.ok(policiesVolume, 'fresh install must project openbao-policy-platform')
   const policiesMount = init.volumeMounts?.find((mount) => mount.name === policiesVolume.name)
   assert.ok(policiesMount?.readOnly, 'fresh-install policy projection must be read-only')
-  assert.match(initScript, /for policy in init platform tenant functions gateway iam auth-reconcile function-invocation; do/)
+  assert.match(initScript, /for policy in init platform tenant functions gateway iam auth-reconcile function-invocation flow-execution-token; do/)
   assert.ok(policiesVolume.projected.sources.some(
     (source) => source.configMap?.name === 'openbao-policy-function-invocation',
   ), 'fresh install must also project the dedicated signer policy')
+  assert.deepEqual(
+    policiesVolume.projected.sources.find(
+      (source) => source.configMap?.name === 'openbao-policy-flow-execution-token',
+    ),
+    {configMap: {
+      name: 'openbao-policy-flow-execution-token',
+      items: [{key: 'policy.hcl', path: 'flow-execution-token.hcl'}],
+    }},
+    'fresh install must project the flow execution-token ACL at its bootstrap policy path',
+  )
   assert.match(initScript, /bao policy write "\$policy" "\/config\/policies\/\$\{policy\}\.hcl"/)
   assert.ok(
     initScript.indexOf('bao policy write "$policy"') <

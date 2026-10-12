@@ -113,6 +113,8 @@ jobs:
         run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs
       - name: Validate invitation HMAC OpenBao and ESO delivery
         run: node --test tests/invitation-hmac-chart.test.mjs
+      - name: Validate shared flow execution-token OpenBao and ESO delivery
+        run: node --test tests/flows-execution-token-chart.test.mjs
       - name: Validate function isolation and invocation signer delivery
         run: |
           node --test tests/function-invocation-secret-delivery.test.mjs tests/function-invocation-bootstrap.test.mjs

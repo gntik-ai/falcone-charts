@@ -48,6 +48,14 @@ global:
   invitationEmailHmac:
     secretName: in-falcone-invitation-email-hmac
     remoteKey: iam/invitation-email-hmac
+  # References only. Provision at least 32 random UTF-8 bytes in OpenBao at
+  # this record's `secret` property before rolling out fail-closed flow images.
+  # Optional startup references let managed ESO post hooks run under --wait;
+  # production flow starts/activities fail closed until both workloads reload
+  # the shared Secret. See docs/flow-execution-token-secret.md.
+  flowExecutionToken:
+    secretName: in-falcone-flow-execution-token
+    remoteKey: flows/execution-token-secret
   # One immutable SeaweedFS image contract is inherited by the vendored
   # data-plane workloads and by control-plane-created IAM Jobs.
   seaweedfs:

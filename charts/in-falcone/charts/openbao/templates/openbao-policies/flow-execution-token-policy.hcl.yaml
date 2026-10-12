@@ -1,0 +1,11 @@
+{{- $flow := .Values.global.flowExecutionToken | default dict -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-policy-flow-execution-token
+  namespace: {{ .Values.openbao.namespace }}
+data:
+  policy.hcl: |
+    path "secret/data/{{ dig "remoteKey" "flows/execution-token-secret" $flow }}" {
+      capabilities = ["read"]
+    }

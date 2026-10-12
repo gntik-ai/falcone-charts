@@ -73,6 +73,48 @@
   {{- end -}}
 {{- end -}}
 {{- $components := list "apisix" "keycloak" "postgresql" "postgresqlVector" "documentdb" "ferretdb" "kafka" "observability" "controlPlane" "controlPlaneExecutor" "webConsole" "workflowWorker" -}}
+{{- $flow := dict -}}
+{{- if hasKey .Values.global "flowExecutionToken" -}}
+  {{- $flow = .Values.global.flowExecutionToken -}}
+{{- end -}}
+{{- if not (kindIs "map" $flow) -}}
+  {{- fail "global.flowExecutionToken accepts OpenBao/ESO references only" -}}
+{{- end -}}
+{{- range $key, $_ := $flow -}}
+  {{- if not (has $key (list "secretName" "remoteKey")) -}}
+    {{- fail "global.flowExecutionToken accepts OpenBao/ESO references only, never key material" -}}
+  {{- end -}}
+{{- end -}}
+{{- $flowSecretName := dig "secretName" "in-falcone-flow-execution-token" $flow -}}
+{{- if not (kindIs "string" $flowSecretName) -}}
+  {{- fail "global.flowExecutionToken.secretName must be a nonempty DNS subdomain name" -}}
+{{- end -}}
+{{- if or (gt (len $flowSecretName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $flowSecretName)) -}}
+  {{- fail "global.flowExecutionToken.secretName must be a nonempty DNS subdomain name" -}}
+{{- end -}}
+{{- $flowRemoteKey := dig "remoteKey" "flows/execution-token-secret" $flow -}}
+{{- if not (kindIs "string" $flowRemoteKey) -}}
+  {{- fail "global.flowExecutionToken.remoteKey must reference the execution-token OpenBao record" -}}
+{{- end -}}
+{{- if not (regexMatch "^flows/execution-token-secret(/[a-zA-Z0-9_-]+)*$" $flowRemoteKey) -}}
+  {{- fail "global.flowExecutionToken.remoteKey must reference the execution-token OpenBao record" -}}
+{{- end -}}
+{{- range $componentName := $components -}}
+  {{- $component := index $.Values $componentName | default dict -}}
+  {{- range $entry := ($component.env | default list) -}}
+    {{- if eq ($entry.name | default "") "FLOW_EXECUTION_TOKEN_SECRET" -}}
+      {{- fail "component env must not override reserved FLOW_EXECUTION_TOKEN_SECRET; configure global.flowExecutionToken references only" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if hasKey (dig "config" "inline" dict $component) "FLOW_EXECUTION_TOKEN_SECRET" -}}
+    {{- fail "component config.inline must not define reserved FLOW_EXECUTION_TOKEN_SECRET; configure global.flowExecutionToken references only" -}}
+  {{- end -}}
+{{- end -}}
+{{- range $entry := (dig "transportSecurity" "env" list .Values.global) -}}
+  {{- if eq ($entry.name | default "") "FLOW_EXECUTION_TOKEN_SECRET" -}}
+    {{- fail "global.transportSecurity.env must not define reserved FLOW_EXECUTION_TOKEN_SECRET; configure global.flowExecutionToken references only" -}}
+  {{- end -}}
+{{- end -}}
 {{- $invitation := dict -}}
 {{- if hasKey .Values.global "invitationEmailHmac" -}}
   {{- $invitation = .Values.global.invitationEmailHmac -}}

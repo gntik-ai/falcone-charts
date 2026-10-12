@@ -2402,6 +2402,28 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     `public post-renderer must capture the coalesced manifest:\n${exactDefault.stdout}${exactDefault.stderr}${exactDefault.serverError}`,
   );
   const exactDocuments = parseRenderedDocuments(exactDefault.renderedOutput);
+  // #976: stored releases must acquire the shared ESO reference even when
+  // their saved globals have no flowExecutionToken configuration.
+  assert.equal(historical.global.flowExecutionToken, undefined);
+  const flowExternal = exactDocuments.find((document) => document.kind === 'ExternalSecret'
+    && document.metadata.name === 'flows-execution-token');
+  assert.ok(flowExternal, 'reuse-values must deliver the execution-token OpenBao record');
+  assert.equal(flowExternal.spec.target.name, 'in-falcone-flow-execution-token');
+  assert.deepEqual(flowExternal.spec.data, [{ secretKey: 'FLOW_EXECUTION_TOKEN_SECRET',
+    remoteRef: { key: 'flows/execution-token-secret', property: 'secret' } }]);
+  for (const component of ['control-plane-executor', 'workflow-worker']) {
+    const deployment = exactDocuments.find((document) => document.kind === 'Deployment'
+      && document.spec.template.spec.containers.some((container) => container.name === component));
+    assert.ok(deployment, `${component} must survive reuse-values`);
+    const container = deployment.spec.template.spec.containers.find((item) => item.name === component);
+    assert.deepEqual(container.env.filter((entry) => entry.name === 'FLOW_EXECUTION_TOKEN_SECRET'),
+      [{ name: 'FLOW_EXECUTION_TOKEN_SECRET', valueFrom: { secretKeyRef: {
+        name: 'in-falcone-flow-execution-token', key: 'FLOW_EXECUTION_TOKEN_SECRET', optional: true,
+      } } }]);
+  }
+  assert.ok(exactDocuments.some((document) => document.kind === 'Job'
+    && document.metadata.name === 'flows-execution-token-ready'),
+  'reuse-values must retain the mandatory ESO readiness gate');
   // #982: stored releases predate the scrape limits; reuse-values must retain
   // the bounded defaults on all three Falcone jobs without changing targets.
   assert.equal(historical.observability.scrapeLimits, undefined);

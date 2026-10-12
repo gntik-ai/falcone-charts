@@ -229,6 +229,23 @@
             }
           }
         },
+        "flowExecutionToken": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Shared OpenBao/ESO execution-token references only; never signing material.",
+          "properties": {
+            "secretName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+            },
+            "remoteKey": {
+              "type": "string",
+              "pattern": "^flows/execution-token-secret(/[a-zA-Z0-9_-]+)*$"
+            }
+          }
+        },
         "invitationEmailHmac": {
           "type": "object",
           "additionalProperties": false,

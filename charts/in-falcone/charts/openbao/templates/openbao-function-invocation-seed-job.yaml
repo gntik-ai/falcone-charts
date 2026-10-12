@@ -45,6 +45,8 @@ spec:
                   echo "Function signer bootstrap authentication failed" >&2; exit 1; }
               [ -n "$BAO_TOKEN" ] || exit 1
               export BAO_TOKEN
+              # #976: publish only the ESO read policy, never seed token key material.
+              bao policy write flow-execution-token /flow-token-policy/flow-execution-token.hcl >/dev/null
               {{- include "openbao.functionInvocation.seed" . | nindent 14 }}
           volumeMounts:
             - name: tls
@@ -52,7 +54,16 @@ spec:
               readOnly: true
             - name: function-invocation
               mountPath: /function-invocation
+            - name: flow-token-policy
+              mountPath: /flow-token-policy
+              readOnly: true
       volumes:
+        - name: flow-token-policy
+          configMap:
+            name: openbao-policy-flow-execution-token
+            items:
+              - key: policy.hcl
+                path: flow-execution-token.hcl
         - name: tls
           secret:
             secretName: {{ .Values.openbao.tls.secretName }}
