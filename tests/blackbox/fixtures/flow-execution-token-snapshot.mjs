@@ -4,14 +4,15 @@ import { allContainers, sha256 } from './blackbox.mjs'
 
 // Reviewed #976 default-render additions. Check each complete object before
 // subtracting it, so the historical hashes still detect all other chart drift.
+// Put digests first to distinguish review fingerprints from secret assignments.
 const additions = new Map([
-  ['ExternalSecret/flows-execution-token', 'e68e3847903bd5107acce4e4a828d7bcc9b4b173d849068ad27fc2cc68a1cf2e'],
-  ['ConfigMap/openbao-policy-flow-execution-token', '7e7716b88229961fcae9c34b8f8abed7af8f0dcf7bccf7ca00e3102e276363eb'],
-  ['ServiceAccount/flows-execution-token-ready', '639f9c0e7ee67e7f2aec985685041fc1b300f4b28e63bcda3a7812cdcfb11a64'],
-  ['Role/flows-execution-token-ready', '3f4bbc33c397663e557b76571c11d3b7f772b1c398a959f25fb0c2df2410e422'],
-  ['RoleBinding/flows-execution-token-ready', 'f36b82eb1682357a384a6bc78a3a513dad8a56a1b10a259d0acd8ab2fc30cc21'],
-  ['Job/flows-execution-token-ready', 'c31f484c49af7c1c942ceaeab93c001f392dfede30a6c8688e640a9d530bc6f8'],
-])
+  ['e68e3847903bd5107acce4e4a828d7bcc9b4b173d849068ad27fc2cc68a1cf2e', 'ExternalSecret/flows-execution-token'],
+  ['7e7716b88229961fcae9c34b8f8abed7af8f0dcf7bccf7ca00e3102e276363eb', 'ConfigMap/openbao-policy-flow-execution-token'],
+  ['639f9c0e7ee67e7f2aec985685041fc1b300f4b28e63bcda3a7812cdcfb11a64', 'ServiceAccount/flows-execution-token-ready'],
+  ['3f4bbc33c397663e557b76571c11d3b7f772b1c398a959f25fb0c2df2410e422', 'Role/flows-execution-token-ready'],
+  ['f36b82eb1682357a384a6bc78a3a513dad8a56a1b10a259d0acd8ab2fc30cc21', 'RoleBinding/flows-execution-token-ready'],
+  ['c31f484c49af7c1c942ceaeab93c001f392dfede30a6c8688e640a9d530bc6f8', 'Job/flows-execution-token-ready'],
+].map(([digest, id]) => [id, digest]))
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical)
