@@ -471,7 +471,35 @@ class Offline(unittest.TestCase):
                     return [item for item in objects if item["kind"] == "ApisixRoute"
                             or (item["kind"] == "ConfigMap"
                                 and item["metadata"]["name"].endswith("-gateway-policy"))]
-                self.assertTrue(gateway(before) == gateway(after), "gateway verifier must remain unchanged")
+                old_gateway = gateway(before)
+                new_gateway = copy.deepcopy(gateway(after))
+                old_config = next(item for item in old_gateway if item["kind"] == "ConfigMap")
+                new_config = next(item for item in new_gateway if item["kind"] == "ConfigMap")
+                # #1087 adds only this reviewed family policy and narrows the SSE
+                # route metadata. Validate that delta before comparing all other
+                # gateway configuration against the immutable historical render.
+                old_policy = json.loads(old_config["data"]["gateway-policy.json"])
+                new_policy = json.loads(new_config["data"]["gateway-policy.json"])
+                self.assertNotIn("realtime-changes", old_policy["familyPolicies"])
+                self.assertEqual(new_policy["familyPolicies"].pop("realtime-changes"), {
+                    "planCapabilityAnyOf": ["data.openwhisk.actions"],
+                    "qosProfile": "realtime",
+                    "requestValidationProfile": "realtime",
+                    "tenantBinding": "required",
+                    "workspaceBinding": "required",
+                })
+                self.assertTrue(old_policy == new_policy, "existing gateway policies must remain unchanged")
+                expected_routes = json.loads(old_config["data"]["enabled-apisix-routes.json"])
+                for route in expected_routes:
+                    if route["routeId"] == "2016-rt":
+                        self.assertEqual(route, {
+                            "name": "public-api-realtime-changes", "routeId": "2016-rt", "uri": "/v1/realtime/*",
+                        })
+                        route["uri"] = "/v1/realtime/workspaces/*"
+                self.assertEqual(json.loads(new_config["data"]["enabled-apisix-routes.json"]), expected_routes)
+                for key in ("gateway-policy.json", "enabled-apisix-routes.json"):
+                    new_config["data"][key] = old_config["data"][key]
+                self.assertTrue(old_gateway == new_gateway, "gateway verifier must remain unchanged")
                 old_control = select(before, "Deployment", RELEASE + "-control-plane")
                 new_control = copy.deepcopy(select(after, "Deployment", RELEASE + "-control-plane"))
                 old_container = next(item for item in old_control["spec"]["template"]["spec"]["containers"]

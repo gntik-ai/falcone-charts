@@ -20,6 +20,10 @@
   at historical archive extraction: `tar` reports `Function not implemented`.
 - [x] Rerun the paired source gateway-policy validator using a temporary sibling
   chart layout and the existing tooling YAML package.
+- [x] Reproduce the executor-env-upgrade TLS gateway comparison failure. Validate
+  only the exact reviewed family policy and enabled-route URI delta before
+  comparing the remaining gateway configuration with the immutable baseline.
+  The offline upgrade suite passes; the live matrix requires PR CI's kind cluster.
 - [ ] Hermes: converge the paired source workflow chart pins to the final charts
   commit, then rerun Mongo gateway parity in PR CI.
 - [ ] Release verification: confirm access-log query-key redaction and paired
