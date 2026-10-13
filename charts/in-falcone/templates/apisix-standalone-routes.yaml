@@ -6,6 +6,48 @@
 {{- if not $original }}{{- fail "standalone route 2006 verifier configuration is missing" -}}{{- end -}}
 {{- $configured := printf "      issuer-jwks-auth:\n        issuer_base_url: %q\n        jwks_base_url: %q\n        platform_realm: %q\n        audience: %q\n        tenant_audience: %q\n        enforce_tenant_audience: %v\n        cache_ttl: %v\n        cache_max_entries: %v\n        timeout: %v\n" $verifier.issuer_base_url $verifier.jwks_base_url $verifier.platform_realm $verifier.audience $verifier.tenant_audience $verifier.enforce_tenant_audience $verifier.cache_ttl $verifier.cache_max_entries $verifier.timeout -}}
 {{- $routes = replace $original $configured $routes -}}
+{{- /* Install the same rendered SSE policies in standalone mode. Preserve the
+      canonical kind snapshot and every unrelated route, including captures. */ -}}
+{{- $legacySse := regexFind "(?m)^  - id: \"2016-rt\"\n(?:    [^\n]*\n|\n)+" $routes -}}
+{{- if not $legacySse }}{{- fail "standalone legacy SSE route is missing" -}}{{- end -}}
+{{- /* Standalone routes must also render when an overlay replaces the bootstrap
+      array (the kind profile uses a disabled placeholder). Supply defaults only
+      in this rendering context, preserving configured SSE routes and the actual
+      bootstrap inventory. */ -}}
+{{- $standaloneValues := deepCopy .Values -}}
+{{- $effectiveRoutes := include "in-falcone.effectiveApisixRoutes" . | fromJsonArray -}}
+{{- $configuredNames := list -}}
+{{- range $effectiveRoutes -}}
+{{- $configuredNames = append $configuredNames .name -}}
+{{- end -}}
+{{- $defaults := .Files.Get "files/apisix/realtime-sse-defaults.yaml" | fromYaml -}}
+{{- range $defaults.routes -}}
+{{- if not (has .name $configuredNames) -}}
+{{- $effectiveRoutes = append $effectiveRoutes . -}}
+{{- end -}}
+{{- end -}}
+{{- /* Keep explicitly disabled streams out of standalone too. The shared
+      payload renderer excludes routes not enabled in the active mode. */ -}}
+{{- $enabledSseNames := list -}}
+{{- $mode := .Values.gatewayPolicy.passthrough.mode -}}
+{{- range $effectiveRoutes -}}
+{{- if or (not (hasKey . "enabledInModes")) (has $mode .enabledInModes) -}}
+{{- $enabledSseNames = append $enabledSseNames .name -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $standaloneValues.bootstrap.reconcile.apisix "routes" $effectiveRoutes -}}
+{{- $context := set (omit . "Values") "Values" $standaloneValues -}}
+{{- $payload := include "in-falcone/templates/bootstrap-payload-configmap.yaml" $context | fromYaml -}}
+{{- $sseRoutes := "" -}}
+{{- range $name := list "public-api-realtime-collection-changes" "public-api-realtime-table-changes" -}}
+{{- if has $name $enabledSseNames -}}
+{{- $route := index $payload.data (printf "route-%s.json" $name) | default "{}" | fromJson -}}
+{{- if not $route.name }}{{- fail (printf "standalone SSE route %s is missing" $name) -}}{{- end -}}
+{{- $_ := set $route "id" $name -}}
+{{- $sseRoutes = printf "%s%s\n" $sseRoutes (toYaml (list $route) | indent 2) -}}
+{{- end -}}
+{{- end -}}
+{{- $routes = replace $legacySse $sseRoutes $routes -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

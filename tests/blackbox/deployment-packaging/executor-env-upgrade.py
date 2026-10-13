@@ -481,7 +481,7 @@ class Offline(unittest.TestCase):
                         self.assertTrue(old == new, "gateway verifier must remain unchanged")
                         continue
                     # Later issues may add policy families and narrow route URIs; the verifier,
-                    # every pre-upgrade family and every pre-upgrade route must stay.
+                    # every pre-upgrade family and every unrelated route must stay.
                     old_policy = json.loads(old["data"]["gateway-policy.json"])
                     new_policy = json.loads(new["data"]["gateway-policy.json"])
                     old_families = old_policy.pop("familyPolicies")
@@ -493,7 +493,15 @@ class Offline(unittest.TestCase):
                     def route_ids(item):
                         return {(route["name"], route["routeId"])
                                 for route in json.loads(item["data"]["enabled-apisix-routes.json"])}
-                    self.assertTrue(route_ids(old) <= route_ids(new), "enabled gateway routes must remain")
+                    old_ids, new_ids = route_ids(old), route_ids(new)
+                    legacy_sse = ("public-api-realtime-changes", "2016-rt")
+                    if legacy_sse in old_ids:
+                        self.assertNotIn(legacy_sse, new_ids, "the unbounded SSE route must be retired")
+                        self.assertTrue({
+                            ("public-api-realtime-collection-changes", "public-api-realtime-collection-changes"),
+                            ("public-api-realtime-table-changes", "public-api-realtime-table-changes"),
+                        } <= new_ids, "both bounded SSE replacements must remain enabled")
+                    self.assertTrue(old_ids - {legacy_sse} <= new_ids, "unrelated enabled gateway routes must remain")
                     self.assertTrue(set(old["data"]) == set(new["data"]), "gateway policy keys must remain")
                 old_control = select(before, "Deployment", RELEASE + "-control-plane")
                 new_control = copy.deepcopy(select(after, "Deployment", RELEASE + "-control-plane"))

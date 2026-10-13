@@ -7,6 +7,12 @@ import { imageReferences, render, umbrellaChart, repoRoot, run, sha256, yamlDocu
 
 const overlayImage = 'docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0'
 
+// #1087 replaces only the legacy SSE route. Its complete policy is exercised
+// by realtime-sse-route-chart.test.mjs; retain every other route comparison.
+const withoutRealtimeStreams = (routes) => routes.filter((entry) => ![
+  '2016-rt', 'public-api-realtime-collection-changes', 'public-api-realtime-table-changes',
+].includes(String(entry.id)))
+
 function renderedGateway(overlay = []) {
   const { objects } = render(umbrellaChart, overlay)
   return objects.find((object) => object.kind === 'Deployment' && /-apisix$/.test(object.metadata.name))
@@ -269,7 +275,7 @@ test('staging standalone, bootstrap and executor use every configured verifier s
   assert.equal(policyVerifier.jwksBaseUrl, verifier.jwks_base_url)
 
   const canonical = yamlDocuments(readFileSync(resolve(umbrellaChart, 'files/apisix/standalone/apisix.yaml'), 'utf8'))[0]
-  const withoutBearerRoute = (routes) => routes.filter((entry) => !['2006', '2005-data'].includes(String(entry.id)))
+  const withoutBearerRoute = (routes) => withoutRealtimeStreams(routes).filter((entry) => !['2006', '2005-data'].includes(String(entry.id)))
   assert.deepEqual(withoutBearerRoute(standalone.routes), withoutBearerRoute(canonical.routes.map((entry) =>
     JSON.parse(JSON.stringify(entry).replaceAll('.falcone.svc.cluster.local', '.falcone-bbx.svc.cluster.local')))))
 })
@@ -335,7 +341,7 @@ test('pre-verifier values resolve enforced defaults from the stored OIDC issuer'
   assert.equal(env.KEYCLOAK_ENFORCE_TENANT_AUDIENCE, 'true')
 })
 
-test('staging standalone routes preserve the recorded pre-980 routes except reviewed Mongo, Postgres and Keycloak repairs', () => {
+test('staging standalone routes preserve the recorded pre-980 routes except reviewed Mongo, Postgres, Keycloak and SSE repairs', () => {
   const renderedStaging = run('helm', [
     'template', 'falcone', umbrellaChart, '--namespace', 'in-falcone-staging',
     '-f', `${umbrellaChart}/values/staging.yaml`,
@@ -381,7 +387,10 @@ test('staging standalone routes preserve the recorded pre-980 routes except revi
     .replace(oldIdentity, rootIdentity)
     .replace('  - id: "2006"\n', current.match(/^  - id: "2005-data"\n[\s\S]*?(?=^  - id: "2006"\n)/m)[0] + '  - id: "2006"\n')
   assert.notEqual(route2006(baseline), route2006(current), 'route 2006 must change')
-  assert.equal(config.data['apisix.yaml'].trim(), expected.trim())
+  assert.deepEqual(
+    withoutRealtimeStreams(yamlDocuments(config.data['apisix.yaml'])[0].routes),
+    withoutRealtimeStreams(yamlDocuments(expected)[0].routes),
+  )
   assert.doesNotMatch(config.data['apisix.yaml'], /llmwiki-s2-mongo-jwt/)
   assert.match(config.data['apisix.yaml'], /falcone-control-plane-executor\.in-falcone-staging\.svc\.cluster\.local:8080/)
 })
