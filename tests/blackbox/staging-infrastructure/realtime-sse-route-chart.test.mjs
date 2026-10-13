@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { render, repoRoot, umbrellaChart, yamlDocuments } from '../fixtures/blackbox.mjs'
+import { readYaml, render, repoRoot, umbrellaChart, yamlDocuments } from '../fixtures/blackbox.mjs'
 
 const streams = [
   ['public-api-realtime-collection-changes', '/v1/realtime/workspaces/ws1/data/appdb/collections/notes/changes'],
@@ -87,6 +87,27 @@ test('kind standalone installs bounded streams when the bootstrap route list is 
   assertStreams(yamlDocuments(config.data['apisix.yaml'])[0].routes)
   assert.equal(objects.some((object) => streams.some(([name]) => object.data?.[`route-${name}.json`])), false,
     'standalone defaults must not add routes to the operator bootstrap list')
+})
+
+test('standalone respects the stream kill switch in the active gateway mode', () => {
+  const configured = readYaml(`${umbrellaChart}/values.yaml`).bootstrap.reconcile.apisix.routes
+  const disabled = streams[0][0]
+  const routes = configured.map((route) => route.name === disabled
+    ? { ...route, enabledInModes: [] } : route)
+  const { objects } = render(umbrellaChart, ['-f', `${umbrellaChart}/values/staging.yaml`,
+    '--set-json', `bootstrap.reconcile.apisix.routes=${JSON.stringify(routes)}`])
+  const config = objects.find((object) => object.kind === 'ConfigMap' && object.metadata.name === 'falcone-apisix-standalone')
+  const standalone = yamlDocuments(config.data['apisix.yaml'])[0].routes
+  for (const inventory of [bootstrapRoutes(objects), standalone]) {
+    assert.equal(inventory.some((route) => route.name === disabled), false,
+      'the disabled collection stream must not be installed')
+    assert.equal(inventory.filter((route) => route.name === streams[1][0]).length, 1,
+      'the table stream must remain installed')
+    for (const uri of ['/v1/realtime/workspaces/{workspaceId}/mongo-captures/*',
+      '/v1/workspaces/{workspaceId}/pg-captures/*']) {
+      assert.ok(inventory.some((route) => route.uri === uri), `${uri} must remain installed`)
+    }
+  }
 })
 
 test('stored legacy SSE values migrate to both bounded routes without new values keys', () => {

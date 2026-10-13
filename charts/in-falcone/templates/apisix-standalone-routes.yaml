@@ -26,15 +26,26 @@
 {{- $effectiveRoutes = append $effectiveRoutes . -}}
 {{- end -}}
 {{- end -}}
+{{- /* Keep explicitly disabled streams out of standalone too. The shared
+      payload renderer excludes routes not enabled in the active mode. */ -}}
+{{- $enabledSseNames := list -}}
+{{- $mode := .Values.gatewayPolicy.passthrough.mode -}}
+{{- range $effectiveRoutes -}}
+{{- if or (not (hasKey . "enabledInModes")) (has $mode .enabledInModes) -}}
+{{- $enabledSseNames = append $enabledSseNames .name -}}
+{{- end -}}
+{{- end -}}
 {{- $_ := set $standaloneValues.bootstrap.reconcile.apisix "routes" $effectiveRoutes -}}
 {{- $context := set (omit . "Values") "Values" $standaloneValues -}}
 {{- $payload := include "in-falcone/templates/bootstrap-payload-configmap.yaml" $context | fromYaml -}}
 {{- $sseRoutes := "" -}}
 {{- range $name := list "public-api-realtime-collection-changes" "public-api-realtime-table-changes" -}}
+{{- if has $name $enabledSseNames -}}
 {{- $route := index $payload.data (printf "route-%s.json" $name) | default "{}" | fromJson -}}
 {{- if not $route.name }}{{- fail (printf "standalone SSE route %s is missing" $name) -}}{{- end -}}
 {{- $_ := set $route "id" $name -}}
 {{- $sseRoutes = printf "%s%s\n" $sseRoutes (toYaml (list $route) | indent 2) -}}
+{{- end -}}
 {{- end -}}
 {{- $routes = replace $legacySse $sseRoutes $routes -}}
 apiVersion: v1
