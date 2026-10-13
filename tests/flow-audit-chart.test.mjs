@@ -1,3 +1,4 @@
+import { withPriorRealtimeSse } from './blackbox/fixtures/realtime-sse-snapshot.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -76,9 +77,9 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   if (Object.keys(priorObservability.spec.template.metadata.annotations).length === 0) {
     delete priorObservability.spec.template.metadata.annotations
   }
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(priorObjects)))))))))), priorBaseline)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(priorObjects))))))))))), priorBaseline)
   const expected = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/umbrella-default-render.sha256'), 'utf8').trim()
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(objects)))))))))), expected)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(objects))))))))))), expected)
 
   const topic = added.find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
   assert.equal(topic.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC').value,

@@ -1617,27 +1617,28 @@ bootstrap:
             port: 8080
             dataPlane: true
             requiresExecutor: true
-        # ---- Realtime change stream (SSE) → executor (OPT-IN). Read-only; a browser
-        #      EventSource cannot set headers, so the anon key arrives as ?apikey= and the
-        #      executor verifies it. Long upstream timeout (upstream.sse) keeps the stream open. ----
-        - routeId: "2016-rt"
-          name: public-api-realtime-changes
+        # EventSource authentication stays in the executor. Only these two anchored
+        # paths use the query_api_key_sse policy exception; cors terminates OPTIONS.
+        - routeId: public-api-realtime-collection-changes
+          name: public-api-realtime-collection-changes
           uri: /v1/realtime/*
-          methods: ["GET", "OPTIONS"]
+          methods:
+          - GET
+          - OPTIONS
           priority: 340
           vars:
-            # matches both Mongo (collections/{c}/changes) and Postgres (tables/{t}/changes)
-            - ["uri", "~~", "/changes$"]
-          labels:
-            gateway.in-falcone.io/route-kind: product_api_apikey
-            gateway.in-falcone.io/family: realtime
-            gateway.in-falcone.io/tenant-binding: api-key
-            gateway.in-falcone.io/workspace-binding: api-key
-            gateway.in-falcone.io/plan-capabilities: ""
-            gateway.in-falcone.io/audit-required: "false"
+          - - uri
+            - ~~
+            - ^/v1/realtime/workspaces/[^/]+/data/[^/]+/collections/[^/]+/changes$
+          authMode: query_api_key_sse
+          accessLog:
+            omitQueryString: true
+            redactQueryParameters:
+            - apikey
+            format: '{"method":"$request_method","path":"$uri","status":$status}'
           plugins:
-            cors: *a1
-            # Per-key rate limit (anon key may be header or ?apikey=).
+            cors:
+              allow_methods: GET,OPTIONS
             limit-count:
               count: 120
               time_window: 60
@@ -1645,6 +1646,79 @@ bootstrap:
               key_type: var_combination
               key: $http_apikey$arg_apikey
               allow_degradation: false
+            client-control:
+              max_body_size: 1024
+            request-validation:
+              header_schema:
+                type: object
+            proxy-rewrite:
+              headers:
+                set: &realtimeSseHeaders
+                  x-auth-subject: ''
+                  x-actor-username: ''
+                  x-tenant-id: ''
+                  x-workspace-id: ''
+                  x-plan-id: ''
+                  x-auth-scopes: ''
+                  x-actor-roles: ''
+                  x-gateway-auth: ${{GATEWAY_SHARED_SECRET}}
+          labels:
+            gateway.in-falcone.io/route-kind: product_api_apikey
+            gateway.in-falcone.io/family: realtime
+            gateway.in-falcone.io/auth-mode: query_api_key_sse
+            gateway.in-falcone.io/tenant-binding: api-key
+            gateway.in-falcone.io/workspace-binding: api-key
+            gateway.in-falcone.io/plan-capabilities: ''
+            gateway.in-falcone.io/audit-required: 'false'
+          upstream:
+            component: controlPlane
+            port: 8080
+            dataPlane: true
+            requiresExecutor: true
+            sse: true
+        - routeId: public-api-realtime-table-changes
+          name: public-api-realtime-table-changes
+          uri: /v1/realtime/*
+          methods:
+          - GET
+          - OPTIONS
+          priority: 340
+          vars:
+          - - uri
+            - ~~
+            - ^/v1/realtime/workspaces/[^/]+/data/[^/]+/schemas/[^/]+/tables/[^/]+/changes$
+          authMode: query_api_key_sse
+          accessLog:
+            omitQueryString: true
+            redactQueryParameters:
+            - apikey
+            format: '{"method":"$request_method","path":"$uri","status":$status}'
+          plugins:
+            cors:
+              allow_methods: GET,OPTIONS
+            limit-count:
+              count: 120
+              time_window: 60
+              rejected_code: 429
+              key_type: var_combination
+              key: $http_apikey$arg_apikey
+              allow_degradation: false
+            client-control:
+              max_body_size: 1024
+            request-validation:
+              header_schema:
+                type: object
+            proxy-rewrite:
+              headers:
+                set: *realtimeSseHeaders
+          labels:
+            gateway.in-falcone.io/route-kind: product_api_apikey
+            gateway.in-falcone.io/family: realtime
+            gateway.in-falcone.io/auth-mode: query_api_key_sse
+            gateway.in-falcone.io/tenant-binding: api-key
+            gateway.in-falcone.io/workspace-binding: api-key
+            gateway.in-falcone.io/plan-capabilities: ''
+            gateway.in-falcone.io/audit-required: 'false'
           upstream:
             component: controlPlane
             port: 8080

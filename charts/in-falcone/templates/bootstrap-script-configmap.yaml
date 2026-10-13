@@ -589,7 +589,7 @@ data:
       log "APISIX_STAND_ALONE=true; skipping APISIX admin-API route reconciliation (standalone serves routes from mounted config)"
 {{- else }}
 {{- $mode := .Values.gatewayPolicy.passthrough.mode }}
-{{- range .Values.bootstrap.reconcile.apisix.routes }}
+{{- range (include "in-falcone.effectiveApisixRoutes" . | fromJsonArray) }}
 {{- if or (not (hasKey . "enabledInModes")) (has $mode .enabledInModes) }}
       ensure_apisix_route "{{ .routeId }}" "$PAYLOAD_DIR/route-{{ .routeId }}.json"
 {{- end }}
