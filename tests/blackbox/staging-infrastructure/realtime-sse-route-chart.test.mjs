@@ -101,3 +101,30 @@ test('stored legacy SSE values migrate to both bounded routes without new values
     && object.data?.['enabled-apisix-routes.json']).data['enabled-apisix-routes.json'])
   assert.deepEqual(inventory.map((route) => route.name), streams.map(([name]) => name))
 })
+
+test('admin-API upgrades remove the installed legacy catch-all before publishing bounded streams', () => {
+  const { objects } = render(umbrellaChart, ['--set', 'apisix.config.inline.APISIX_STAND_ALONE=false'])
+  const script = objects.find((object) => object.kind === 'ConfigMap' && object.data?.['bootstrap.sh']).data['bootstrap.sh']
+  const removal = script.match(/curl[^\n]*\\\n(?:[^\n]*\\\n)*[^\n]*/g)
+    .find((command) => command.includes('-X DELETE') && command.includes('"$APISIX_ADMIN_URL/apisix/admin/routes/2016-rt"'))
+  assert.ok(removal, 'upgrades must delete the previously installed unanchored route from APISIX')
+  for (const [name] of streams) {
+    assert.ok(script.indexOf(removal) < script.indexOf(`"$PAYLOAD_DIR/route-${name}.json"`),
+      'the catch-all must be removed before the replacement routes are installed')
+  }
+  const standalone = render(umbrellaChart).objects
+    .find((object) => object.kind === 'ConfigMap' && object.data?.['bootstrap.sh']).data['bootstrap.sh']
+  assert.equal(standalone.includes('-X DELETE'), false, 'standalone bootstrap must not call the admin API')
+})
+
+test('admin-API cleanup preserves an explicitly configured route using the legacy ID', () => {
+  const configured = [{ routeId: '2016-rt', name: 'custom-realtime-route',
+    uri: '/custom-realtime', methods: ['GET'], priority: 340, plugins: {},
+    upstream: { component: 'controlPlane', port: 8080, dataPlane: true, requiresExecutor: true },
+  }]
+  const { objects } = render(umbrellaChart, ['--set', 'apisix.config.inline.APISIX_STAND_ALONE=false',
+    '--set-json', `bootstrap.reconcile.apisix.routes=${JSON.stringify(configured)}`])
+  const script = objects.find((object) => object.kind === 'ConfigMap' && object.data?.['bootstrap.sh']).data['bootstrap.sh']
+  assert.equal(script.includes('-X DELETE'), false, 'an explicitly configured legacy ID must not be deleted')
+  assert.ok(script.includes('"$PAYLOAD_DIR/route-2016-rt.json"'))
+})

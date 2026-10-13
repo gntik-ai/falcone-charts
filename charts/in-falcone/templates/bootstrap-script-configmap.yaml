@@ -588,8 +588,30 @@ data:
       # reconciliation entirely in standalone mode — emit zero admin-API calls.
       log "APISIX_STAND_ALONE=true; skipping APISIX admin-API route reconciliation (standalone serves routes from mounted config)"
 {{- else }}
+{{- $routes := include "in-falcone.effectiveApisixRoutes" . | fromJsonArray }}
+{{- $legacySseConfigured := false }}
+{{- range $routes }}
+{{- if eq .routeId "2016-rt" }}{{- $legacySseConfigured = true }}{{- end }}
+{{- end }}
+{{- if not $legacySseConfigured }}
+      # Route IDs changed in #1087. Updating the new IDs does not remove the
+      # previously installed unanchored catch-all from the APISIX admin store.
+      # Remove only that chart-owned ID, and stop if cleanup cannot be confirmed.
+      local legacy_sse_status
+      if ! legacy_sse_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+        -X DELETE \
+        -H "X-API-KEY: ${BOOTSTRAP_APISIX_ADMIN_KEY}" \
+        "$APISIX_ADMIN_URL/apisix/admin/routes/2016-rt")"; then
+        echo '[bootstrap] failed to remove legacy APISIX SSE route 2016-rt; retry reconciliation' >&2
+        exit 1
+      fi
+      if [ "$legacy_sse_status" != "200" ] && [ "$legacy_sse_status" != "404" ]; then
+        echo "[bootstrap] failed to remove legacy APISIX SSE route 2016-rt; status=$legacy_sse_status" >&2
+        exit 1
+      fi
+{{- end }}
 {{- $mode := .Values.gatewayPolicy.passthrough.mode }}
-{{- range (include "in-falcone.effectiveApisixRoutes" . | fromJsonArray) }}
+{{- range $routes }}
 {{- if or (not (hasKey . "enabledInModes")) (has $mode .enabledInModes) }}
       ensure_apisix_route "{{ .routeId }}" "$PAYLOAD_DIR/route-{{ .routeId }}.json"
 {{- end }}
