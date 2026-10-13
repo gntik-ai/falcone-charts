@@ -63,7 +63,12 @@ data:
   internal-namespaces.json: |
 {{ toPrettyJson .Values.bootstrap.oneShot.internalNamespaces | nindent 4 }}
 {{- $mode := .Values.gatewayPolicy.passthrough.mode -}}
-{{- range .Values.bootstrap.reconcile.apisix.routes }}
+{{- range $storedRoute := .Values.bootstrap.reconcile.apisix.routes }}
+{{- $route := $storedRoute -}}
+{{- if eq $storedRoute.name "public-api-realtime-changes" -}}
+{{- $route = include "in-falcone.realtimeChangesRoute" $storedRoute | fromJson -}}
+{{- end -}}
+{{- with $route }}
 {{- if or (not (hasKey . "enabledInModes")) (has $mode .enabledInModes) }}
 {{- /* Data-plane and executor-required routes always go to the Helm-owned executor. */ -}}
 {{- $upstreamComponent := .upstream.component -}}
@@ -202,7 +207,15 @@ data:
 {{- $_ := set $rewriteHeaders "x-gateway-auth" "${{GATEWAY_SHARED_SECRET}}" -}}
 {{- end }}
 {{- $routeHeaders := (index $plugins "proxy-rewrite").headers | default dict -}}
-{{- if hasKey $routeHeaders "remove" }}
+{{- if eq .name "public-api-realtime-changes" }}
+{{- /* This family trusts only the executor dispatcher. Keep the explicit blank
+       identity headers instead of replacing them with propagated JWT claims. */ -}}
+{{- $streamHeaders := deepCopy ($routeHeaders.set | default dict) -}}
+{{- $_ := set $streamHeaders "x-gateway-auth" "${{GATEWAY_SHARED_SECRET}}" -}}
+{{- $_ := set $streamHeaders $.Values.gatewayPolicy.correlation.headerName (index $rewriteHeaders $.Values.gatewayPolicy.correlation.headerName) -}}
+{{- $_ := set $streamHeaders $.Values.gatewayPolicy.correlation.requestIdHeader "$request_id" -}}
+{{- $_ := set (index $plugins "proxy-rewrite") "headers" (dict "set" $streamHeaders) -}}
+{{- else if hasKey $routeHeaders "remove" }}
 {{- $_ := set $routeHeaders.set "x-gateway-auth" "${{GATEWAY_SHARED_SECRET}}" -}}
 {{- $_ := set (index $plugins "proxy-rewrite") "headers" $routeHeaders -}}
 {{- else }}
@@ -221,5 +234,6 @@ data:
 {{- end }}
   route-{{ .routeId }}.json: |
 {{ toPrettyJson $routeBody | nindent 4 }}
+{{- end }}
 {{- end }}
 {{- end }}

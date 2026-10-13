@@ -1617,26 +1617,36 @@ bootstrap:
             port: 8080
             dataPlane: true
             requiresExecutor: true
-        # ---- Realtime change stream (SSE) → executor (OPT-IN). Read-only; a browser
+        # ---- Realtime change stream (SSE) → executor. Read-only; a browser
         #      EventSource cannot set headers, so the anon key arrives as ?apikey= and the
         #      executor verifies it. Long upstream timeout (upstream.sse) keeps the stream open. ----
         - routeId: "2016-rt"
           name: public-api-realtime-changes
-          uri: /v1/realtime/*
+          uri: /v1/realtime/workspaces/*
           methods: ["GET", "OPTIONS"]
           priority: 340
           vars:
             # matches both Mongo (collections/{c}/changes) and Postgres (tables/{t}/changes)
-            - ["uri", "~~", "/changes$"]
+            - ["uri", "~~", "^/v1/realtime/workspaces/[^/]+/data/[^/]+/(collections/[^/]+|schemas/[^/]+/tables/[^/]+)/changes$"]
           labels:
-            gateway.in-falcone.io/route-kind: product_api_apikey
-            gateway.in-falcone.io/family: realtime
+            gateway.in-falcone.io/route-kind: product_api
+            gateway.in-falcone.io/family: realtime-changes
             gateway.in-falcone.io/tenant-binding: api-key
             gateway.in-falcone.io/workspace-binding: api-key
             gateway.in-falcone.io/plan-capabilities: ""
             gateway.in-falcone.io/audit-required: "false"
           plugins:
             cors: *a1
+            client-control:
+              max_body_size: 131072
+            proxy-rewrite:
+              headers:
+                set:
+                  x-tenant-id: ""
+                  x-workspace-id: ""
+                  x-auth-subject: ""
+                  x-actor-roles: ""
+                  x-gateway-auth: "${{GATEWAY_SHARED_SECRET}}"
             # Per-key rate limit (anon key may be header or ?apikey=).
             limit-count:
               count: 120
@@ -4677,6 +4687,13 @@ gatewayPolicy:
       requestValidationProfile: observability
       planCapabilityAnyOf:
         - observability.metrics.basic
+    realtime-changes:
+      tenantBinding: required
+      workspaceBinding: required
+      qosProfile: realtime
+      requestValidationProfile: realtime
+      planCapabilityAnyOf:
+        - data.openwhisk.actions
     websockets:
       tenantBinding: required
       workspaceBinding: required
