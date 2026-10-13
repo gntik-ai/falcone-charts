@@ -33,6 +33,7 @@ export function withPriorRealtimeSse(objects) {
       'x-plan-id': '', 'x-auth-scopes': '', 'x-actor-roles': '', 'x-gateway-auth': '${{GATEWAY_SHARED_SECRET}}',
     } } })
     route.name = 'public-api-realtime-changes'
+    route.uri = '/v1/realtime/*'
     route.vars = [['uri', '~~', '/changes$']]
     delete route.labels['gateway.in-falcone.io/auth-mode']
     route.plugins.cors.allow_methods = 'GET,POST,PUT,PATCH,DELETE,OPTIONS'
@@ -49,7 +50,7 @@ export function withPriorRealtimeSse(objects) {
   assert.ok(first >= 0)
   assert.deepEqual(inventory.slice(first, first + 2), ['collection', 'table'].map((source) => {
     const name = `public-api-realtime-${source}-changes`
-    return { routeId: name, name, uri: '/v1/realtime/*' }
+    return { routeId: name, name, uri: '/v1/realtime/workspaces/*' }
   }))
   inventory.splice(first, 2, { routeId: '2016-rt', name: 'public-api-realtime-changes', uri: '/v1/realtime/*' })
   config.data['enabled-apisix-routes.json'] = `\n${JSON.stringify(sorted(inventory), null, 2)}\n`
