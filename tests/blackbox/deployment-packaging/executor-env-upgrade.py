@@ -471,7 +471,30 @@ class Offline(unittest.TestCase):
                     return [item for item in objects if item["kind"] == "ApisixRoute"
                             or (item["kind"] == "ConfigMap"
                                 and item["metadata"]["name"].endswith("-gateway-policy"))]
-                self.assertTrue(gateway(before) == gateway(after), "gateway verifier must remain unchanged")
+                old_gateway, new_gateway = gateway(before), gateway(after)
+                self.assertTrue([item["kind"] for item in old_gateway] == [item["kind"] for item in new_gateway]
+                                and all(old["metadata"] == new["metadata"]
+                                        for old, new in zip(old_gateway, new_gateway)),
+                                "gateway objects must remain the same set")
+                for old, new in zip(old_gateway, new_gateway):
+                    if old["kind"] == "ApisixRoute":
+                        self.assertTrue(old == new, "gateway verifier must remain unchanged")
+                        continue
+                    # Later issues may add policy families and narrow route URIs; the verifier,
+                    # every pre-upgrade family and every pre-upgrade route must stay.
+                    old_policy = json.loads(old["data"]["gateway-policy.json"])
+                    new_policy = json.loads(new["data"]["gateway-policy.json"])
+                    old_families = old_policy.pop("familyPolicies")
+                    new_families = new_policy.pop("familyPolicies")
+                    self.assertTrue(old_policy == new_policy, "gateway verifier must remain unchanged")
+                    self.assertTrue(all(new_families.get(name) == family
+                                        for name, family in old_families.items()),
+                                    "existing gateway family policies must remain unchanged")
+                    def route_ids(item):
+                        return {(route["name"], route["routeId"])
+                                for route in json.loads(item["data"]["enabled-apisix-routes.json"])}
+                    self.assertTrue(route_ids(old) <= route_ids(new), "enabled gateway routes must remain")
+                    self.assertTrue(set(old["data"]) == set(new["data"]), "gateway policy keys must remain")
                 old_control = select(before, "Deployment", RELEASE + "-control-plane")
                 new_control = copy.deepcopy(select(after, "Deployment", RELEASE + "-control-plane"))
                 old_container = next(item for item in old_control["spec"]["template"]["spec"]["containers"]
