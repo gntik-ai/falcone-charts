@@ -13,6 +13,7 @@
 {{- $name := printf "public-api-realtime-%s-changes" $source -}}
 {{- $_ := set $route "routeId" $name -}}
 {{- $_ := set $route "name" $name -}}
+{{- $_ := set $route "uri" "/v1/realtime/workspaces/*" -}}
 {{- $_ := set $route "vars" (list (list "uri" "~~" $pattern)) -}}
 {{- $labels := $route.labels | default dict -}}
 {{- $_ := set $labels "gateway.in-falcone.io/auth-mode" "query_api_key_sse" -}}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { render, umbrellaChart, yamlDocuments } from '../fixtures/blackbox.mjs'
+import { render, repoRoot, umbrellaChart, yamlDocuments } from '../fixtures/blackbox.mjs'
 
 const streams = [
   ['public-api-realtime-collection-changes', '/v1/realtime/workspaces/ws1/data/appdb/collections/notes/changes'],
@@ -20,6 +20,7 @@ function assertStreams(routes) {
     const selected = routes.filter((route) => route.name === name)
     assert.equal(selected.length, 1, `${name} must be installed exactly once`)
     const [route] = selected
+    assert.equal(route.uri, '/v1/realtime/workspaces/*')
     assert.deepEqual(route.methods, ['GET', 'OPTIONS'])
     assert.equal(route.labels['gateway.in-falcone.io/auth-mode'], 'query_api_key_sse')
     assert.deepEqual(route.vars.map(([variable, operator]) => [variable, operator]), [['uri', '~~']])
@@ -76,6 +77,16 @@ test('staging standalone installs the same bounded streams as bootstrap and omit
   const format = yamlDocuments(logConfig.data['config.yaml'])[0].nginx_config.http.access_log_format
   assert.match(format, /\$request_method \$uri \$server_protocol/)
   assert.doesNotMatch(format, /\$(?:request(?:_uri)?|args|arg_\w+|http_(?:apikey|x_api_key|authorization))\b/)
+})
+
+test('kind standalone installs bounded streams when the bootstrap route list is replaced', () => {
+  const { objects } = render(umbrellaChart, ['-f', `${repoRoot}/deploy/kind/values-kind.yaml`,
+    '--set', 'apisix.manageStandaloneRoutes=true'])
+  const config = objects.find((object) => object.kind === 'ConfigMap' && object.metadata.name === 'falcone-apisix-standalone')
+  assert.ok(config)
+  assertStreams(yamlDocuments(config.data['apisix.yaml'])[0].routes)
+  assert.equal(objects.some((object) => streams.some(([name]) => object.data?.[`route-${name}.json`])), false,
+    'standalone defaults must not add routes to the operator bootstrap list')
 })
 
 test('stored legacy SSE values migrate to both bounded routes without new values keys', () => {

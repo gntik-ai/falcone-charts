@@ -1621,7 +1621,7 @@ bootstrap:
         # paths use the query_api_key_sse policy exception; cors terminates OPTIONS.
         - routeId: public-api-realtime-collection-changes
           name: public-api-realtime-collection-changes
-          uri: /v1/realtime/*
+          uri: /v1/realtime/workspaces/*
           methods:
           - GET
           - OPTIONS
@@ -1678,7 +1678,7 @@ bootstrap:
             sse: true
         - routeId: public-api-realtime-table-changes
           name: public-api-realtime-table-changes
-          uri: /v1/realtime/*
+          uri: /v1/realtime/workspaces/*
           methods:
           - GET
           - OPTIONS

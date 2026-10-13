@@ -10,7 +10,25 @@
       canonical kind snapshot and every unrelated route, including captures. */ -}}
 {{- $legacySse := regexFind "(?m)^  - id: \"2016-rt\"\n(?:    [^\n]*\n|\n)+" $routes -}}
 {{- if not $legacySse }}{{- fail "standalone legacy SSE route is missing" -}}{{- end -}}
-{{- $payload := include "in-falcone/templates/bootstrap-payload-configmap.yaml" . | fromYaml -}}
+{{- /* Standalone routes must also render when an overlay replaces the bootstrap
+      array (the kind profile uses a disabled placeholder). Supply defaults only
+      in this rendering context, preserving configured SSE routes and the actual
+      bootstrap inventory. */ -}}
+{{- $standaloneValues := deepCopy .Values -}}
+{{- $effectiveRoutes := include "in-falcone.effectiveApisixRoutes" . | fromJsonArray -}}
+{{- $configuredNames := list -}}
+{{- range $effectiveRoutes -}}
+{{- $configuredNames = append $configuredNames .name -}}
+{{- end -}}
+{{- $defaults := .Files.Get "files/apisix/realtime-sse-defaults.yaml" | fromYaml -}}
+{{- range $defaults.routes -}}
+{{- if not (has .name $configuredNames) -}}
+{{- $effectiveRoutes = append $effectiveRoutes . -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $standaloneValues.bootstrap.reconcile.apisix "routes" $effectiveRoutes -}}
+{{- $context := set (omit . "Values") "Values" $standaloneValues -}}
+{{- $payload := include "in-falcone/templates/bootstrap-payload-configmap.yaml" $context | fromYaml -}}
 {{- $sseRoutes := "" -}}
 {{- range $name := list "public-api-realtime-collection-changes" "public-api-realtime-table-changes" -}}
 {{- $route := index $payload.data (printf "route-%s.json" $name) | default "{}" | fromJson -}}
