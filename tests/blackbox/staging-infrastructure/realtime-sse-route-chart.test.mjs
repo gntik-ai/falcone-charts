@@ -160,3 +160,22 @@ test('admin-API cleanup preserves an explicitly configured route using the legac
   assert.equal(script.includes('-X DELETE'), false, 'an explicitly configured legacy ID must not be deleted')
   assert.ok(script.includes('"$PAYLOAD_DIR/route-2016-rt.json"'))
 })
+
+test('admin-API upgrades remove disabled streams while preserving the enabled stream', () => {
+  const configured = readYaml(`${umbrellaChart}/values.yaml`).bootstrap.reconcile.apisix.routes
+  const disabled = streams[0][0]
+  const routes = configured.map((route) => route.name === disabled
+    ? { ...route, enabledInModes: [] } : route)
+  const { objects } = render(umbrellaChart, ['--set', 'apisix.config.inline.APISIX_STAND_ALONE=false',
+    '--set-json', `bootstrap.reconcile.apisix.routes=${JSON.stringify(routes)}`])
+  const script = objects.find((object) => object.kind === 'ConfigMap' && object.data?.['bootstrap.sh']).data['bootstrap.sh']
+  const removals = script.match(/curl[^\n]*\\\n(?:[^\n]*\\\n)*[^\n]*/g)
+    .filter((command) => command.includes('-X DELETE'))
+  assert.ok(removals.some((command) => command.includes(`"$APISIX_ADMIN_URL/apisix/admin/routes/${disabled}"`)),
+    'the kill switch must remove a stream already installed in the admin store')
+  assert.equal(script.includes(`ensure_apisix_route "${disabled}"`), false)
+  const enabled = streams[1][0]
+  assert.equal(removals.some((command) => command.includes(`/routes/${enabled}"`)), false,
+    'the enabled stream must not be removed')
+  assert.ok(script.includes(`ensure_apisix_route "${enabled}" "$PAYLOAD_DIR/route-${enabled}.json"`))
+})

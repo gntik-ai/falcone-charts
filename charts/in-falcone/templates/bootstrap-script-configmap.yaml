@@ -589,28 +589,35 @@ data:
       log "APISIX_STAND_ALONE=true; skipping APISIX admin-API route reconciliation (standalone serves routes from mounted config)"
 {{- else }}
 {{- $routes := include "in-falcone.effectiveApisixRoutes" . | fromJsonArray }}
+{{- $mode := .Values.gatewayPolicy.passthrough.mode }}
+{{- $removedSseIds := list }}
 {{- $legacySseConfigured := false }}
 {{- range $routes }}
 {{- if eq .routeId "2016-rt" }}{{- $legacySseConfigured = true }}{{- end }}
+{{- if and (has .routeId (list "public-api-realtime-collection-changes" "public-api-realtime-table-changes")) (hasKey . "enabledInModes") }}
+{{- if not (has $mode .enabledInModes) }}{{- $removedSseIds = append $removedSseIds .routeId }}{{- end }}
+{{- end }}
 {{- end }}
 {{- if not $legacySseConfigured }}
-      # Route IDs changed in #1087. Updating the new IDs does not remove the
-      # previously installed unanchored catch-all from the APISIX admin store.
-      # Remove only that chart-owned ID, and stop if cleanup cannot be confirmed.
-      local legacy_sse_status
-      if ! legacy_sse_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+{{- $removedSseIds = prepend $removedSseIds "2016-rt" }}
+{{- end }}
+{{- range $removedSseIds }}
+      # Remove the legacy catch-all or an explicitly disabled #1087 stream.
+      # Skipping its PUT would leave the installed route active after an upgrade.
+      # Stop if cleanup cannot be confirmed.
+      local sse_cleanup_status
+      if ! sse_cleanup_status="$(curl -sS -o /dev/null -w '%{http_code}' \
         -X DELETE \
         -H "X-API-KEY: ${BOOTSTRAP_APISIX_ADMIN_KEY}" \
-        "$APISIX_ADMIN_URL/apisix/admin/routes/2016-rt")"; then
-        echo '[bootstrap] failed to remove legacy APISIX SSE route 2016-rt; retry reconciliation' >&2
+        "$APISIX_ADMIN_URL/apisix/admin/routes/{{ . }}")"; then
+        echo '[bootstrap] failed to remove APISIX SSE route {{ . }}; retry reconciliation' >&2
         exit 1
       fi
-      if [ "$legacy_sse_status" != "200" ] && [ "$legacy_sse_status" != "404" ]; then
-        echo "[bootstrap] failed to remove legacy APISIX SSE route 2016-rt; status=$legacy_sse_status" >&2
+      if [ "$sse_cleanup_status" != "200" ] && [ "$sse_cleanup_status" != "404" ]; then
+        echo "[bootstrap] failed to remove APISIX SSE route {{ . }}; status=$sse_cleanup_status" >&2
         exit 1
       fi
 {{- end }}
-{{- $mode := .Values.gatewayPolicy.passthrough.mode }}
 {{- range $routes }}
 {{- if or (not (hasKey . "enabledInModes")) (has $mode .enabledInModes) }}
       ensure_apisix_route "{{ .routeId }}" "$PAYLOAD_DIR/route-{{ .routeId }}.json"
