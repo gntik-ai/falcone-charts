@@ -8,10 +8,18 @@
 - [x] Confirm capture-management routes retain OIDC and request validation.
 - [x] Run the paired source Mongo gateway parity suite with this chart path.
 - [x] Add the deployment proposal, tasks and gateway spec delta.
+- [x] Repair the flow-audit and managed-Knative historical render checks by
+  validating and subtracting only the exact reviewed realtime route and policy
+  delta. Retain both approved hashes and all existing assertions.
+- [x] Reproduce the reported flow-audit hash mismatch before the repair, then
+  pass the matching CI command, realtime route suite, managed-Knative baseline
+  check and strict chart lint. Missing header blanking and URI constraints still
+  fail the reviewed route fingerprint.
 - [ ] PR CI: rerun `bbx-temporal-bootstrap-048`, the real reuse-values upgrade
-  test. The sandbox attempt cannot load the missing Node `yaml` package.
-- [ ] PR CI: rerun the paired source gateway-policy validator. The sandbox
-  attempt cannot load the missing Node `yaml` package.
+  test. With the existing tooling YAML package linked, the sandbox attempt stops
+  at historical archive extraction: `tar` reports `Function not implemented`.
+- [x] Rerun the paired source gateway-policy validator using a temporary sibling
+  chart layout and the existing tooling YAML package.
 - [ ] Hermes: converge the paired source workflow chart pins to the final charts
   commit, then rerun Mongo gateway parity in PR CI.
 - [ ] Release verification: confirm access-log query-key redaction and paired

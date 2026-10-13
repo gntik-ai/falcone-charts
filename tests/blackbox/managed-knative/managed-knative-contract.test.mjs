@@ -16,6 +16,7 @@ import { withPriorInvitationHmac } from '../fixtures/invitation-hmac-snapshot.mj
 import { withPriorScrapeLimits } from '../fixtures/observability-scrape-limits-snapshot.mjs'
 import { withPriorApisixAccessLog } from '../fixtures/apisix-access-log-snapshot.mjs'
 import { withPriorFlowExecutionToken } from '../fixtures/flow-execution-token-snapshot.mjs'
+import { withPriorRealtimeChanges } from '../fixtures/realtime-changes-snapshot.mjs'
 
 import {
   allContainers,
@@ -436,7 +437,7 @@ test('default umbrella stays at its approved baseline and explicit disabled adds
     const disabledCanonical = disabled.map((output) => JSON.stringify(canonical(output.objects)))
 
     for (const output of defaults) {
-      assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(output.objects)))))))))), baseline,
+      assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeChanges(output.objects))))))))))), baseline,
         'default umbrella render drifted from the approved public baseline')
     }
     for (const rendered of disabledCanonical) {
