@@ -31,5 +31,26 @@
 {{- $routes = append $routes . -}}
 {{- end -}}
 {{- end -}}
+{{- /* Stored values predate the inventory route. Inherit their platform policy
+      and upstream without changing existing routes or operator-only route lists.
+      An explicitly configured inventory entry (including a disabled one) wins. */ -}}
+{{- $platform := dict -}}
+{{- $hasInventory := false -}}
+{{- range $routes -}}
+{{- if or (eq .name "public-api-secret-inventory") (eq .uri "/v1/secrets/inventory") (eq .routeId "2001-inventory") -}}
+{{- $hasInventory = true -}}
+{{- end -}}
+{{- if and (eq .name "public-api-platform") (eq .uri "/v1/platform/*") -}}
+{{- $platform = . -}}
+{{- end -}}
+{{- end -}}
+{{- if and (not $hasInventory) $platform -}}
+{{- $inventory := deepCopy $platform -}}
+{{- $_ := set $inventory "routeId" "2001-inventory" -}}
+{{- $_ := set $inventory "name" "public-api-secret-inventory" -}}
+{{- $_ := set $inventory "uri" "/v1/secrets/inventory" -}}
+{{- $_ := set $inventory "methods" (list "GET" "OPTIONS") -}}
+{{- $routes = append $routes $inventory -}}
+{{- end -}}
 {{- toJson $routes -}}
 {{- end -}}

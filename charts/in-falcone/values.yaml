@@ -1315,6 +1315,24 @@ bootstrap:
           upstream:
             component: controlPlane
             port: 8080
+        - routeId: "2001-inventory"
+          name: public-api-secret-inventory
+          uri: /v1/secrets/inventory
+          methods:
+            - GET
+            - OPTIONS
+          priority: 239
+          labels:
+            gateway.in-falcone.io/route-kind: product_api
+            gateway.in-falcone.io/family: platform
+            gateway.in-falcone.io/tenant-binding: none
+            gateway.in-falcone.io/workspace-binding: none
+            gateway.in-falcone.io/plan-capabilities: ""
+            gateway.in-falcone.io/audit-required: "false"
+          plugins: *a3
+          upstream:
+            component: controlPlane
+            port: 8080
         - routeId: "2002"
           name: public-api-tenants
           uri: /v1/tenants/*
