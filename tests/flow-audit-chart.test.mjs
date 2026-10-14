@@ -1,4 +1,5 @@
 import { withPriorRealtimeSse } from './blackbox/fixtures/realtime-sse-snapshot.mjs'
+import { withPriorSecretInventory } from './blackbox/fixtures/secret-inventory-snapshot.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -19,6 +20,7 @@ import { withPriorFlowExecutionToken } from './blackbox/fixtures/flow-execution-
 // #972: retain the reviewed function policy, refreshable signer directories and OpenBao bootstrap.
 // #1118: check and subtract only the reviewed APISIX access-log addition.
 // #976: check and subtract only the reviewed execution-token delivery addition.
+// #1089: check and subtract only the reviewed secret inventory gateway addition.
 const priorBaseline = 'bb3ebbee52090ea4b9b9ec65eb5e3e32937bba775d954d58effb56309b8895ae'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
@@ -77,9 +79,9 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   if (Object.keys(priorObservability.spec.template.metadata.annotations).length === 0) {
     delete priorObservability.spec.template.metadata.annotations
   }
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(priorObjects))))))))))), priorBaseline)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(priorObjects)))))))))))), priorBaseline)
   const expected = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/umbrella-default-render.sha256'), 'utf8').trim()
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(objects))))))))))), expected)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(objects)))))))))))), expected)
 
   const topic = added.find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
   assert.equal(topic.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC').value,
