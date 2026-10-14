@@ -1,4 +1,5 @@
 import { withPriorRealtimeSse } from '../fixtures/realtime-sse-snapshot.mjs'
+import { withPriorSecretInventory } from '../fixtures/secret-inventory-snapshot.mjs'
 /**
  * Public black-box contract for gntik-ai/falcone-charts#8.
  *
@@ -437,7 +438,7 @@ test('default umbrella stays at its approved baseline and explicit disabled adds
     const disabledCanonical = disabled.map((output) => JSON.stringify(canonical(output.objects)))
 
     for (const output of defaults) {
-      assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(output.objects))))))))))), baseline,
+      assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(output.objects)))))))))))), baseline,
         'default umbrella render drifted from the approved public baseline')
     }
     for (const rendered of disabledCanonical) {
