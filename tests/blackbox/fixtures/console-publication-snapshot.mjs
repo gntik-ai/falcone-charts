@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-// Subtract only #1095's five reviewed routes; keep the historical golden hash
+// Subtract only #1095's five reviewed routes and policies; keep the historical golden hash
 // and every existing route's complete policy under the original assertions.
 export function withPriorConsolePublication(objects) {
   const prior = structuredClone(objects)
@@ -35,5 +35,18 @@ export function withPriorConsolePublication(objects) {
   })))
   inventory.splice(first, 5)
   config.data['enabled-apisix-routes.json'] = `\n${JSON.stringify(inventory, null, 2)}\n`
+  const policy = JSON.parse(config.data['gateway-policy.json'])
+  for (const [family, , tenantBinding] of additions) {
+    const profile = tenantBinding === 'none' ? 'platform_control' : 'tenant_control'
+    assert.deepEqual(policy.familyPolicies[family], {
+      tenantBinding,
+      workspaceBinding: 'none',
+      qosProfile: profile,
+      requestValidationProfile: profile,
+      planCapabilityAnyOf: [],
+    }, `${family} must retain the complete reviewed family policy`)
+    delete policy.familyPolicies[family]
+  }
+  config.data['gateway-policy.json'] = `${JSON.stringify(policy, null, 2)}\n`
   return prior
 }
