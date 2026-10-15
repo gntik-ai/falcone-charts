@@ -4,14 +4,17 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
 import { repoRoot, umbrellaChart, yamlDocuments } from '../fixtures/blackbox.mjs'
+import { withPriorConsolePublication } from '../fixtures/console-publication-snapshot.mjs'
 
-function renderRoutes(args = []) {
+function renderRoutes(args = [], normalize = (objects) => objects) {
   const result = spawnSync('helm', ['template', 'falcone', umbrellaChart,
-    '--namespace', 'falcone', ...args,
-    '--show-only', 'templates/bootstrap-payload-configmap.yaml'],
+    '--namespace', 'falcone', ...args],
   { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
   assert.equal(result.status, 0, result.stderr)
-  const [payload] = yamlDocuments(result.stdout)
+  const payload = normalize(yamlDocuments(result.stdout))
+    .find((object) => object.kind === 'ConfigMap'
+      && object.metadata.labels?.['in-falcone.io/bootstrap-phase'] === 'payload')
+  assert.ok(payload, 'the bootstrap route payload must remain present')
   return Object.entries(payload.data).filter(([key]) => key.startsWith('route-'))
     .map(([, value]) => JSON.parse(value))
 }
@@ -98,7 +101,8 @@ test('stored routes gain inventory without changing existing platform or history
   assert.deepEqual(inventory.plugins, platform.plugins)
   assert.deepEqual(inventory.upstream, platform.upstream)
   assert.deepEqual(inventory.labels, platform.labels)
-  const current = renderRoutes()
+  // Validate every reviewed addition before subtracting it from the historical comparison.
+  const current = renderRoutes([], withPriorConsolePublication)
   assert.deepEqual(routes.filter((route) => route.name !== inventory.name),
     current.filter((route) => route.name !== inventory.name), 'all existing route payloads must remain unchanged')
 })

@@ -1349,6 +1349,86 @@ bootstrap:
           upstream:
             component: controlPlane
             port: 8080
+        - routeId: "2002-plans"
+          name: public-api-plans
+          uri: /v1/plans/*
+          methods: *a2
+          priority: 238
+          labels:
+            gateway.in-falcone.io/route-kind: product_api
+            gateway.in-falcone.io/family: plans
+            gateway.in-falcone.io/tenant-binding: none
+            gateway.in-falcone.io/workspace-binding: none
+            gateway.in-falcone.io/plan-capabilities: ""
+            gateway.in-falcone.io/audit-required: "false"
+          plugins: *a3
+          upstream:
+            component: controlPlane
+            port: 8080
+        - routeId: "2002-quota-dimensions"
+          name: public-api-quota-dimensions
+          uri: /v1/quota-dimensions/*
+          methods: *a2
+          priority: 238
+          labels:
+            gateway.in-falcone.io/route-kind: product_api
+            gateway.in-falcone.io/family: quota-dimensions
+            gateway.in-falcone.io/tenant-binding: none
+            gateway.in-falcone.io/workspace-binding: none
+            gateway.in-falcone.io/plan-capabilities: ""
+            gateway.in-falcone.io/audit-required: "false"
+          plugins: *a3
+          upstream:
+            component: controlPlane
+            port: 8080
+        - routeId: "2002-tenant-plan"
+          name: public-api-tenant-plan
+          uri: /v1/tenant/*
+          methods: *a2
+          priority: 238
+          labels:
+            gateway.in-falcone.io/route-kind: product_api
+            gateway.in-falcone.io/family: tenant-plan
+            gateway.in-falcone.io/tenant-binding: required
+            gateway.in-falcone.io/workspace-binding: none
+            gateway.in-falcone.io/plan-capabilities: ""
+            gateway.in-falcone.io/audit-required: "false"
+          plugins: *a3
+          upstream:
+            component: controlPlane
+            port: 8080
+        - routeId: "2002-console"
+          name: public-api-console
+          uri: /v1/console/*
+          methods: *a2
+          priority: 238
+          labels:
+            gateway.in-falcone.io/route-kind: product_api
+            gateway.in-falcone.io/family: console
+            gateway.in-falcone.io/tenant-binding: none
+            gateway.in-falcone.io/workspace-binding: none
+            gateway.in-falcone.io/plan-capabilities: ""
+            gateway.in-falcone.io/audit-required: "false"
+          plugins: *a3
+          upstream:
+            component: controlPlane
+            port: 8080
+        - routeId: "2002-async-operation-query"
+          name: public-api-async-operation-query
+          uri: /v1/async-operation-query/*
+          methods: *a2
+          priority: 238
+          labels:
+            gateway.in-falcone.io/route-kind: product_api
+            gateway.in-falcone.io/family: async-operation-query
+            gateway.in-falcone.io/tenant-binding: required
+            gateway.in-falcone.io/workspace-binding: none
+            gateway.in-falcone.io/plan-capabilities: ""
+            gateway.in-falcone.io/audit-required: "false"
+          plugins: *a3
+          upstream:
+            component: controlPlane
+            port: 8080
         - routeId: "2003"
           name: public-api-workspaces
           uri: /v1/workspaces/*
@@ -4696,6 +4776,36 @@ gatewayPolicy:
       mode: X-Internal-Request-Mode
       timestamp: X-Internal-Request-Timestamp
   familyPolicies:
+    plans:
+      tenantBinding: none
+      workspaceBinding: none
+      qosProfile: platform_control
+      requestValidationProfile: platform_control
+      planCapabilityAnyOf: []
+    quota-dimensions:
+      tenantBinding: none
+      workspaceBinding: none
+      qosProfile: platform_control
+      requestValidationProfile: platform_control
+      planCapabilityAnyOf: []
+    tenant-plan:
+      tenantBinding: required
+      workspaceBinding: none
+      qosProfile: tenant_control
+      requestValidationProfile: tenant_control
+      planCapabilityAnyOf: []
+    console:
+      tenantBinding: none
+      workspaceBinding: none
+      qosProfile: platform_control
+      requestValidationProfile: platform_control
+      planCapabilityAnyOf: []
+    async-operation-query:
+      tenantBinding: required
+      workspaceBinding: none
+      qosProfile: tenant_control
+      requestValidationProfile: tenant_control
+      planCapabilityAnyOf: []
     platform:
       tenantBinding: none
       workspaceBinding: none
