@@ -2425,17 +2425,28 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
     && document.metadata.name === 'flows-execution-token-ready'),
   'reuse-values must retain the mandatory ESO readiness gate');
   // #982: stored releases predate the scrape limits; reuse-values must retain
-  // the bounded defaults on all three Falcone jobs without changing targets.
+  // the bounded defaults on the active Falcone jobs. #18: historical token-less
+  // releases acquire per-pod DNS discovery, never unauthenticated pod discovery.
   assert.equal(historical.observability.scrapeLimits, undefined);
   const prometheusConfig = exactDocuments.find((document) => document.kind === 'ConfigMap'
     && document.metadata.name === `${releaseName}-prometheus-config`);
   assert.ok(prometheusConfig, 'historical reuse-values must retain the mounted scrape config');
   const scrapeJobs = parseRenderedDocuments(prometheusConfig.data['prometheus.yml'])[0].scrape_configs;
-  for (const name of ['falcone-control-plane', 'falcone-control-plane-executor', 'falcone-pods']) {
+  assert.equal(scrapeJobs.some((entry) => entry.job_name === 'falcone-pods'), false);
+  for (const name of ['falcone-control-plane', 'falcone-control-plane-executor']) {
     const job = scrapeJobs.find((entry) => entry.job_name === name);
     assert.ok(job, `historical reuse-values must retain ${name}`);
     assert.equal(job.sample_limit, 1000000);
     assert.equal(job.label_value_length_limit, 512);
+    assert.equal(job.static_configs, undefined);
+    const component = name.replace(/^falcone-/, '');
+    assert.deepEqual(job.dns_sd_configs, [{
+      names: [`${releaseName}-${component}-metrics.${releaseNamespace}.svc.cluster.local`], type: 'A', port: 8080,
+    }]);
+    assert.deepEqual(job.relabel_configs, [{ target_label: 'component', replacement: component }]);
+    const service = exactDocuments.find((document) => document.kind === 'Service'
+      && document.metadata.name === `${releaseName}-${component}-metrics`);
+    assert.equal(service?.spec.clusterIP, 'None');
   }
   // #975: stored releases predate invitation HMAC references; ESO and the
   // control-plane env bindings must still render under real --reuse-values.

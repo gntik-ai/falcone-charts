@@ -41,6 +41,15 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "in-falcone.componentMetricsServiceName" -}}
+{{- $name := include "in-falcone.componentServiceNameByAlias" . -}}
+{{- if gt (len $name) 55 -}}
+{{- printf "%s-%s-metrics" ($name | trunc 46 | trimSuffix "-") (printf "%s/%s" $name .component | sha256sum | trunc 8) -}}
+{{- else -}}
+{{- printf "%s-metrics" $name -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "in-falcone.bootstrapServiceAccountName" -}}
 {{- if .Values.bootstrap.serviceAccount.create -}}
 {{- default (printf "%s-bootstrap" (include "in-falcone.fullname" .)) .Values.bootstrap.serviceAccount.name -}}

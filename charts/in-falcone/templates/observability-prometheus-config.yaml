@@ -2,12 +2,13 @@
   Real Prometheus scrape config (add-falcone-metrics-scrape-and-dashboards, #499). The
   observability component previously mounted no config and ran Prometheus' default (it scraped only
   itself). This ConfigMap is a real prometheus.yml that scrapes the control-plane and executor
-  /metrics endpoints (the falcone_* HTTP metrics) plus the APISIX gateway; the observability values
-  mount it at /etc/prometheus and set --config.file. Targets use the chart's component service-name
-  helper (release-name + componentId), matching the deployed services.
+  /metrics endpoints (the falcone_* HTTP metrics) plus the APISIX gateway. Token-enabled installs
+  use namespace-scoped pod discovery; token-less installs use metrics-only headless DNS discovery.
+  These modes are mutually exclusive so each workload is scraped once, per pod (#18).
 */}}
 {{- $ns := .Release.Namespace -}}
-{{- $cp := printf "%s.%s.svc.cluster.local:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "controlPlane")) $ns .Values.controlPlane.service.port -}}
+{{- $serviceAccount := get (.Values.observability | default dict) "serviceAccount" | default dict -}}
+{{- $podDiscovery := get $serviceAccount "automountToken" | default false -}}
 {{- $apisix := printf "%s.%s.svc.cluster.local:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "apisix")) $ns (.Values.apisix.service.port | default 9080) -}}
 {{- $audit := .Values.flowAudit | default dict -}}
 {{- $alerts := get $audit "alerts" | default dict -}}
@@ -38,22 +39,30 @@ data:
       - job_name: prometheus
         static_configs:
           - targets: ['localhost:9090']
+      {{- if not $podDiscovery }}
       - job_name: falcone-control-plane
         metrics_path: /metrics
         sample_limit: {{ $sampleLimit }}
         label_value_length_limit: {{ $labelValueLengthLimit }}
-        static_configs:
-          - targets: ['{{ $cp }}']
-            labels:
-              component: control-plane
+        dns_sd_configs:
+          - names: ['{{ include "in-falcone.componentMetricsServiceName" (dict "root" . "component" "controlPlane") }}.{{ $ns }}.svc.cluster.local']
+            type: A
+            port: {{ get (.Values.controlPlane.podAnnotations | default dict) "prometheus.io/port" | default "8080" | int }}
+        relabel_configs:
+          - target_label: component
+            replacement: {{ .Values.controlPlane.wrapper.componentId | default "controlPlane" }}
       - job_name: falcone-control-plane-executor
         metrics_path: /metrics
         sample_limit: {{ $sampleLimit }}
         label_value_length_limit: {{ $labelValueLengthLimit }}
-        static_configs:
-          - targets: ['{{ printf "%s.%s.svc.cluster.local:%v" (include "in-falcone.componentServiceNameByAlias" (dict "root" . "component" "controlPlaneExecutor")) $ns ((.Values.controlPlaneExecutor.service).port | default 8080) }}']
-            labels:
-              component: executor
+        dns_sd_configs:
+          - names: ['{{ include "in-falcone.componentMetricsServiceName" (dict "root" . "component" "controlPlaneExecutor") }}.{{ $ns }}.svc.cluster.local']
+            type: A
+            port: {{ get (.Values.controlPlaneExecutor.podAnnotations | default dict) "prometheus.io/port" | default "8080" | int }}
+        relabel_configs:
+          - target_label: component
+            replacement: {{ .Values.controlPlaneExecutor.wrapper.componentId | default "controlPlaneExecutor" }}
+      {{- end }}
       - job_name: falcone-apisix
         metrics_path: {{ .Values.gatewayPolicy.observability.gatewayMetrics.metricsPath | default "/apisix/prometheus/metrics" | quote }}
         static_configs:
@@ -61,7 +70,7 @@ data:
             labels:
               component: gateway
       {{- /*
-        Widen the scrape beyond the 3 static targets above (add-deploy-completeness-cluster, #562).
+        Authenticated mode retains the opt-in discovery contract (#562).
         Namespace-scoped Kubernetes pod service-discovery: scrape ANY Falcone pod that opts in via
         the `prometheus.io/scrape: "true"` annotation, reading its metrics port/path from
         `prometheus.io/port` + `prometheus.io/path` (defaults /metrics). This covers every current
@@ -70,6 +79,7 @@ data:
         /metrics endpoint (e.g. workflow-worker, which serves only /livez+/readyz) are simply not
         annotated, so they are never scraped — no dead targets.
       */}}
+      {{- if $podDiscovery }}
       - job_name: falcone-pods
         sample_limit: {{ $sampleLimit }}
         label_value_length_limit: {{ $labelValueLengthLimit }}
@@ -100,6 +110,7 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
+      {{- end }}
   {{- if $alertsEnabled }}
   flow-audit.rules.yml: |
     groups:
