@@ -1,0 +1,30 @@
+rule_files:
+- /rules-gateway/baseline.rules.yml
+evaluation_interval: 1m
+tests:
+- name: gateway cannot satisfy control-plane availability
+  interval: 1m
+  input_series:
+  - series: up{job="falcone-apisix",component="gateway"}
+    values: 1x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: FalconeControlPlaneUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: falcone-pods
+        component: gateway
+        severity: critical
+      exp_annotations:
+        summary: No control-plane metrics target is up
+- name: healthy control-plane with gateway component ID
+  interval: 1m
+  input_series:
+  - series: up{job="falcone-apisix",component="gateway"}
+    values: 1x10
+  - series: up{job="falcone-pods",component="gateway"}
+    values: 1x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: FalconeControlPlaneUnavailable
+    exp_alerts: []

@@ -1,0 +1,411 @@
+# Known failing and healthy examples for every baseline alert, including both bucket spellings.
+rule_files:
+- /rules/baseline.rules.yml
+evaluation_interval: 1m
+tests:
+- name: failing targets with latency bucket 1
+  interval: 1m
+  input_series:
+  - series: up{job="falcone-control-plane",component="control-plane"}
+    values: '0x60'
+  - series: up{job="falcone-control-plane-executor",component="control-plane-executor"}
+    values: '0x60'
+  - series: falcone_http_requests_total{component="control-plane",status="500"}
+    values: 0+10x60
+  - series: falcone_http_requests_total{component="control-plane",status="200"}
+    values: 0+90x60
+  - series: apisix_http_status{code="500"}
+    values: 0+10x60
+  - series: apisix_http_status{code="200"}
+    values: 0+90x60
+  - series: falcone_http_request_duration_seconds_bucket{component="control-plane",le="1"}
+    values: 0+80x60
+  - series: falcone_http_request_duration_seconds_count{component="control-plane"}
+    values: 0+100x60
+  - series: prometheus_tsdb_head_series{job="prometheus"}
+    values: 250001x60
+  - series: prometheus_target_scrapes_exceeded_sample_limit_total{job="prometheus"}
+    values: 0+1x60
+  - series: prometheus_rule_evaluation_failures_total{job="prometheus"}
+    values: 0+1x60
+  - series: prometheus_config_last_reload_successful{job="prometheus"}
+    values: '0x60'
+  - series: falcone_secret_backend_auth_degraded{component="control-plane"}
+    values: 1x60
+  - series: falcone_secret_backend_auth_consecutive_failures{component="control-plane"}
+    values: 3x60
+  alert_rule_test:
+  - eval_time: 45m
+    alertname: FalconeScrapeTargetDown
+    exp_alerts:
+    - exp_labels:
+        job: falcone-control-plane
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: A Falcone scrape target is down
+    - exp_labels:
+        job: falcone-control-plane-executor
+        component: control-plane-executor
+        severity: warning
+      exp_annotations:
+        summary: A Falcone scrape target is down
+  - eval_time: 45m
+    alertname: FalconeControlPlaneUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: falcone-control-plane
+        severity: critical
+      exp_annotations:
+        summary: No control-plane metrics target is up
+  - eval_time: 45m
+    alertname: FalconeExecutorUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: falcone-control-plane-executor
+        severity: critical
+      exp_annotations:
+        summary: No control-plane-executor metrics target is up
+  - eval_time: 45m
+    alertname: FalconeHighErrorRatio
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: Falcone HTTP 5xx ratio is above the threshold
+  - eval_time: 45m
+    alertname: FalconeGatewayHighErrorRatio
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: Gateway 5xx ratio is above the threshold
+  - eval_time: 45m
+    alertname: FalconeLatencyObjectiveBreach
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: Too many Falcone requests are slower than the latency threshold
+  - eval_time: 45m
+    alertname: FalconeTSDBHeadSeriesOverBudget
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: Prometheus head series exceed the configured budget
+  - eval_time: 45m
+    alertname: FalconeScrapeSampleLimitHit
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: A scrape exceeded observability.scrapeLimits.sampleLimit and was
+          rejected
+  - eval_time: 45m
+    alertname: FalconeRuleEvaluationFailures
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: Prometheus rule evaluation is failing
+  - eval_time: 45m
+    alertname: FalconePrometheusConfigReloadFailed
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: Prometheus failed to reload its configuration
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthDegraded
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: critical
+      exp_annotations:
+        summary: Control-plane secret-backend authentication is degraded
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthFailing
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: Control-plane secret-backend authentication is failing repeatedly
+- name: failing targets with latency bucket 1.0
+  interval: 1m
+  input_series:
+  - series: up{job="falcone-control-plane",component="control-plane"}
+    values: '0x60'
+  - series: up{job="falcone-control-plane-executor",component="control-plane-executor"}
+    values: '0x60'
+  - series: falcone_http_requests_total{component="control-plane",status="500"}
+    values: 0+10x60
+  - series: falcone_http_requests_total{component="control-plane",status="200"}
+    values: 0+90x60
+  - series: apisix_http_status{code="500"}
+    values: 0+10x60
+  - series: apisix_http_status{code="200"}
+    values: 0+90x60
+  - series: falcone_http_request_duration_seconds_bucket{component="control-plane",le="1.0"}
+    values: 0+80x60
+  - series: falcone_http_request_duration_seconds_count{component="control-plane"}
+    values: 0+100x60
+  - series: prometheus_tsdb_head_series{job="prometheus"}
+    values: 250001x60
+  - series: prometheus_target_scrapes_exceeded_sample_limit_total{job="prometheus"}
+    values: 0+1x60
+  - series: prometheus_rule_evaluation_failures_total{job="prometheus"}
+    values: 0+1x60
+  - series: prometheus_config_last_reload_successful{job="prometheus"}
+    values: '0x60'
+  - series: falcone_secret_backend_auth_degraded{component="control-plane"}
+    values: 1x60
+  - series: falcone_secret_backend_auth_consecutive_failures{component="control-plane"}
+    values: 3x60
+  alert_rule_test:
+  - eval_time: 45m
+    alertname: FalconeScrapeTargetDown
+    exp_alerts:
+    - exp_labels:
+        job: falcone-control-plane
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: A Falcone scrape target is down
+    - exp_labels:
+        job: falcone-control-plane-executor
+        component: control-plane-executor
+        severity: warning
+      exp_annotations:
+        summary: A Falcone scrape target is down
+  - eval_time: 45m
+    alertname: FalconeControlPlaneUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: falcone-control-plane
+        severity: critical
+      exp_annotations:
+        summary: No control-plane metrics target is up
+  - eval_time: 45m
+    alertname: FalconeExecutorUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: falcone-control-plane-executor
+        severity: critical
+      exp_annotations:
+        summary: No control-plane-executor metrics target is up
+  - eval_time: 45m
+    alertname: FalconeHighErrorRatio
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: Falcone HTTP 5xx ratio is above the threshold
+  - eval_time: 45m
+    alertname: FalconeGatewayHighErrorRatio
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: Gateway 5xx ratio is above the threshold
+  - eval_time: 45m
+    alertname: FalconeLatencyObjectiveBreach
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: Too many Falcone requests are slower than the latency threshold
+  - eval_time: 45m
+    alertname: FalconeTSDBHeadSeriesOverBudget
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: Prometheus head series exceed the configured budget
+  - eval_time: 45m
+    alertname: FalconeScrapeSampleLimitHit
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: A scrape exceeded observability.scrapeLimits.sampleLimit and was
+          rejected
+  - eval_time: 45m
+    alertname: FalconeRuleEvaluationFailures
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: Prometheus rule evaluation is failing
+  - eval_time: 45m
+    alertname: FalconePrometheusConfigReloadFailed
+    exp_alerts:
+    - exp_labels:
+        job: prometheus
+        severity: warning
+      exp_annotations:
+        summary: Prometheus failed to reload its configuration
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthDegraded
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: critical
+      exp_annotations:
+        summary: Control-plane secret-backend authentication is degraded
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthFailing
+    exp_alerts:
+    - exp_labels:
+        component: control-plane
+        severity: warning
+      exp_annotations:
+        summary: Control-plane secret-backend authentication is failing repeatedly
+- name: healthy targets with latency bucket 1
+  interval: 1m
+  input_series:
+  - series: up{job="falcone-control-plane",component="control-plane"}
+    values: 1x60
+  - series: up{job="falcone-control-plane-executor",component="control-plane-executor"}
+    values: 1x60
+  - series: falcone_http_requests_total{component="control-plane",status="500"}
+    values: 0+1x60
+  - series: falcone_http_requests_total{component="control-plane",status="200"}
+    values: 0+99x60
+  - series: apisix_http_status{code="500"}
+    values: 0+1x60
+  - series: apisix_http_status{code="200"}
+    values: 0+99x60
+  - series: falcone_http_request_duration_seconds_bucket{component="control-plane",le="1"}
+    values: 0+99x60
+  - series: falcone_http_request_duration_seconds_count{component="control-plane"}
+    values: 0+100x60
+  - series: prometheus_tsdb_head_series{job="prometheus"}
+    values: 250000x60
+  - series: prometheus_target_scrapes_exceeded_sample_limit_total{job="prometheus"}
+    values: '0x60'
+  - series: prometheus_rule_evaluation_failures_total{job="prometheus"}
+    values: '0x60'
+  - series: prometheus_config_last_reload_successful{job="prometheus"}
+    values: 1x60
+  - series: falcone_secret_backend_auth_degraded{component="control-plane"}
+    values: '0x60'
+  - series: falcone_secret_backend_auth_consecutive_failures{component="control-plane"}
+    values: 2x60
+  alert_rule_test:
+  - eval_time: 45m
+    alertname: FalconeScrapeTargetDown
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeControlPlaneUnavailable
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeExecutorUnavailable
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeHighErrorRatio
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeGatewayHighErrorRatio
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeLatencyObjectiveBreach
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeTSDBHeadSeriesOverBudget
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeScrapeSampleLimitHit
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeRuleEvaluationFailures
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconePrometheusConfigReloadFailed
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthDegraded
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthFailing
+    exp_alerts: []
+- name: healthy targets with latency bucket 1.0
+  interval: 1m
+  input_series:
+  - series: up{job="falcone-control-plane",component="control-plane"}
+    values: 1x60
+  - series: up{job="falcone-control-plane-executor",component="control-plane-executor"}
+    values: 1x60
+  - series: falcone_http_requests_total{component="control-plane",status="500"}
+    values: 0+1x60
+  - series: falcone_http_requests_total{component="control-plane",status="200"}
+    values: 0+99x60
+  - series: apisix_http_status{code="500"}
+    values: 0+1x60
+  - series: apisix_http_status{code="200"}
+    values: 0+99x60
+  - series: falcone_http_request_duration_seconds_bucket{component="control-plane",le="1.0"}
+    values: 0+99x60
+  - series: falcone_http_request_duration_seconds_count{component="control-plane"}
+    values: 0+100x60
+  - series: prometheus_tsdb_head_series{job="prometheus"}
+    values: 250000x60
+  - series: prometheus_target_scrapes_exceeded_sample_limit_total{job="prometheus"}
+    values: '0x60'
+  - series: prometheus_rule_evaluation_failures_total{job="prometheus"}
+    values: '0x60'
+  - series: prometheus_config_last_reload_successful{job="prometheus"}
+    values: 1x60
+  - series: falcone_secret_backend_auth_degraded{component="control-plane"}
+    values: '0x60'
+  - series: falcone_secret_backend_auth_consecutive_failures{component="control-plane"}
+    values: 2x60
+  alert_rule_test:
+  - eval_time: 45m
+    alertname: FalconeScrapeTargetDown
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeControlPlaneUnavailable
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeExecutorUnavailable
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeHighErrorRatio
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeGatewayHighErrorRatio
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeLatencyObjectiveBreach
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeTSDBHeadSeriesOverBudget
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeScrapeSampleLimitHit
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeRuleEvaluationFailures
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconePrometheusConfigReloadFailed
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthDegraded
+    exp_alerts: []
+  - eval_time: 45m
+    alertname: FalconeSecretBackendAuthFailing
+    exp_alerts: []

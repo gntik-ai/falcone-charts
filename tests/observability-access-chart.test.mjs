@@ -52,6 +52,8 @@ test('default Grafana requires login and disables embedding; Prometheus lifecycl
     '--config.file=/etc/prometheus/prometheus.yml',
     '--storage.tsdb.path=/prometheus',
     '--storage.tsdb.retention.time=15d',
+    '--enable-feature=auto-reload-config',
+    '--config.auto-reload-interval=30s',
   ])
 })
 

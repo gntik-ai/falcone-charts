@@ -1,3 +1,4 @@
+import { withPriorBaselineAlerts } from './blackbox/fixtures/baseline-alerts-snapshot.mjs'
 import { withPriorConsolePublication } from './blackbox/fixtures/console-publication-snapshot.mjs'
 import { withPriorRealtimeSse } from './blackbox/fixtures/realtime-sse-snapshot.mjs'
 import { withPriorSecretInventory } from './blackbox/fixtures/secret-inventory-snapshot.mjs'
@@ -60,7 +61,7 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   const added = flowAuditObjects(objects)
   assert.deepEqual(added.map(({ kind, metadata }) => `${kind}/${metadata.name}`).sort(), additions.slice().sort())
   const prometheus = prometheusConfig(objects)
-  assert.deepEqual(yamlDocuments(prometheus.data['prometheus.yml'])[0].rule_files, [ruleFile])
+  assert.deepEqual(yamlDocuments(prometheus.data['prometheus.yml'])[0].rule_files, [ruleFile, '/etc/prometheus/baseline.rules.yml'])
   const rules = yamlDocuments(prometheus.data['flow-audit.rules.yml'])[0].groups
   assert.deepEqual(rules[0].rules.map(({ alert }) => alert), ruleNames)
   assert.match(rules[0].rules.find(({ alert }) => alert === 'FalconeFlowAuditRelayStale').expr,
@@ -69,8 +70,8 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   const observability = objects.find((object) => object.kind === 'Deployment' && object.metadata.name === observabilityName)
   assert.equal(observability.spec.template.metadata.annotations[rolloutAnnotation], '2')
 
-  // The only changes to pre-existing objects are Prometheus rule loading and its rollout marker.
-  const priorObjects = structuredClone(objects.filter((object) => !added.includes(object)))
+  // Subtract the independently tested baseline addition, then verify the original flow-audit delta.
+  const priorObjects = withPriorBaselineAlerts(objects.filter((object) => !added.includes(object)))
   const priorPrometheus = prometheusConfig(priorObjects)
   delete priorPrometheus.data['flow-audit.rules.yml']
   assert.ok(priorPrometheus.data['prometheus.yml'].includes(ruleFilesBlock))
@@ -82,7 +83,7 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   }
   assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(priorObjects))))))))))))), priorBaseline)
   const expected = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/umbrella-default-render.sha256'), 'utf8').trim()
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(objects))))))))))))), expected)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(withPriorBaselineAlerts(objects)))))))))))))), expected)
 
   const topic = added.find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
   assert.equal(topic.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC').value,
@@ -110,7 +111,7 @@ test('older reused values render the same flow-audit defaults', () => {
   const topic = added.find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
   assert.equal(topic.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC').value,
     'falcone.audit.flow-lifecycle')
-  assert.deepEqual(yamlDocuments(prometheusConfig(objects).data['prometheus.yml'])[0].rule_files, [ruleFile])
+  assert.deepEqual(yamlDocuments(prometheusConfig(objects).data['prometheus.yml'])[0].rule_files, [ruleFile, '/etc/prometheus/baseline.rules.yml'])
   const observability = objects.find((object) => object.kind === 'Deployment' && object.metadata.name === observabilityName)
   assert.equal(observability.spec.template.metadata.annotations[rolloutAnnotation], '2')
 })
@@ -166,5 +167,5 @@ test('disabled alerts leave no rule file or operator rule', () => {
   assert.equal(flowAuditObjects(objects).some((object) => object.kind === 'PrometheusRule'), false)
   const prometheus = prometheusConfig(objects)
   assert.equal(prometheus.data['flow-audit.rules.yml'], undefined)
-  assert.equal(yamlDocuments(prometheus.data['prometheus.yml'])[0].rule_files, undefined)
+  assert.deepEqual(yamlDocuments(prometheus.data['prometheus.yml'])[0].rule_files, ['/etc/prometheus/baseline.rules.yml'])
 })
