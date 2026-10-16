@@ -1,0 +1,26 @@
+{{- $observability := .Values.observability | default dict -}}
+{{- $serviceAccount := get $observability "serviceAccount" | default dict -}}
+{{- if not (get $serviceAccount "automountToken" | default false) -}}
+{{- range $alias := list "controlPlane" "controlPlaneExecutor" }}
+{{- $component := index $.Values $alias -}}
+{{- $annotations := $component.podAnnotations | default dict -}}
+{{- $port := get $annotations "prometheus.io/port" | default "8080" | int }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "in-falcone.componentMetricsServiceName" (dict "root" $ "component" $alias) }}
+  labels:
+    {{- include "in-falcone.labels" $ | nindent 4 }}
+    in-falcone.io/component: observability
+spec:
+  clusterIP: None
+  selector:
+    {{- include "in-falcone.componentSelectorLabels" (dict "root" $ "component" $alias) | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ $port }}
+      targetPort: {{ $port }}
+      protocol: TCP
+{{- end }}
+{{- end }}
