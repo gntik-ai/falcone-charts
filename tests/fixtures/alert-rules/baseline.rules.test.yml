@@ -1,4 +1,4 @@
-# Known failing and healthy examples for every baseline alert, including both bucket spellings.
+# absent(up{...} == 1) has no selector labels: its argument is a comparison.
 rule_files:
 - /rules/baseline.rules.yml
 evaluation_interval: 1m
@@ -54,7 +54,6 @@ tests:
     alertname: FalconeControlPlaneUnavailable
     exp_alerts:
     - exp_labels:
-        job: falcone-control-plane
         severity: critical
       exp_annotations:
         summary: No control-plane metrics target is up
@@ -62,7 +61,6 @@ tests:
     alertname: FalconeExecutorUnavailable
     exp_alerts:
     - exp_labels:
-        job: falcone-control-plane-executor
         severity: critical
       exp_annotations:
         summary: No control-plane-executor metrics target is up
@@ -189,7 +187,6 @@ tests:
     alertname: FalconeControlPlaneUnavailable
     exp_alerts:
     - exp_labels:
-        job: falcone-control-plane
         severity: critical
       exp_annotations:
         summary: No control-plane metrics target is up
@@ -197,7 +194,6 @@ tests:
     alertname: FalconeExecutorUnavailable
     exp_alerts:
     - exp_labels:
-        job: falcone-control-plane-executor
         severity: critical
       exp_annotations:
         summary: No control-plane-executor metrics target is up

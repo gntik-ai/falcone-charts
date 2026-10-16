@@ -1,3 +1,4 @@
+# absent(up{...} == 1) has no selector labels: its argument is a comparison.
 rule_files:
 - /rules-gateway/baseline.rules.yml
 evaluation_interval: 1m
@@ -12,8 +13,6 @@ tests:
     alertname: FalconeControlPlaneUnavailable
     exp_alerts:
     - exp_labels:
-        job: falcone-pods
-        component: gateway
         severity: critical
       exp_annotations:
         summary: No control-plane metrics target is up
