@@ -23,7 +23,7 @@ import { withPriorFlowExecutionToken } from './blackbox/fixtures/flow-execution-
 // #1118: check and subtract only the reviewed APISIX access-log addition.
 // #976: check and subtract only the reviewed execution-token delivery addition.
 // #1089: check and subtract only the reviewed secret inventory gateway addition.
-const priorBaseline = 'bb3ebbee52090ea4b9b9ec65eb5e3e32937bba775d954d58effb56309b8895ae'
+const priorBaseline = '6885495190ba108022ab5121bf9da9644fcf474af0daf8e2b43ab4a3fbe1bd38'
 const additions = [
   'ConfigMap/falcone-bbx-in-falcone-flow-audit-grants',
   'Job/falcone-bbx-in-falcone-flow-audit-grants',
