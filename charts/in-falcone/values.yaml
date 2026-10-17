@@ -2041,7 +2041,8 @@ bootstrap:
             component: keycloak
             port: 8080
 apisix:
-  manageStandaloneRoutes: false
+  # falcone-charts#22: standalone mode needs the chart-owned route table by default.
+  manageStandaloneRoutes: true
   wrapper:
     componentId: apisix
     workload:
@@ -2116,6 +2117,10 @@ apisix:
   tolerations: []
   affinity: {}
   extraVolumes:
+    - name: standalone-config
+      configMap:
+        name: falcone-apisix-standalone
+        defaultMode: 420
     - name: apisix-config-source
       configMap:
         name: '{{ .Release.Name }}-apisix-config-file'
@@ -2125,6 +2130,9 @@ apisix:
       configMap:
         name: '{{ .Release.Name }}-issuer-jwks-auth'
   extraVolumeMounts:
+    - name: standalone-config
+      mountPath: /usr/local/apisix/conf/apisix.yaml
+      subPath: apisix.yaml
     - name: apisix-config-overlay
       mountPath: /usr/local/apisix/conf/config.yaml
       subPath: config.yaml

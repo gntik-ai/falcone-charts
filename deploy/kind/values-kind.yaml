@@ -69,6 +69,8 @@ bootstrap:
             component: controlPlane
             port: 8080
 apisix:
+  # The standalone route ConfigMap is created outside Helm by the kind tooling.
+  manageStandaloneRoutes: false
   image:
     repository: docker.io/apache/apisix
     tag: 3.10.0-debian

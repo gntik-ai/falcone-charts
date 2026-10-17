@@ -111,6 +111,8 @@ jobs:
         run: sh tests/webhook-database-chart-ci.test.sh
       - name: Validate flow-audit, workflow worker PG env, and observability scrape limits
         run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs tests/observability-baseline-alerts-chart.test.mjs
+      - name: Validate APISIX standalone route provisioning
+        run: node --test tests/apisix-standalone-routes-chart.test.mjs
       - name: Validate bundled alert rules with promtool
         shell: bash
         run: |
