@@ -119,8 +119,10 @@ test('executor and worker share one OpenBao/ESO flow execution Secret on install
     '--set', 'global.externalSecrets.operatorServiceAccount=external-secrets',
   ]));
   verifyDelivery(adopted);
-  assert.equal(adopted.find((o) => o.kind === 'ExternalSecret'
-    && o.metadata.name === 'flows-execution-token').metadata.annotations?.['helm.sh/hook'], undefined);
+  const adoptedExternal = adopted.find((o) => o.kind === 'ExternalSecret'
+    && o.metadata.name === 'flows-execution-token');
+  assert.equal(adoptedExternal.metadata.annotations?.['helm.sh/hook'], 'post-install,post-upgrade');
+  assert.equal(adoptedExternal.metadata.annotations?.['helm.sh/hook-weight'], '5');
   const directory = mkdtempSync(join(tmpdir(), 'falcone-flow-token-legacy-'));
   try {
     const legacyChart = join(directory, 'chart');
@@ -132,6 +134,51 @@ test('executor and worker share one OpenBao/ESO flow execution Secret on install
     verifyDelivery(documents(render(upgradeArgs, legacyChart)));
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('both ESO modes synchronize the unchanged flow record after policy hooks and before readiness', () => {
+  const expectedSpec = {
+    refreshInterval: '1h',
+    secretStoreRef: { name: 'openbao-backend', kind: 'ClusterSecretStore' },
+    target: {
+      name: 'in-falcone-flow-execution-token',
+      creationPolicy: 'Orphan', deletionPolicy: 'Retain', immutable: false,
+    },
+    data: [{ secretKey: 'FLOW_EXECUTION_TOKEN_SECRET', remoteRef: {
+      key: 'flows/execution-token-secret', property: 'secret',
+    } }],
+  };
+  for (const mode of [[], [
+    '--set', 'eso.external-secrets.enabled=false',
+    '--set', 'global.externalSecrets.operatorNamespace=external-eso',
+    '--set', 'global.externalSecrets.operatorServiceAccount=external-secrets',
+  ]]) {
+    for (const [phase, args, policyJobs] of [
+      ['install', [], ['openbao-init']],
+      ['upgrade', upgradeArgs, ['openbao-auth-reconcile', 'openbao-function-invocation-seed']],
+      ['GitOps upgrade', [...upgradeArgs.slice(1), '--set', 'global.gitops.upgradeSemantics=true'],
+        ['openbao-auth-reconcile', 'openbao-function-invocation-seed']],
+    ]) {
+      const objects = documents(render([...mode, ...args]));
+      const external = objects.find((o) => o.kind === 'ExternalSecret'
+        && o.metadata.name === 'flows-execution-token');
+      assert.ok(external, `${phase}: the flow ExternalSecret must exist`);
+      assert.deepEqual(external.spec, expectedSpec, `${phase}: only hook metadata may change`);
+      assert.equal(external.metadata.annotations?.['helm.sh/hook'], 'post-install,post-upgrade');
+      assert.equal(external.metadata.annotations?.['helm.sh/hook-weight'], '5');
+      assert.equal(external.metadata.annotations?.['helm.sh/hook-delete-policy'], undefined);
+      const weight = Number(external.metadata.annotations['helm.sh/hook-weight']);
+      for (const name of [...policyJobs, 'flows-execution-token-ready']) {
+        const job = objects.find((o) => o.kind === 'Job' && o.metadata.name === name);
+        assert.ok(job, `${phase}: ${name} must exist before comparing hook weights`);
+        assert.ok(job.metadata.annotations?.['helm.sh/hook']?.includes(
+          phase === 'upgrade' ? 'post-upgrade' : 'post-install'), `${name} must share the post phase`);
+        const jobWeight = Number(job.metadata.annotations['helm.sh/hook-weight']);
+        assert.ok(name === 'flows-execution-token-ready' ? weight < jobWeight : weight > jobWeight,
+          `${phase}: flow synchronization must follow policy publication and precede readiness (${name})`);
+      }
+    }
   }
 });
 

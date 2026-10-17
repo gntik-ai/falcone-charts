@@ -14,8 +14,11 @@ access. Install bootstrap publishes the policy; upgrades publish it through the
 existing bootstrap identity after metadata-only auth reconciliation. Existing
 auth, backup, parity, migration and controller-ownership gates remain mandatory.
 
-Managed ESO creates the ExternalSecret in post-install/post-upgrade hooks at weight
-5. With an administrator-owned ESO it is Helm-tracked. In both modes the
+Both managed and administrator-owned ESO create the ExternalSecret in
+post-install/post-upgrade hooks at weight 5, after OpenBao policy publication and
+eso-role attachment (#70, following #62). A missing policy, not only a missing
+record, previously blocked Argo CD Sync with a 403 in administrator-owned mode,
+preventing the PostSync policy hooks from running. In both modes the
 `flows-execution-token-ready` post hook at weight 10 waits for the ExternalSecret
 to report Ready. It can read only that ExternalSecret's status, never Kubernetes
 Secret values; an unready record fails the hook. This status check proves ESO

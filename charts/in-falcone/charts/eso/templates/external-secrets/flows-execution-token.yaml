@@ -1,18 +1,18 @@
-{{- /* OpenBao is the sole source of execution-token signing material. */ -}}
-{{- $es := index .Values "external-secrets" | default dict -}}
-{{- $esoManaged := true -}}
-{{- if hasKey $es "enabled" }}{{- $esoManaged = $es.enabled }}{{- end -}}
+{{- /* OpenBao is the sole source of execution-token signing material.
+       #70, following #62: both ESO modes use post hooks after OpenBao policy
+       publication and eso-role attachment, before the readiness gate. An ordinary
+       resource can fail Argo CD Sync on a missing policy (403), preventing the
+       PostSync policy hooks from running. Trade-off: helm uninstall leaves this
+       ExternalSecret behind; its target is Orphan/Retain either way. */ -}}
 {{- $flow := .Values.global.flowExecutionToken | default dict -}}
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
   name: flows-execution-token
   namespace: {{ .Release.Namespace }}
-  {{- if $esoManaged }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "5"
-  {{- end }}
 spec:
   refreshInterval: {{ .Values.eso.refreshInterval | default "1h" | quote }}
   secretStoreRef: { name: openbao-backend, kind: ClusterSecretStore }
