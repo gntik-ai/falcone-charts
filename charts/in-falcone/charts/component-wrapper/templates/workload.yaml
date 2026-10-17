@@ -128,6 +128,15 @@
   {{- /* Roll the bundled Prometheus once to load the new flow-audit rule file. Bump with future rule changes. */ -}}
   {{- $_ := set $podAnnotations "in-falcone.io/flow-audit-rules-version" "2" -}}
 {{- end -}}
+{{- if eq .Chart.Name "observability" -}}
+  {{- $_ := set $podAnnotations "in-falcone.io/alert-rules-checksum" (sha256sum (toJson (dict "alerts" (.Values.alerts | default dict) "rules" "falcone-baseline-v1"))) -}}
+{{- end -}}
+{{- $args := .Values.args | default list -}}
+{{- if eq .Chart.Name "observability" -}}
+  {{- range $flag := list "--enable-feature=auto-reload-config" "--config.auto-reload-interval=30s" -}}
+    {{- if not (has $flag $args) -}}{{- $args = append $args $flag -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- $workloadAnnotations := dict -}}
 {{- $build := default (dict) .Values.global.openshiftBuild -}}
 {{- if and $build.enabled (has (.Values.wrapper.componentId | default "") (list "control-plane" "control-plane-executor" "web-console" "workflow-worker")) -}}
@@ -341,7 +350,7 @@ spec:
           command:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.args }}
+          {{- with $args }}
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}

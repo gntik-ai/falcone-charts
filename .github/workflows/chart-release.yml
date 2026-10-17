@@ -110,7 +110,27 @@ jobs:
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority
         run: sh tests/webhook-database-chart-ci.test.sh
       - name: Validate flow-audit, workflow worker PG env, and observability scrape limits
-        run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs
+        run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs tests/observability-baseline-alerts-chart.test.mjs
+      - name: Validate bundled alert rules with promtool
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/render-alert-rules.mjs "$RUNNER_TEMP/rules"
+          node tests/render-alert-rules.mjs "$RUNNER_TEMP/rules-gateway" \
+            --set observability.serviceAccount.automountToken=true \
+            --set controlPlane.wrapper.componentId=gateway
+          promtool_image='docker.io/prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62'
+          promtool() {
+            docker run --rm --entrypoint /bin/promtool \
+              -v "$RUNNER_TEMP/rules:/rules:ro" \
+              -v "$RUNNER_TEMP/rules-gateway:/rules-gateway:ro" \
+              -v "$PWD/tests/fixtures/alert-rules:/tests:ro" \
+              "$promtool_image" "$@"
+          }
+          promtool check rules /rules/flow-audit.rules.yml /rules/baseline.rules.yml
+          promtool check rules /rules-gateway/flow-audit.rules.yml /rules-gateway/baseline.rules.yml
+          promtool test rules /tests/baseline.rules.test.yml
+          promtool test rules /tests/baseline-gateway-collision.rules.test.yml
       - name: Validate invitation HMAC OpenBao and ESO delivery
         run: node --test tests/invitation-hmac-chart.test.mjs
       - name: Validate shared flow execution-token OpenBao and ESO delivery

@@ -14,6 +14,8 @@
 {{- $alerts := get $audit "alerts" | default dict -}}
 {{- $alertsEnabled := true -}}
 {{- if hasKey $alerts "enabled" -}}{{- $alertsEnabled = get $alerts "enabled" -}}{{- end -}}
+{{- $baselineAlerts := get (.Values.observability | default dict) "alerts" | default dict -}}
+{{- $baselineEnabled := dig "enabled" true $baselineAlerts -}}
 {{- $scrapeLimits := get (.Values.observability | default dict) "scrapeLimits" | default dict -}}
 {{- $sampleLimit := get $scrapeLimits "sampleLimit" | default 1000000 | int -}}
 {{- $labelValueLengthLimit := get $scrapeLimits "labelValueLengthLimit" | default 512 | int -}}
@@ -31,9 +33,14 @@ data:
       evaluation_interval: 30s
       external_labels:
         cluster: in-falcone
-    {{- if $alertsEnabled }}
+    {{- if or $alertsEnabled $baselineEnabled }}
     rule_files:
+      {{- if $alertsEnabled }}
       - /etc/prometheus/flow-audit.rules.yml
+      {{- end }}
+      {{- if $baselineEnabled }}
+      - /etc/prometheus/baseline.rules.yml
+      {{- end }}
     {{- end }}
     scrape_configs:
       - job_name: prometheus
@@ -115,4 +122,9 @@ data:
   flow-audit.rules.yml: |
     groups:
 {{ include "in-falcone.flowAuditRules" . | indent 6 }}
+  {{- end }}
+  {{- if $baselineEnabled }}
+  baseline.rules.yml: |
+    groups:
+{{ include "in-falcone.baselineRules" . | indent 6 }}
   {{- end }}

@@ -1,4 +1,5 @@
 {{- define "in-falcone.validate" -}}
+{{- $_ := include "in-falcone.baselineLatencyThreshold" . -}}
 {{- $functions := .Values.functions | default dict -}}
 {{- $functionPolicy := $functions.networkPolicy | default dict -}}
 {{- if not (kindIs "bool" (dig "enabled" true $functionPolicy)) -}}

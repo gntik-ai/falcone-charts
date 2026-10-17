@@ -3499,6 +3499,16 @@ grafana:
     limits: { cpu: 500m, memory: 512Mi }
 
 observability:
+  # Alerts report in Prometheus /api/v1/alerts and Grafana; no notification routing.
+  # Missing stored keys use these defaults. Availability checks cover metrics targets,
+  # not readiness of pods that still serve /metrics, nor workflow-worker.
+  alerts:
+    enabled: true
+    errorRatio: 0.05
+    latencyThresholdSeconds: 1
+    latencyObjective: 0.95
+    headSeriesBudget: 250000
+    secretAuthFailureThreshold: 3
   # Per target, shared by control-plane, executor and annotated Falcone pod scrapes.
   # 1M samples leaves headroom above ~191 templates x 8 methods x 10 statuses x 15
   # HTTP samples (229,200), plus other metrics. Missing stored keys use these defaults.
@@ -3526,6 +3536,8 @@ observability:
     - --config.file=/etc/prometheus/prometheus.yml
     - --storage.tsdb.path=/prometheus
     - --storage.tsdb.retention.time=15d
+    - --enable-feature=auto-reload-config
+    - --config.auto-reload-interval=30s
   serviceAccount:
     create: true
     name: ""

@@ -1,0 +1,13 @@
+{{- $alerts := get (.Values.observability | default dict) "alerts" | default dict -}}
+{{- if and (dig "enabled" true $alerts) (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ printf "%s-baseline" (include "in-falcone.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    in-falcone.io/component: baseline-alerts
+spec:
+  groups:
+{{ include "in-falcone.baselineRules" . | indent 4 }}
+{{- end }}
