@@ -3964,6 +3964,12 @@ controlPlaneExecutor:
   env:
     - name: CONTROL_PLANE_UPSTREAM
       value: "http://{{ .Release.Name }}-control-plane:8080"
+    # Functions stay disabled until the sandboxed backend ships (gntik-ai/falcone#1007).
+    # Without FN_BACKEND the executor falls back to its dev/test worker_threads runner,
+    # which runs tenant code inside the executor process with this pod's env. "off"
+    # makes function create/invoke return 501 FUNCTIONS_DISABLED instead.
+    - name: FN_BACKEND
+      value: "off"
     # Always activate the executor's own JWT verifier for bearer data routes.
     - name: KEYCLOAK_JWKS_URL
       valueFrom:
