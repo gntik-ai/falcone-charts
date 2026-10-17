@@ -12,14 +12,21 @@ manifest='https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-
 kubectl --context "$context" create --dry-run=client -f "$manifest" -o json |
   python3 -c '
 import json, sys
-manifest = json.load(sys.stdin)
-for obj in manifest["items"]:
+# kubectl prints one JSON document per resource in a multi-object manifest.
+decoder = json.JSONDecoder()
+remaining = sys.stdin.read().lstrip()
+items = []
+while remaining:
+    obj, end = decoder.raw_decode(remaining)
+    items.append(obj)
+    remaining = remaining[end:].lstrip()
+for obj in items:
     if (obj["kind"] == "Job"
             and obj["metadata"].get("namespace") == "ingress-nginx"
             and obj["metadata"]["name"] in (
                 "ingress-nginx-admission-create", "ingress-nginx-admission-patch")):
         obj["spec"].pop("ttlSecondsAfterFinished", None)
-json.dump(manifest, sys.stdout)
+json.dump({"apiVersion": "v1", "kind": "List", "items": items}, sys.stdout)
 ' | kubectl --context "$context" apply -f -
 kubectl --context "$context" -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=300s
 kubectl --context "$context" -n ingress-nginx wait --for=condition=complete job/ingress-nginx-admission-create job/ingress-nginx-admission-patch --timeout=300s

@@ -29,6 +29,13 @@ def render(profile):
     args = ['helm', 'template', 'falcone-surface', CHART, '--namespace', 'default']
     for value in BASE_VALUES + (['kind-quickstart.yaml'] if profile else []):
         args += ['-f', CHART / 'values' / value]
+    if not profile:
+        # Match the original HTTP quickstart so the negative case isolates paths,
+        # rather than succeeding merely because the request host has no rule.
+        args += ['--set', 'publicSurface.tls.mode=external']
+        for surface, host in [('api', 'api'), ('console', 'console'),
+                              ('identity', 'iam'), ('realtime', 'realtime')]:
+            args += ['--set-string', f'publicSurface.hostnames.{surface}={host}.127.0.0.1.nip.io']
     return [doc for doc in yaml.safe_load_all(command(args)) if doc]
 
 
@@ -58,7 +65,7 @@ def standins(objects, ingresses):
                           'spec': {'selector': label, 'ports': ports}})
         # BusyBox redirects directory requests to a trailing slash, then executes
         # cgi-bin/index.cgi. Both clients follow that redirect through the ingress.
-        script = r'''mkdir -p /tmp/www/cgi-bin /tmp/www/v1/x /tmp/www/v1/realtime/x /tmp/www/realms/x
+        script = r'''mkdir -p /tmp/www/cgi-bin /tmp/www/v1/x /tmp/www/v1/realtime/x /tmp/www/realms/x /tmp/www/control-plane/x
 cat > /tmp/www/cgi-bin/index.cgi <<'CGI'
 #!/bin/sh
 printf 'Content-Type: text/plain\r\n\r\n'
@@ -172,6 +179,8 @@ def main():
                 negative = [obj for obj in render(False) if obj['kind'] == 'Ingress' and obj['metadata']['name'].endswith('-public')]
                 assert {obj['metadata']['name'] for obj in negative} == {obj['metadata']['name'] for obj in ingresses}
                 apply(negative)
+                evidence['checks'].append({'name': 'without-profile-existing-route',
+                                           **eventually(lambda: request('api.127.0.0.1.nip.io', '/control-plane/x'))})
                 evidence['checks'].append({'name': 'without-profile-404',
                                            **eventually(lambda: request('api.127.0.0.1.nip.io', '/v1/x', 404))})
             finally:

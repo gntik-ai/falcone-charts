@@ -28,6 +28,27 @@ test('quickstart publishes new API paths and preserves the existing public paths
     .flatMap(r => r.http.paths).some(p => p.path.startsWith('/v1')), false)
 })
 
+test('live negative render keeps the quickstart hosts and HTTP while omitting the new paths', async () => {
+  const { spawnSync } = await import('node:child_process')
+  const result = spawnSync('python3', ['-c', `
+import json, runpy, sys
+surface = runpy.run_path(sys.argv[1])
+json.dump(surface['render'](False), sys.stdout)
+`, `${umbrellaChart}/../../tests/blackbox/kind-quickstart/kind-quickstart-surface.py`], {
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const negative = ingress(JSON.parse(result.stdout))
+  assert.equal(negative.spec.tls, undefined)
+  assert.deepEqual(negative.spec.rules.map(rule => rule.host).sort(),
+    ['api', 'console', 'iam', 'realtime'].map(host => `${host}.127.0.0.1.nip.io`).sort())
+  const apiPaths = negative.spec.rules.find(rule => rule.host === 'api.127.0.0.1.nip.io').http.paths
+  assert.deepEqual(apiPaths.map(path => path.path), ['/control-plane'])
+  assert.equal(apiPaths[0].pathType, 'Prefix')
+  assert.deepEqual(apiPaths[0].backend.service, { name: 'falcone-surface-apisix', port: { name: 'http' } })
+  assert.equal(negative.spec.rules.flatMap(rule => rule.http.paths).some(path => path.path.startsWith('/v1')), false)
+})
+
 const deployment = (objects, component) => objects.find(o => o.kind === 'Deployment' && o.metadata.name === `falcone-bbx-${component}`)
 const container = (objects, component) => deployment(objects, component).spec.template.spec.containers[0]
 const issuer = 'http://iam.127.0.0.1.nip.io'
@@ -134,7 +155,7 @@ test('checksums track each consumed issuer config without rolling unrelated cons
   assert.equal(deployment(unrelated, 'control-plane').spec.template.metadata.annotations.other, 'preserved')
 })
 
-test('ingress setup can verify admission completion after the controller becomes ready', async () => {
+test('ingress setup accepts kubectl per-object JSON and verifies admission completion after controller readiness', async () => {
   const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { spawnSync } = await import('node:child_process')
@@ -149,7 +170,8 @@ test('ingress setup can verify admission completion after the controller becomes
     { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'ingress-nginx-controller' } },
   ] }
   try {
-    writeFileSync(`${work}/manifest.json`, JSON.stringify(manifest))
+    // kubectl create -o json prints separate JSON documents, not a List.
+    writeFileSync(`${work}/manifest.json`, manifest.items.map(obj => JSON.stringify(obj, null, 2)).join('\n') + '\n')
     writeFileSync(`${work}/kubectl`, `#!/usr/bin/python3
 import json, os, sys
 from pathlib import Path
