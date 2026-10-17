@@ -1,3 +1,4 @@
+import { withPriorApisixStandaloneDefault } from './blackbox/fixtures/apisix-standalone-default-snapshot.mjs'
 import { withPriorBaselineAlerts } from './blackbox/fixtures/baseline-alerts-snapshot.mjs'
 import { withPriorConsolePublication } from './blackbox/fixtures/console-publication-snapshot.mjs'
 import { withPriorRealtimeSse } from './blackbox/fixtures/realtime-sse-snapshot.mjs'
@@ -81,9 +82,9 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   if (Object.keys(priorObservability.spec.template.metadata.annotations).length === 0) {
     delete priorObservability.spec.template.metadata.annotations
   }
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(priorObjects))))))))))))), priorBaseline)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorApisixStandaloneDefault(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(priorObjects)))))))))))))), priorBaseline)
   const expected = readFileSync(resolve(repoRoot, 'tests/blackbox/fixtures/umbrella-default-render.sha256'), 'utf8').trim()
-  assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(withPriorBaselineAlerts(objects)))))))))))))), expected)
+  assert.equal(sha256(JSON.stringify(canonical(withPriorApisixStandaloneDefault(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(withPriorBaselineAlerts(objects))))))))))))))), expected)
 
   const topic = added.find((object) => object.metadata.name.endsWith('-flow-audit-topic'))
   assert.equal(topic.spec.template.spec.containers[0].env.find((entry) => entry.name === 'FLOW_AUDIT_TOPIC').value,

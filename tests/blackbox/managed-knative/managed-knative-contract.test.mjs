@@ -1,3 +1,4 @@
+import { withPriorApisixStandaloneDefault } from '../fixtures/apisix-standalone-default-snapshot.mjs'
 import { withPriorBaselineAlerts } from '../fixtures/baseline-alerts-snapshot.mjs'
 import { withPriorConsolePublication } from '../fixtures/console-publication-snapshot.mjs'
 import { withPriorRealtimeSse } from '../fixtures/realtime-sse-snapshot.mjs'
@@ -440,7 +441,7 @@ test('default umbrella stays at its approved baseline and explicit disabled adds
     const disabledCanonical = disabled.map((output) => JSON.stringify(canonical(output.objects)))
 
     for (const output of defaults) {
-      assert.equal(sha256(JSON.stringify(canonical(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(withPriorBaselineAlerts(output.objects)))))))))))))), baseline,
+      assert.equal(sha256(JSON.stringify(canonical(withPriorApisixStandaloneDefault(withPriorIdentityRule(withPriorTemporalWeb(withPriorKafkaNetworkPolicy(withPriorInvitationHmac(withPriorScrapeLimits(withPriorApisixAccessLog(withPriorFlowExecutionToken(withPriorRealtimeSse(withPriorSecretInventory(withPriorConsolePublication(withPriorBaselineAlerts(output.objects))))))))))))))), baseline,
         'default umbrella render drifted from the approved public baseline')
     }
     for (const rendered of disabledCanonical) {
