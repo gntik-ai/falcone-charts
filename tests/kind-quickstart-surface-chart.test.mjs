@@ -133,3 +133,93 @@ test('checksums track each consumed issuer config without rolling unrelated cons
   }
   assert.equal(deployment(unrelated, 'control-plane').spec.template.metadata.annotations.other, 'preserved')
 })
+
+test('ingress setup can verify admission completion after the controller becomes ready', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const work = mkdtempSync(`${tmpdir()}/falcone-kind-ingress-`)
+  const script = `${umbrellaChart}/../../deploy/kind/quickstart/ingress-nginx.sh`
+  // The pinned upstream manifest sets ttlSecondsAfterFinished: 0 on both Jobs.
+  // Model the API's deletion of completed Jobs during the controller rollout.
+  const jobs = ['ingress-nginx-admission-create', 'ingress-nginx-admission-patch']
+  const manifest = { apiVersion: 'v1', kind: 'List', items: [
+    ...jobs.map(name => ({ apiVersion: 'batch/v1', kind: 'Job',
+      metadata: { name, namespace: 'ingress-nginx' }, spec: { ttlSecondsAfterFinished: 0 } })),
+    { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'ingress-nginx-controller' } },
+  ] }
+  try {
+    writeFileSync(`${work}/manifest.json`, JSON.stringify(manifest))
+    writeFileSync(`${work}/kubectl`, `#!/usr/bin/python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+folder = Path(os.environ['INGRESS_TEST_DIR'])
+assert args[:2] == ['--context', 'kind-test']
+state = folder / 'state.json'
+if 'create' in args:
+    assert '--dry-run=client' in args
+    print((folder / 'manifest.json').read_text())
+elif 'apply' in args:
+    source = args[args.index('-f') + 1]
+    data = json.load(sys.stdin) if source == '-' else json.loads((folder / 'manifest.json').read_text())
+    state.write_text(json.dumps(data))
+elif 'rollout' in args:
+    data = json.loads(state.read_text())
+    data['items'] = [obj for obj in data['items'] if obj.get('spec', {}).get('ttlSecondsAfterFinished') != 0]
+    state.write_text(json.dumps(data))
+elif 'wait' in args:
+    assert '--for=condition=complete' in args
+    names = {obj['metadata']['name'] for obj in json.loads(state.read_text())['items']}
+    for arg in args:
+        if arg.startswith('job/'):
+            if arg[4:] not in names:
+                sys.exit('Error from server (NotFound): jobs.batch "' + arg[4:] + '" not found')
+            with (folder / 'completed.jsonl').open('a') as output:
+                output.write(json.dumps(arg[4:]) + '\\n')
+else:
+    sys.exit('unexpected kubectl command: ' + repr(args))
+`, { mode: 0o755 })
+    const invoke = context => spawnSync('bash', [script, context], {
+      env: { ...process.env, PATH: `${work}:${process.env.PATH}`, INGRESS_TEST_DIR: work }, encoding: 'utf8',
+    })
+    for (const context of ['production', 'kind-']) assert.notEqual(invoke(context).status, 0)
+    const result = invoke('kind-test')
+    assert.equal(result.status, 0, result.stderr)
+    const applied = JSON.parse(readFileSync(`${work}/state.json`, 'utf8'))
+    assert.deepEqual(applied.items.filter(obj => obj.kind !== 'Job'), manifest.items.filter(obj => obj.kind !== 'Job'))
+    const completed = readFileSync(`${work}/completed.jsonl`, 'utf8').trim().split('\n').map(JSON.parse)
+    assert.deepEqual(completed.sort(), jobs.slice().sort())
+  } finally {
+    rmSync(work, { recursive: true, force: true })
+  }
+})
+
+test('live surface proof exposes setup errors while preserving cleanup and evidence', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const work = mkdtempSync(`${tmpdir()}/falcone-kind-error-`)
+  try {
+    writeFileSync(`${work}/kind`, `#!/bin/sh
+case "$1" in
+  create) echo 'setup failed: stand-in diagnostic' >&2; exit 1 ;;
+  delete) echo deleted > "$SURFACE_TEST_DIR/deleted" ;;
+  *) exit 2 ;;
+esac
+`, { mode: 0o755 })
+    const result = spawnSync('python3', [`${umbrellaChart}/../../tests/blackbox/kind-quickstart/kind-quickstart-surface.py`], {
+      env: { ...process.env, PATH: `${work}:${process.env.PATH}`, SURFACE_TEST_DIR: work,
+        KIND_QUICKSTART_EVIDENCE: `${work}/evidence.json`, PYTHONDONTWRITEBYTECODE: '1' }, encoding: 'utf8',
+    })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /setup failed: stand-in diagnostic/)
+    assert.equal(readFileSync(`${work}/deleted`, 'utf8').trim(), 'deleted')
+    const evidence = JSON.parse(readFileSync(`${work}/evidence.json`, 'utf8'))
+    assert.equal(evidence.status, 'FAIL')
+    assert.equal(evidence.error_type, 'CalledProcessError')
+    assert.equal(evidence.cluster_deleted, true)
+  } finally {
+    rmSync(work, { recursive: true, force: true })
+  }
+})

@@ -21,7 +21,7 @@ BASE_VALUES = ['dev.yaml', 'platform-kubernetes.yaml', 'profiles/all-in-one.yaml
 
 def command(args, *, env=None, payload=None):
     result = subprocess.run([str(arg) for arg in args], cwd=ROOT, env=env,
-                            input=payload, text=True, capture_output=True, check=True)
+                            input=payload, text=True, stdout=subprocess.PIPE, check=True)
     return result.stdout
 
 
