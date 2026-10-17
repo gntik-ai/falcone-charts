@@ -1,3 +1,4 @@
+import { withPriorIssuerRollout } from './blackbox/fixtures/issuer-rollout-snapshot.mjs'
 import { withPriorApisixStandaloneDefault } from './blackbox/fixtures/apisix-standalone-default-snapshot.mjs'
 import { withPriorBaselineAlerts } from './blackbox/fixtures/baseline-alerts-snapshot.mjs'
 import { withPriorConsolePublication } from './blackbox/fixtures/console-publication-snapshot.mjs'
@@ -72,7 +73,7 @@ test('default render adds exactly the reviewed flow-audit objects and bundled ru
   assert.equal(observability.spec.template.metadata.annotations[rolloutAnnotation], '2')
 
   // Subtract the independently tested baseline addition, then verify the original flow-audit delta.
-  const priorObjects = withPriorBaselineAlerts(objects.filter((object) => !added.includes(object)))
+  const priorObjects = withPriorBaselineAlerts(withPriorIssuerRollout(objects.filter((object) => !added.includes(object))))
   const priorPrometheus = prometheusConfig(priorObjects)
   delete priorPrometheus.data['flow-audit.rules.yml']
   assert.ok(priorPrometheus.data['prometheus.yml'].includes(ruleFilesBlock))

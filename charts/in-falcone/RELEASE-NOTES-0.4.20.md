@@ -246,3 +246,18 @@ fail-forward rules remain authoritative. Audience mappers may remain.
 These are new unpublished notes; published 0.4.19 notes/packages and render
 baselines remain unchanged. Release review must finalize the shipping version
 before packaging; this bounded repair leaves Chart.yaml's version unchanged.
+
+## Kind quickstart public surface (#81)
+
+The optional `values/kind-quickstart.yaml` profile adds the `/v1` and
+`/v1/realtime` public paths and a canonical HTTP nip.io issuer. Local kind
+setup and the required manual full-platform verification are documented in
+`deploy/kind/quickstart/README.md`. The `kind-quickstart-surface` CI proof gates
+publication and covers ingress routing and pod-side DNS using disposable stand-ins.
+
+On the next chart upgrade, new issuer checksum annotations cause one rolling
+restart of executor, control-plane and APISIX, including installations without
+this profile. Subsequent identical issuer inputs keep stable annotations. Existing
+migration, immutable-image, backup/parity and External Secrets/OpenBao gates remain
+in force. The manual Keycloak backchannel/login and full-platform checks must be
+recorded on issue #81 before release.

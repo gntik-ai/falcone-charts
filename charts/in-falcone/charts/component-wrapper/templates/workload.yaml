@@ -94,6 +94,10 @@
        and must never receive signing material. Signer configuration is never
        shared through envFrom or runtime ConfigMaps. Defaults also cover Helm
        releases predating this contract. */ -}}
+{{- $keycloakIssuer := "" -}}
+{{- if eq (.Values.wrapper.componentId | default "") "control-plane" -}}
+  {{- $keycloakIssuer = .Values.keycloakIssuer | default "" -}}
+{{- end -}}
 {{- $isFunctionSigner := eq (.Values.wrapper.componentId | default "") "control-plane" -}}
 {{- $invitationEmailHmac := .Values.global.invitationEmailHmac | default dict -}}
 {{- $invitationEmailHmacSecret := dig "secretName" "in-falcone-invitation-email-hmac" $invitationEmailHmac -}}
@@ -440,8 +444,14 @@ spec:
             - name: WEBHOOK_DATABASE_AUTHORITY_GRANTOR_ROLE
               value: {{ $webhookDatabasePrincipals.grantor | quote }}
             {{- end }}
-            {{- with .Values.env }}
-            {{- tpl (toYaml .) $ | nindent 12 }}
+            {{- if $keycloakIssuer }}
+            - name: KEYCLOAK_ISSUER
+              value: {{ $keycloakIssuer | quote }}
+            {{- end }}
+            {{- range (.Values.env | default list) }}
+            {{- if not (and $keycloakIssuer (eq .name "KEYCLOAK_ISSUER")) }}
+            {{- tpl (toYaml (list .)) $ | nindent 12 }}
+            {{- end }}
             {{- end }}
             {{- if $knativeRuntimeConsumer }}
             - name: KNATIVE_RUNTIME_MODE
