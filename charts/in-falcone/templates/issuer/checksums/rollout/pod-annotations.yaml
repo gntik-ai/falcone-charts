@@ -1,0 +1,18 @@
+{{- /* Helm evaluates deeper template paths before the dependency workloads.
+      Keep this initializer deeper than charts/<alias>/templates/workload.yaml:
+      it augments only the existing podAnnotations maps before they are rendered,
+      preserving the dependency manifests and their historical ordering. */ -}}
+{{- if (.Values.controlPlane.keycloakIssuer | default "") -}}
+{{- $executorConfig := include "in-falcone/templates/executor-jwt-config.yaml" . | fromYaml | default dict -}}
+{{- $checksums := dict
+      "controlPlane" (sha256sum (.Values.controlPlane.keycloakIssuer | default ""))
+      "controlPlaneExecutor" (sha256sum (toJson ($executorConfig.data | default dict)))
+      "apisix" (sha256sum (include "in-falcone.issuerJwksAuth" .)) -}}
+{{- range $alias := list "controlPlane" "controlPlaneExecutor" "apisix" -}}
+{{- with index $.Subcharts $alias -}}
+{{- $annotations := deepCopy (.Values.podAnnotations | default dict) -}}
+{{- $_ := set $annotations "in-falcone.io/issuer-config-checksum" (index $checksums $alias) -}}
+{{- $_ := set .Values "podAnnotations" $annotations -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

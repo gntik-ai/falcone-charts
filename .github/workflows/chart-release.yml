@@ -6,6 +6,7 @@ on:
       - 'charts/**'
       - 'deploy/helm/**'
       - 'deploy/kind/values-*.yaml'
+      - 'deploy/kind/quickstart/**'
       - 'deploy/openshift/values-openshift.yaml'
       - 'helm/**'
       - 'bin/falcone-knative'
@@ -18,6 +19,7 @@ on:
       - 'charts/**'
       - 'deploy/helm/**'
       - 'deploy/kind/values-*.yaml'
+      - 'deploy/kind/quickstart/**'
       - 'deploy/openshift/values-openshift.yaml'
       - 'helm/**'
       - 'bin/falcone-knative'
@@ -71,6 +73,35 @@ jobs:
           name: executor-env-upgrade-evidence
           path: ${{ runner.temp }}/executor-env-upgrade-evidence.json
           if-no-files-found: error
+  kind-quickstart-surface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v4.1.4
+      - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          install_only: true
+          version: v0.27.0
+      - name: Install YAML reader
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends python3-yaml
+      - name: Verify kind quickstart public surface
+        env:
+          KIND_QUICKSTART_EVIDENCE: ${{ runner.temp }}/kind-quickstart-surface-evidence.json
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 tests/blackbox/kind-quickstart/kind-quickstart-surface.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: kind-quickstart-surface-evidence
+          path: ${{ runner.temp }}/kind-quickstart-surface-evidence.json
+          if-no-files-found: error
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -110,7 +141,7 @@ jobs:
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority
         run: sh tests/webhook-database-chart-ci.test.sh
       - name: Validate flow-audit, workflow worker PG env, and observability scrape limits
-        run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs tests/observability-baseline-alerts-chart.test.mjs
+        run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs tests/observability-baseline-alerts-chart.test.mjs tests/kind-quickstart-surface-chart.test.mjs
       - name: Validate APISIX standalone route provisioning
         run: node --test tests/apisix-standalone-routes-chart.test.mjs
       - name: Validate bundled alert rules with promtool
@@ -258,7 +289,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push'
-    needs: [validate, executor-env-upgrade]
+    needs: [validate, executor-env-upgrade, kind-quickstart-surface]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

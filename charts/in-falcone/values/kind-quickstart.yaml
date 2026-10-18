@@ -1,0 +1,29 @@
+# Layer last, after dev.yaml, platform-kubernetes.yaml and profiles/all-in-one.yaml.
+global:
+  keycloakIssuerBaseUrl: http://iam.127.0.0.1.nip.io
+publicSurface:
+  tls:
+    mode: external
+  hostnames:
+    api: api.127.0.0.1.nip.io
+    console: console.127.0.0.1.nip.io
+    identity: iam.127.0.0.1.nip.io
+    realtime: realtime.127.0.0.1.nip.io
+  bindings:
+    api:
+      paths: [/control-plane, /v1]
+    realtime:
+      paths: [/realtime, /v1/realtime]
+keycloak:
+  args:
+    - start
+    - --http-enabled=true
+    - --hostname-strict=false
+    - --hostname=http://iam.127.0.0.1.nip.io
+    - --hostname-backchannel-dynamic=true
+controlPlane:
+  keycloakIssuer: http://iam.127.0.0.1.nip.io/realms/in-falcone-platform
+gatewayPolicy:
+  oidc:
+    issuerUrl: http://iam.127.0.0.1.nip.io/realms/in-falcone-platform
+    discoveryUrl: http://iam.127.0.0.1.nip.io/realms/in-falcone-platform/.well-known/openid-configuration

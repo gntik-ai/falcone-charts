@@ -3716,6 +3716,8 @@ observability:
         drop:
           - ALL
 controlPlane:
+  # Optional canonical issuer; omitted for existing installations.
+  keycloakIssuer: ""
   wrapper:
     componentId: control-plane
     workload:
