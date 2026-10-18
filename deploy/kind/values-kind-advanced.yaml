@@ -92,6 +92,8 @@ controlPlaneExecutor:
   env:
     # REQUIRED: proxy non-data-plane (browse/inventory/management) routes to the control-plane.
     - { name: CONTROL_PLANE_UPSTREAM, value: http://falcone-control-plane:8080 }
+    # Local development profile without Keycloak verification.
+    - { name: EXECUTOR_ALLOW_UNVERIFIED_IDENTITY, value: "true" }
     - { name: PGHOST, value: falcone-postgresql }
     - { name: PGUSER, value: falcone }
     - { name: PGDATABASE, value: in_falcone }
