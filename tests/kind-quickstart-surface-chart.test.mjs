@@ -79,10 +79,28 @@ test('issuer config changes roll exactly the three consumers and checksums are d
   const withProfile = render(umbrellaChart, args()).objects
   const repeat = render(umbrellaChart, args()).objects
   for (const component of ['control-plane', 'control-plane-executor', 'apisix']) {
-    const checksum = objects => deployment(objects, component).spec.template.metadata.annotations['in-falcone.io/issuer-config-checksum']
+    const checksum = objects => deployment(objects, component).spec.template.metadata.annotations?.['in-falcone.io/issuer-config-checksum']
     assert.match(checksum(withProfile) ?? '', /^[0-9a-f]{64}$/)
-    assert.notEqual(checksum(withProfile), checksum(without), component)
+    assert.equal(checksum(without), undefined, component)
     assert.equal(checksum(withProfile), checksum(repeat), component)
+  }
+})
+
+test('profiles without a control-plane issuer preserve their pod annotations and environment', () => {
+  for (const [profile, values] of [
+    ['default', []],
+    ['prod-tls', ['-f', `${umbrellaChart}/values/prod.yaml`, '-f', `${umbrellaChart}/../../deploy/kind/values-production.yaml`]],
+    ['kind-tls', ['-f', `${umbrellaChart}/../../deploy/kind/values-kind.yaml`, '-f', `${umbrellaChart}/../../deploy/kind/values-production.yaml`]],
+    ['three-file quickstart', args(false)],
+    ['null issuer', [...args(), '--set', 'controlPlane.keycloakIssuer=null']],
+  ]) {
+    const { objects } = render(umbrellaChart, values)
+    for (const object of objects.filter(o => o.kind === 'Deployment')) {
+      assert.equal(object.spec.template.metadata.annotations?.['in-falcone.io/issuer-config-checksum'],
+        undefined, `${profile}: ${object.metadata.name}`)
+    }
+    assert.equal(deployment(objects, 'apisix').spec.template.metadata.annotations, undefined, profile)
+    assert.equal(container(objects, 'control-plane').env.some(e => e.name === 'KEYCLOAK_ISSUER'), false, profile)
   }
 })
 
@@ -146,7 +164,7 @@ test('checksums track each consumed issuer config without rolling unrelated cons
   const ttlChange = render(umbrellaChart, [...args(), '--set', 'gatewayPolicy.issuerJwksAuth.cache_ttl=301']).objects
   const cpChange = render(umbrellaChart, [...args(), '--set-string', 'controlPlane.keycloakIssuer=http://other.example/realms/platform']).objects
   const unrelated = render(umbrellaChart, [...args(), '--set-string', 'controlPlane.podAnnotations.other=preserved']).objects
-  const checksum = (objects, component) => deployment(objects, component).spec.template.metadata.annotations['in-falcone.io/issuer-config-checksum']
+  const checksum = (objects, component) => deployment(objects, component).spec.template.metadata.annotations?.['in-falcone.io/issuer-config-checksum']
   for (const component of ['control-plane', 'control-plane-executor', 'apisix']) {
     assert.equal(checksum(baseline, component) === checksum(ttlChange, component), component !== 'apisix', component)
     assert.equal(checksum(baseline, component) === checksum(cpChange, component), component !== 'control-plane', component)

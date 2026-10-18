@@ -255,9 +255,10 @@ setup and the required manual full-platform verification are documented in
 `deploy/kind/quickstart/README.md`. The `kind-quickstart-surface` CI proof gates
 publication and covers ingress routing and pod-side DNS using disposable stand-ins.
 
-On the next chart upgrade, new issuer checksum annotations cause one rolling
-restart of executor, control-plane and APISIX, including installations without
-this profile. Subsequent identical issuer inputs keep stable annotations. Existing
+Adding the kind-quickstart profile with a non-empty `controlPlane.keycloakIssuer`
+causes one rolling restart of executor, control-plane and APISIX through issuer
+checksum annotations. Other installations are unchanged and receive no issuer
+checksum annotations. Subsequent identical issuer inputs keep stable annotations. Existing
 migration, immutable-image, backup/parity and External Secrets/OpenBao gates remain
 in force. The manual Keycloak backchannel/login and full-platform checks must be
 recorded on issue #81 before release.
