@@ -31,7 +31,7 @@ webConsole:
     repository: ghcr.io/gntik-ai/in-falcone-web-console
 workflowWorker:
   image:
-    tag: sha-3fe2f76
+    tag: sha-f43e0a5
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-workflow-worker
 mcp:
