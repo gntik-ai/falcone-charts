@@ -1,4 +1,7 @@
+{{- define "component-wrapper.workload" -}}
 {{- $workloadKind := .Values.wrapper.workload.kind | default "Deployment" -}}
+{{- $largeTaskConfig := .LargeTaskConfig | default "" -}}
+{{- $largeTasksEnabled := and (eq (.Values.wrapper.componentId | default "") "workflow-worker") (ne $largeTaskConfig "") -}}
 {{- $temporalAdminToolsImage := default (dict "repository" "docker.io/temporalio/admin-tools" "tag" "1.31.1" "pullPolicy" "IfNotPresent") .Values.global.temporalAdminToolsImage -}}
 {{- $podSecurityContext := mergeOverwrite (deepCopy (default (dict) .Values.global.podSecurity)) (default (dict) .Values.podSecurityContext) -}}
 {{- if (.Values.global.podSecurity.openshiftRestricted | default false) -}}
@@ -128,6 +131,9 @@
   {{- end -}}
 {{- end -}}
 {{- $podAnnotations := deepCopy (default (dict) .Values.podAnnotations) -}}
+{{- if $largeTasksEnabled -}}
+  {{- $_ := set $podAnnotations "in-falcone.io/large-task-config-sha256" (sha256sum $largeTaskConfig) -}}
+{{- end -}}
 {{- if eq (.Values.wrapper.componentId | default "") "observability" -}}
   {{- /* Roll the bundled Prometheus once to load the new flow-audit rule file. Bump with future rule changes. */ -}}
   {{- $_ := set $podAnnotations "in-falcone.io/flow-audit-rules-version" "2" -}}
@@ -207,7 +213,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "component-wrapper.serviceAccountName" . }}
-      automountServiceAccountToken: {{ ternary false (.Values.serviceAccount.automountToken | default false) $knativeRuntimeConsumer }}
+      automountServiceAccountToken: {{ or $largeTasksEnabled (ternary false (.Values.serviceAccount.automountToken | default false) $knativeRuntimeConsumer) }}
       enableServiceLinks: false
       {{- if gt (len $imagePullSecrets) 0 }}
       imagePullSecrets:
@@ -362,8 +368,15 @@ spec:
           ports:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer $isFlowTokenConsumer }}
+          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer $isFlowTokenConsumer $largeTasksEnabled }}
           env:
+            {{- if $largeTasksEnabled }}
+            - name: LARGE_TASK_CONFIG
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Release.Name }}-large-task-config
+                  key: LARGE_TASK_CONFIG
+            {{- end }}
             {{- if $isFlowTokenConsumer }}
             {{- /* Managed ESO creates the Secret after Helm --wait. Production
                    minting/validation fails closed until a rollout reloads it. */}}
@@ -721,3 +734,8 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end -}}
+{{- /* The umbrella supplies the workflow worker's private runtime context. */ -}}
+{{- if ne .Chart.Name "workflowWorker" -}}
+{{- include "component-wrapper.workload" . -}}
+{{- end -}}
