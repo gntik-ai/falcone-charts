@@ -30,6 +30,264 @@
     "webConsole"
   ],
   "properties": {
+    "largeTasks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "jobs": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "cpu": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ]
+            },
+            "memory": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ]
+            },
+            "ephemeralStorage": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ]
+            }
+          }
+        },
+        "isolationProbe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string",
+              "anyOf": [
+                {
+                  "const": ""
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$"
+                }
+              ]
+            },
+            "runAsUser": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$"
+          }
+        },
+        "finishedTtlSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "claimRetentionSeconds": {
+          "type": "integer",
+          "minimum": 86401
+        },
+        "isolationRecheckSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "approvedImages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$"
+              },
+              "allowedEnv": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "ref",
+              "allowedEnv"
+            ]
+          }
+        },
+        "approvedSandboxRuntimeClasses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "profiles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "image": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ]
+                }
+              },
+              "resources": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "cpu": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    ]
+                  },
+                  "memory": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    ]
+                  },
+                  "ephemeralStorage": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "cpu",
+                  "memory",
+                  "ephemeralStorage"
+                ]
+              },
+              "maxDurationSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "codeExecution": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "sandboxed"
+                ]
+              },
+              "runtimeClassName": {
+                "type": "string"
+              },
+              "runAsUser": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "runAsGroup": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "egress": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "dnsNamespaces": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "allowedNamespaces": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "dnsNamespaces",
+                  "allowedNamespaces"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "global": {
       "type": "object",
       "required": [

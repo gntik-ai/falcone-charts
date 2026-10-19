@@ -1,4 +1,21 @@
 {{- define "in-falcone.validate" -}}
+{{- $largeTasks := .Values.largeTasks | default dict -}}
+{{- if dig "enabled" false $largeTasks -}}
+  {{- $probe := dig "isolationProbe" dict $largeTasks -}}
+  {{- $image := dig "image" "" $probe -}}
+  {{- if eq $image "" -}}
+    {{- fail "largeTasks.isolationProbe.image is required when largeTasks.enabled=true" -}}
+  {{- end -}}
+  {{- if not (regexMatch "^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $image) -}}
+    {{- fail "largeTasks.isolationProbe.image must be digest-pinned" -}}
+  {{- end -}}
+  {{- if eq (len (dig "nodes" (list) $largeTasks)) 0 -}}
+    {{- fail "largeTasks.nodes is required and must list eligible node metadata.name values when largeTasks.enabled=true" -}}
+  {{- end -}}
+  {{- if gt (len (printf "%s-large-tasks" .Release.Name)) 63 -}}
+    {{- fail "largeTasks requires a release name of at most 51 characters for its namespace" -}}
+  {{- end -}}
+{{- end -}}
 {{- $_ := include "in-falcone.baselineLatencyThreshold" . -}}
 {{- $functions := .Values.functions | default dict -}}
 {{- $functionPolicy := $functions.networkPolicy | default dict -}}

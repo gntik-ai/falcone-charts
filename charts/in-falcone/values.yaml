@@ -5603,3 +5603,23 @@ mcp:
       type: RuntimeDefault
     capabilities:
       drop: ["ALL"]
+
+# Optional large-task runtime. The worker remains tokenless until explicitly enabled.
+# Images and eligible node metadata.name values are supplied by the release operator.
+largeTasks:
+  enabled: false
+  quota:
+    jobs: "32"
+    cpu: "8"
+    memory: 16Gi
+    ephemeralStorage: 40Gi
+  isolationProbe:
+    image: ""
+    runAsUser: 65532
+  nodes: []
+  finishedTtlSeconds: 3600
+  claimRetentionSeconds: 604800
+  isolationRecheckSeconds: 86400
+  approvedImages: []
+  approvedSandboxRuntimeClasses: []
+  profiles: {}

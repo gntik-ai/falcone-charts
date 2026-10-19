@@ -60,3 +60,47 @@ seaweedfs:
     data:
       size: 10Gi
       storageClass: hcloud-volumes
+
+# #1190: smoke profiles are prepared but remain off until the paired release.
+# Release review supplies the four actual node metadata.name values, the promoted
+# task image in each profile and approvedImages (allowedEnv: []), and the probe
+# image. Never infer node identities or enable with empty image/node settings.
+largeTasks:
+  enabled: false
+  nodes: []
+  profiles:
+    smoke-echo:
+      args: [sh, -c, 'cat /task/params.json > /dev/termination-log']
+      env: []
+      resources: {cpu: 100m, memory: 64Mi, ephemeralStorage: 64Mi}
+      maxDurationSeconds: 60
+      codeExecution: disabled
+      runAsUser: 65532
+      runAsGroup: 65532
+      egress: {dnsNamespaces: [], allowedNamespaces: []}
+    smoke-sleep:
+      args: [sleep, '3600']
+      env: []
+      resources: {cpu: 100m, memory: 64Mi, ephemeralStorage: 64Mi}
+      maxDurationSeconds: 30
+      codeExecution: disabled
+      runAsUser: 65532
+      runAsGroup: 65532
+      egress: {dnsNamespaces: [], allowedNamespaces: []}
+    smoke-net:
+      args:
+        - sh
+        - -c
+        - |
+          nc -w 3 kube-dns.kube-system.svc.cluster.local 53 </dev/null
+          dns=$?
+          nc -w 3 {{ .Release.Name }}-postgresql.{{ .Release.Namespace }}.svc.cluster.local 5432 </dev/null
+          pg=$?
+          printf '{"dns":%s,"pg":%s}' "$dns" "$pg" > /dev/termination-log
+      env: []
+      resources: {cpu: 100m, memory: 64Mi, ephemeralStorage: 64Mi}
+      maxDurationSeconds: 60
+      codeExecution: disabled
+      runAsUser: 65532
+      runAsGroup: 65532
+      egress: {dnsNamespaces: [kube-system], allowedNamespaces: []}

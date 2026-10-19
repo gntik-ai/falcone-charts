@@ -1,0 +1,9 @@
+{{- /* Render this dependency's workload with umbrella-owned runtime configuration.
+      A private template context carries config without introducing shared globals
+      or mutating workflowWorker.env / envFromConfigMaps. Keep this filename ahead
+      of umbrella workloads to preserve the disabled manifest ordering. */ -}}
+{{- $worker := deepCopy .Subcharts.workflowWorker -}}
+{{- if dig "enabled" false (.Values.largeTasks | default dict) -}}
+{{- $_ := set $worker "LargeTaskConfig" (include "in-falcone.largeTasks.config" .) -}}
+{{- end -}}
+{{- include "component-wrapper.workload" $worker -}}

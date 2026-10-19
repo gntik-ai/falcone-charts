@@ -1,0 +1,85 @@
+{{- $largeTasks := .Values.largeTasks | default dict -}}
+{{- if dig "enabled" false $largeTasks -}}
+{{- $namespace := printf "%s-large-tasks" .Release.Name -}}
+{{- $quota := dig "quota" dict $largeTasks -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $namespace }}
+  labels:
+    {{- include "in-falcone.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ $namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: large-tasks
+  namespace: {{ $namespace }}
+spec:
+  hard:
+    count/jobs.batch: {{ dig "jobs" "32" $quota | quote }}
+    requests.cpu: {{ dig "cpu" "8" $quota | quote }}
+    limits.cpu: {{ dig "cpu" "8" $quota | quote }}
+    requests.memory: {{ dig "memory" "16Gi" $quota | quote }}
+    limits.memory: {{ dig "memory" "16Gi" $quota | quote }}
+    requests.ephemeral-storage: {{ dig "ephemeralStorage" "40Gi" $quota | quote }}
+    limits.ephemeral-storage: {{ dig "ephemeralStorage" "40Gi" $quota | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: large-task-runtime
+  namespace: {{ $namespace }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, patch, delete]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create, get, list, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: large-task-runtime
+  namespace: {{ $namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: large-task-runtime
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "component-wrapper.serviceAccountName" .Subcharts.workflowWorker }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-large-task-config
+  namespace: {{ .Release.Namespace }}
+data:
+  LARGE_TASK_CONFIG: {{ include "in-falcone.largeTasks.config" . | quote }}
+{{- end }}
