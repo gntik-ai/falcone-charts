@@ -1,6 +1,7 @@
 {{- /*
   RBAC for the control-plane function executor: it manages a Knative Service per
-  function (deploy = create/patch ksvc, invoke = HTTP) and reads execution logs.
+  function, owns its derived Secret, removes legacy inline-secret Revisions, and
+  reads execution logs (invoke = HTTP).
   Namespace-scoped (not privileged / not cluster-wide). On OpenShift this replaces
   the standalone deploy/kind/control-plane/executor-rbac.yaml so the chart is
   self-contained. Bound to the control-plane ServiceAccount.
@@ -18,6 +19,22 @@ rules:
   - apiGroups: ["serving.knative.dev"]
     resources: ["services"]
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # OpenBao remains authoritative; these are owned, per-Function projections.
+  # No Secret enumeration: the executor addresses each projection by name.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "update", "patch", "delete"]
+  # Inspect owned descendants for legacy plaintext; immutable Revisions are
+  # removed with foreground GC. No writes to Configurations or apps workloads.
+  - apiGroups: ["serving.knative.dev"]
+    resources: ["configurations"]
+    verbs: ["list"]
+  - apiGroups: ["serving.knative.dev"]
+    resources: ["revisions"]
+    verbs: ["list", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["list"]
   # legacy Job-based executor fallback + reading execution logs
   - apiGroups: ["batch"]
     resources: ["jobs"]
