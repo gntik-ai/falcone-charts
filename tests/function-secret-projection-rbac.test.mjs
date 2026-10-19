@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { render, umbrellaChart } from './blackbox/fixtures/blackbox.mjs';
+import { withPriorFunctionSecretProjection } from './blackbox/fixtures/function-secret-projection-snapshot.mjs';
 
 function permissions(role, group, resource) {
   return [...new Set(role.rules.filter((rule) =>
@@ -38,5 +39,30 @@ test('legacy inline-secret remediation can inspect descendants and delete only R
   assert.deepEqual(permissions(role, 'serving.knative.dev', 'revisions'), ['delete', 'list']);
   for (const resource of ['deployments', 'replicasets']) {
     assert.deepEqual(permissions(role, 'apps', resource), ['list']);
+  }
+});
+
+test('historical snapshots subtract only the exact reviewed Function lifecycle RBAC', () => {
+  const { objects } = render(umbrellaChart);
+  const original = structuredClone(objects);
+  const prior = withPriorFunctionSecretProjection(objects);
+  const role = prior.find((object) => object.kind === 'Role'
+    && object.metadata.name === 'falcone-bbx-function-executor');
+  assert.deepEqual(role.rules, [
+    { apiGroups: ['serving.knative.dev'], resources: ['services'],
+      verbs: ['create', 'get', 'list', 'watch', 'update', 'patch', 'delete'] },
+    { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'get', 'list', 'watch', 'delete'] },
+    { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list'] },
+    { apiGroups: [''], resources: ['pods/log'], verbs: ['get'] },
+  ]);
+  assert.deepEqual(objects, original, 'snapshot normalization must not change the rendered input');
+
+  for (const index of [1, 2, 3, 4]) {
+    const changed = structuredClone(objects);
+    const changedRole = changed.find((object) => object.kind === 'Role'
+      && object.metadata.name === role.metadata.name);
+    changedRole.rules[index].verbs.push('watch');
+    assert.throws(() => withPriorFunctionSecretProjection(changed), assert.AssertionError,
+      'snapshot normalization must reject changes to each reviewed permission rule');
   }
 });
