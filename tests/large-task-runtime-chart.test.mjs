@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { readYaml, sha256, umbrellaChart, yamlDocuments } from './blackbox/fixtures/blackbox.mjs'
 
@@ -7,8 +10,8 @@ const probe = `registry.example/busybox@sha256:${'a'.repeat(64)}`
 const enabled = ['--set', 'largeTasks.enabled=true', '--set-string', `largeTasks.isolationProbe.image=${probe}`,
   '--set', 'largeTasks.nodes[0]=node-a']
 const namespace = 'falcone-bbx-large-tasks'
-function render(args = []) {
-  const result = spawnSync('helm', ['template', 'falcone-bbx', umbrellaChart, '--namespace', 'falcone-bbx', ...args],
+function render(args = [], chart = umbrellaChart) {
+  const result = spawnSync('helm', ['template', 'falcone-bbx', chart, '--namespace', 'falcone-bbx', ...args],
     { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
   assert.equal(result.status, 0, result.stderr)
   return yamlDocuments(result.stdout)
@@ -41,10 +44,32 @@ test('staging smoke profiles are prepared behind the gate with operator images a
   }
 })
 
-test('disabled and missing largeTasks preserve the pre-change render', () => {
-  for (const args of [[], ['--set', 'largeTasks.enabled=false'], ['--set', 'largeTasks=null']]) {
-    const objects = render(args)
-    assert.equal(sha256(JSON.stringify(objects)), '69fea70d7dafd377952c346cca40af796f0568c1e605572a1ac881b32bc72bf9')
+test('disabled largeTasks preserve objects when stored values lack the new block', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'falcone-large-tasks-stored-values-'))
+  const chart = join(directory, 'in-falcone')
+  try {
+    cpSync(umbrellaChart, chart, { recursive: true })
+    const values = readYaml(`${chart}/values.yaml`)
+    delete values.largeTasks
+    writeFileSync(`${chart}/values.yaml`, JSON.stringify(values))
+
+    for (const settings of [[], ['--set', 'global.knativeRuntime.mode=managed'],
+      ['--set', 'workflowWorker.replicaCount=2']]) {
+      const withoutBlock = render(settings, chart)
+      assert.equal(find(withoutBlock, 'Namespace', namespace), undefined)
+      assert.equal(find(withoutBlock, 'ConfigMap', 'falcone-bbx-large-task-config'), undefined)
+      assert.equal(withoutBlock.some(o => o.metadata.namespace === namespace), false)
+      const pod = worker(withoutBlock).spec.template
+      assert.equal(pod.spec.automountServiceAccountToken, false)
+      assert.equal(pod.metadata.annotations?.['in-falcone.io/large-task-config-sha256'], undefined)
+      assert.equal(pod.spec.containers[0].env.some(e => e.name === 'LARGE_TASK_CONFIG'), false)
+
+      for (const disabled of [[], ['--set', 'largeTasks.enabled=false'], ['--set', 'largeTasks=null']]) {
+        assert.deepEqual(render([...settings, ...disabled]), withoutBlock)
+      }
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
   }
 })
 
