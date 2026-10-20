@@ -170,7 +170,7 @@ jobs:
         run: node --test tests/flows-execution-token-chart.test.mjs
       - name: Validate function isolation and invocation signer delivery
         run: |
-          node --test tests/function-invocation-secret-delivery.test.mjs tests/function-invocation-bootstrap.test.mjs
+          node --test tests/function-invocation-secret-delivery.test.mjs tests/function-invocation-bootstrap.test.mjs tests/function-secret-projection-rbac.test.mjs
           node tests/networkpolicy-selector-reality.test.mjs
       - name: Lint and render independent Falcone charts
         shell: bash

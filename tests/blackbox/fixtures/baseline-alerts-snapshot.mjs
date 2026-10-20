@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { sha256 } from './blackbox.mjs'
+import { withPriorFunctionSecretProjection } from './function-secret-projection-snapshot.mjs'
 
-// Preserve approved historical render hashes while subtracting only #19's
-// independently tested baseline file, auto-reload flags and checksum annotation.
+// Compose #970's checked RBAC delta with #19's independently tested baseline
+// file, auto-reload flags and checksum annotation; retain historical hashes.
 export function withPriorBaselineAlerts(objects) {
-  const prior = structuredClone(objects)
+  const prior = withPriorFunctionSecretProjection(objects)
   const config = prior.find((o) => o.kind === 'ConfigMap' && o.metadata.name === 'falcone-bbx-prometheus-config')
   assert.ok(config)
   assert.equal(sha256(config.data['baseline.rules.yml']), 'dfa8afbcf3920113105f18e0a9714df6718212330ff48cd8b20a12ef53c7959f')
