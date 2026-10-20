@@ -144,6 +144,8 @@ jobs:
         run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs tests/observability-baseline-alerts-chart.test.mjs tests/kind-quickstart-surface-chart.test.mjs tests/executor-identity-verifier-chart.test.mjs tests/large-task-runtime-chart.test.mjs
       - name: Validate APISIX standalone route provisioning
         run: node --test tests/apisix-standalone-routes-chart.test.mjs
+      - name: Validate executor provider identity profiles and token projection
+        run: node --test tests/executor-provider-identity-chart.test.mjs
       - name: Validate bundled alert rules with promtool
         shell: bash
         run: |

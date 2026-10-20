@@ -1,5 +1,10 @@
 {{- define "component-wrapper.workload" -}}
 {{- $workloadKind := .Values.wrapper.workload.kind | default "Deployment" -}}
+{{- $isLlmExecutor := eq (.Values.wrapper.componentId | default "") "control-plane-executor" -}}
+{{- $llmProfiles := .Values.llmIdentityProfiles | default dict -}}
+{{- $hasLlmProfiles := and $isLlmExecutor (gt (len $llmProfiles) 0) -}}
+{{- $llmToken := .Values.llmIdentityToken | default dict -}}
+{{- $llmTokenEnabled := and $isLlmExecutor (dig "enabled" false $llmToken) -}}
 {{- $largeTaskConfig := .LargeTaskConfig | default "" -}}
 {{- $largeTasksEnabled := and (eq (.Values.wrapper.componentId | default "") "workflow-worker") (ne $largeTaskConfig "") -}}
 {{- $temporalAdminToolsImage := default (dict "repository" "docker.io/temporalio/admin-tools" "tag" "1.31.1" "pullPolicy" "IfNotPresent") .Values.global.temporalAdminToolsImage -}}
@@ -368,8 +373,12 @@ spec:
           ports:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer $isFlowTokenConsumer $largeTasksEnabled }}
+          {{- if or .Values.env (gt (len $tsEnv) 0) $isControlPlane $isFunctionSigner $knativeRuntimeConsumer $isFlowTokenConsumer $largeTasksEnabled $hasLlmProfiles }}
           env:
+            {{- if $hasLlmProfiles }}
+            - name: LLM_IDENTITY_PROFILES
+              value: {{ toJson $llmProfiles | quote }}
+            {{- end }}
             {{- if $largeTasksEnabled }}
             - name: LARGE_TASK_CONFIG
               valueFrom:
@@ -495,8 +504,13 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.persistence.enabled (gt (len .Values.extraVolumeMounts) 0) $tsCa $knativeRuntimeConsumer $isFunctionSigner }}
+          {{- if or .Values.persistence.enabled (gt (len .Values.extraVolumeMounts) 0) $tsCa $knativeRuntimeConsumer $isFunctionSigner $llmTokenEnabled }}
           volumeMounts:
+            {{- if $llmTokenEnabled }}
+            - name: llm-identity-token
+              mountPath: /var/run/secrets/falcone/llm-identity
+              readOnly: true
+            {{- end }}
             {{- if $isFunctionSigner }}
             - name: {{ $functionInvocationVolume }}
               mountPath: {{ $functionInvocationDirectory }}
@@ -658,8 +672,18 @@ spec:
       {{- with .Values.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
-      {{- if or $isControlPlane .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa $knativeRuntimeConsumer $isFunctionSigner }}
+      {{- if or $isControlPlane .Values.persistence.enabled (gt (len .Values.extraVolumes) 0) $tsCa $knativeRuntimeConsumer $isFunctionSigner $llmTokenEnabled }}
       volumes:
+        {{- if $llmTokenEnabled }}
+        - name: llm-identity-token
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  audience: {{ dig "audience" "" $llmToken | quote }}
+                  expirationSeconds: {{ dig "expirationSeconds" 3600 $llmToken }}
+                  path: token
+        {{- end }}
         {{- if $isFunctionSigner }}
         - name: {{ $functionInvocationVolume }}
           secret:
