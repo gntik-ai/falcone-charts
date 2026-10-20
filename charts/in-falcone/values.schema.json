@@ -1489,6 +1489,36 @@
       "$ref": "#/definitions/component"
     },
     "controlPlaneExecutor": {
+      "properties": {
+        "llmIdentityProfiles": {
+          "type": ["object", "null"],
+          "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tokenEndpoint", "audience", "tenantAllowList"],
+            "properties": {
+              "tokenEndpoint": { "type": "string", "pattern": "^https?://[^\\s]+$" },
+              "audience": { "type": "string", "pattern": "\\S" },
+              "tenantAllowList": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "\\S" }
+              },
+              "grantType": { "enum": ["token-exchange", "jwt-bearer"] }
+            }
+          }
+        },
+        "llmIdentityToken": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "audience": { "type": "string" },
+            "expirationSeconds": { "type": "integer", "minimum": 600 }
+          }
+        }
+      },
       "allOf": [
         {
           "$ref": "#/definitions/component"

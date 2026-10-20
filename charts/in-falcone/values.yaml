@@ -3939,6 +3939,17 @@ controlPlane:
 # serves the data-plane + DDL slice and TRANSPARENTLY PROXIES every other path under those
 # prefixes (browse/inventory/management routes) to the control-plane via CONTROL_PLANE_UPSTREAM.
 controlPlaneExecutor:
+  # Operator-owned, non-secret workload identity configuration (#939).
+  # Profiles are passed as LLM_IDENTITY_PROFILES; every profile must explicitly
+  # list permitted tenant IDs. Client secrets/refresh tokens stay in OpenBao.
+  llmIdentityProfiles: {}
+  # Opt in separately: the projected JWT is never a Helm value or Secret.
+  # audience is the Kubernetes assertion audience expected by the exchange;
+  # each profile's audience is the target provider audience sent to that exchange.
+  llmIdentityToken:
+    enabled: false
+    audience: ""
+    expirationSeconds: 3600
   wrapper:
     componentId: control-plane-executor
     workload:

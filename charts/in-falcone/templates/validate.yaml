@@ -1,4 +1,9 @@
 {{- define "in-falcone.validate" -}}
+{{- $executor := .Values.controlPlaneExecutor | default dict -}}
+{{- $llmToken := $executor.llmIdentityToken | default dict -}}
+{{- if and (dig "enabled" false $llmToken) (eq (trim (dig "audience" "" $llmToken)) "") -}}
+  {{- fail "controlPlaneExecutor.llmIdentityToken.audience is required when projection is enabled" -}}
+{{- end -}}
 {{- $largeTasks := .Values.largeTasks | default dict -}}
 {{- if dig "enabled" false $largeTasks -}}
   {{- $probe := dig "isolationProbe" dict $largeTasks -}}
