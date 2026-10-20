@@ -16,7 +16,7 @@ controlPlane:
     repository: ghcr.io/gntik-ai/in-falcone-control-plane
   functionExecutor:
     runtimeImage:
-      tag: sha-24d25a6
+      tag: sha-254a01d
       digest: ""
       repository: ghcr.io/gntik-ai/in-falcone-fn-runtime
 controlPlaneExecutor:
@@ -36,6 +36,6 @@ workflowWorker:
     repository: ghcr.io/gntik-ai/in-falcone-workflow-worker
 mcp:
   runtimeImage:
-    tag: sha-24d25a6
+    tag: sha-254a01d
     digest: ""
     repository: ghcr.io/gntik-ai/in-falcone-mcp-runtime
