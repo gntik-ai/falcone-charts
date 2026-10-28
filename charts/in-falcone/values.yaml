@@ -205,7 +205,7 @@ global:
     serviceResources:
       web-console:
         requests: {memory: 512Mi}
-        limits: {memory: 3Gi}
+        limits: {memory: 4Gi}
 ## OpenShift build mode is configured under global.openshiftBuild so aliased subcharts receive it.
 publicSurface:
   routePrefixes:
