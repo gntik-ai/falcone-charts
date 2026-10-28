@@ -48,7 +48,7 @@ const customResourceArgs = [
   '--set', 'global.openshiftBuild.resources.requests.memory=256Mi',
   '--set', 'global.openshiftBuild.resources.limits.memory=2Gi',
   '--set', 'global.openshiftBuild.serviceResources.web-console.requests.memory=640Mi',
-  '--set', 'global.openshiftBuild.serviceResources.web-console.limits.memory=4Gi',
+  '--set', 'global.openshiftBuild.serviceResources.web-console.limits.memory=5Gi',
 ];
 const privateBaseImageArgs = services.flatMap((service) => [
   '--set-string',
@@ -332,7 +332,7 @@ test('enabled mode emits exactly six service-keyed ImageStreams and BuildConfigs
     assert.deepEqual(
       buildMemory(docs, service),
       service === 'web-console'
-        ? {request: '512Mi', limit: '3Gi'}
+        ? {request: '512Mi', limit: '4Gi'}
         : {request: '128Mi', limit: '1Gi'},
     );
     assert.equal(yamlScalar(build.yaml, ['spec', 'output', 'to', 'kind']), 'ImageStreamTag');
@@ -479,7 +479,7 @@ test('custom build resources reach five services while the web-console override 
     assert.deepEqual(
       buildMemory(docs, service),
       service === 'web-console'
-        ? {request: '640Mi', limit: '4Gi'}
+        ? {request: '640Mi', limit: '5Gi'}
         : {request: '256Mi', limit: '2Gi'},
     );
   }
