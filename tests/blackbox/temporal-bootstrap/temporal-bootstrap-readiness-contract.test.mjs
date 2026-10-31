@@ -2626,6 +2626,26 @@ test('bbx-temporal-bootstrap-048: offline Helm reuse-values captures coalesced r
   assert.equal(executorJwt.data.KEYCLOAK_ISSUER, historical.gatewayPolicy.oidc.issuerUrl);
   assert.equal(executorJwt.data.KEYCLOAK_JWKS_URL,
     `http://${releaseName}-keycloak:8080/realms/${historical.gatewayPolicy.oidc.realm}/protocol/openid-connect/certs`);
+  assert.deepEqual(JSON.parse(executorJwt.data.KEYCLOAK_PLATFORM_AUDIENCES), ['in-falcone', 'account']);
+  assert.deepEqual(JSON.parse(executorJwt.data.KEYCLOAK_TRUSTED_REALM_BASES), [
+    `${historical.gatewayPolicy.oidc.issuerUrl.replace(/\/realms\/[^/]+$/, '')}/realms/`,
+    `http://${releaseName}-keycloak:8080/realms/`,
+  ]);
+  for (const component of ['control-plane', 'control-plane-executor']) {
+    const deployment = exactDocuments.find((document) => document.kind === 'Deployment'
+      && document.metadata.name === `${releaseName}-${component}`);
+    const env = deployment.spec.template.spec.containers.find((container) => container.name === component).env;
+    for (const key of Object.keys(executorJwt.data)) {
+      assert.deepEqual(env.filter((entry) => entry.name === key), [{ name: key,
+        valueFrom: { configMapKeyRef: { name: executorJwt.metadata.name, key } } }]);
+    }
+  }
+  const consolePayload = exactDocuments.find((document) => document.kind === 'ConfigMap'
+    && document.data?.['client-in-falcone-console.json']);
+  assert.ok(JSON.parse(consolePayload.data['client-in-falcone-console.json']).protocolMappers
+    .some((mapper) => mapper.protocolMapper === 'oidc-audience-mapper'
+      && mapper.config['included.custom.audience'] === 'in-falcone'),
+  'historical stored clients must acquire the platform audience mapper');
   const jobImage = temporalBootstrapJob(exactDocuments).spec.template.spec.containers[0].image;
   assert.equal(jobImage, 'docker.io/temporalio/admin-tools:1.31.1');
   assert.equal(workflowGates(workflowConsumer(exactDocuments))[0].image, jobImage);

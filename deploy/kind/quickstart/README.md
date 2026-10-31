@@ -44,9 +44,9 @@ This check requires a fully provisioned local platform. The stand-in CI test can
 
 ## Upgrade and rollback
 
-With the kind-quickstart profile's non-empty `controlPlane.keycloakIssuer`, issuer checksum annotations cause one rolling restart of executor, control-plane and APISIX when the profile is added to an existing release. Subsequent identical issuer configuration keeps the same checksums; changed issuer configuration rolls only the affected consumers. Other installations are unchanged and receive no issuer checksum annotations.
+Both application verifiers consume the same `executor-jwt-config` ConfigMap, derived from `gatewayPolicy.issuerJwksAuth`. Its exact trusted realm bases include the public issuer and the internal Keycloak base. Issuer checksum annotations roll both applications when that policy changes, and roll APISIX when its verifier configuration changes. Identical configuration keeps the same checksums. The legacy `controlPlane.keycloakIssuer` setting is superseded by the shared configuration.
 
-To remove the profile, upgrade with the original three files and `--reset-values` (plus any normal local overrides). Simply omitting a file with `--reuse-values` retains its stored values. The empty `controlPlane.keycloakIssuer` default restores the prior control-plane environment and removes the issuer checksum annotations, causing one rollout back to the original pod templates. Reverting the chart change also removes these annotations from releases using the profile; other installations are unchanged. Delete only the disposable cluster you created when finished:
+To remove the profile, upgrade with the original three files and `--reset-values` (plus any normal local overrides). Simply omitting a file with `--reuse-values` retains its stored values. The shared verifier configuration and its checksums remain enabled; the issuer bases revert to the selected base profile. Delete only the disposable cluster you created when finished:
 
 ```sh
 kind delete cluster --name falcone-quickstart

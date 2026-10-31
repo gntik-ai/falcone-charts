@@ -702,6 +702,15 @@ bootstrap:
           standardFlowEnabled: true
           directAccessGrantsEnabled: true
           serviceAccountsEnabled: false
+          protocolMappers:
+            - name: in-falcone-audience
+              protocol: openid-connect
+              protocolMapper: oidc-audience-mapper
+              consentRequired: false
+              config:
+                included.custom.audience: in-falcone
+                access.token.claim: "true"
+                id.token.claim: "false"
           redirectUris:
             - https://console.dev.in-falcone.example.com/*
             - https://console.sandbox.in-falcone.example.com/*
@@ -3716,7 +3725,7 @@ observability:
         drop:
           - ALL
 controlPlane:
-  # Optional canonical issuer; omitted for existing installations.
+  # Deprecated compatibility value; verifier env now comes from executor-jwt-config.
   keycloakIssuer: ""
   wrapper:
     componentId: control-plane
@@ -4426,6 +4435,11 @@ gatewayPolicy:
     jwksBaseUrl: "{{ .Values.global.keycloakJwksBaseUrl }}"
     platformRealm: in-falcone-platform
     audience: in-falcone
+    # Rollout compatibility for existing console sessions; remove account by 2026-11-14
+    # after mapper reconciliation and access-token expiry. azp is never an audience.
+    # Defaults to [audience, account]; set an explicit list to finish the rollout.
+    # platformAudiences: [in-falcone]
+    # allowTenantRealms: false  # Default true; set false to disable tenant realms.
     cache_ttl: 300
     cache_max_entries: 128
     timeout: 3

@@ -575,10 +575,64 @@ data:
       ensure_keycloak_superadmin "$token"
     }
 
+    console_audience_failed() {
+      rm -rf "$1"
+      echo "[bootstrap] console audience mapper did not converge; correct the configuration and retry" >&2
+      exit 1
+    }
+
+    # Reconcile only the named mapper, even when the create-only marker matches.
+    # Provider responses and administrator tokens must never enter diagnostics.
+    ensure_console_audience() {
+      local token="$1"
+      local desired="$PAYLOAD_DIR/console-audience-mapper.json"
+      [ -f "$desired" ] || return 0
+      local work status client_uuid mapper_id endpoint
+      work="$(mktemp -d)"
+      if ! status="$(curl -sS -o "$work/client" -w '%{http_code}' \
+        -H "Authorization: Bearer $token" \
+        "$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID/clients?clientId=in-falcone-console" 2>/dev/null)" \
+        || [ "$status" != "200" ]; then console_audience_failed "$work"; fi
+      if ! client_uuid="$(jq -er '[.[] | select(.clientId == "in-falcone-console")] | if length == 1 then .[0].id else error("client") end | select(test("^[A-Za-z0-9_-]+$"))' "$work/client" 2>/dev/null)"; then
+        console_audience_failed "$work"
+      fi
+      endpoint="$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID/clients/$client_uuid/protocol-mappers/models"
+      if ! status="$(curl -sS -o "$work/mappers" -w '%{http_code}' \
+        -H "Authorization: Bearer $token" "$endpoint" 2>/dev/null)" \
+        || [ "$status" != "200" ]; then console_audience_failed "$work"; fi
+      if ! jq -e 'type == "array" and ([.[] | select(.name == "in-falcone-audience")] | length <= 1)' "$work/mappers" >/dev/null 2>&1; then
+        console_audience_failed "$work"
+      fi
+      if ! jq -e --slurpfile desired "$desired" '[.[] | select(.name == "in-falcone-audience") | {name, protocol, protocolMapper, consentRequired, config}] == $desired' "$work/mappers" >/dev/null 2>&1; then
+        mapper_id="$(jq -r '.[] | select(.name == "in-falcone-audience") | .id' "$work/mappers")"
+        local method=POST target="$endpoint" payload="$desired"
+        if [ -n "$mapper_id" ]; then
+          [[ "$mapper_id" =~ ^[A-Za-z0-9_-]+$ ]] || console_audience_failed "$work"
+          method=PUT
+          target="$endpoint/$mapper_id"
+          payload="$work/desired"
+          jq --arg id "$mapper_id" '. + {id: $id}' "$desired" > "$payload"
+        fi
+        if ! status="$(curl -sS -o "$work/update" -w '%{http_code}' -X "$method" \
+          -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+          --data @"$payload" "$target" 2>/dev/null)"; then console_audience_failed "$work"; fi
+        case "$status" in 200|201|204) ;; *) console_audience_failed "$work" ;; esac
+      fi
+      if ! status="$(curl -sS -o "$work/readback" -w '%{http_code}' \
+        -H "Authorization: Bearer $token" "$endpoint" 2>/dev/null)" \
+        || [ "$status" != "200" ]; then console_audience_failed "$work"; fi
+      if ! jq -e --slurpfile desired "$desired" '[.[] | select(.name == "in-falcone-audience") | {name, protocol, protocolMapper, consentRequired, config}] == $desired' "$work/readback" >/dev/null 2>&1; then
+        console_audience_failed "$work"
+      fi
+      rm -rf "$work"
+      log "reconciled platform console audience mapper"
+    }
+
     run_upgrade_reconciliation() {
       local token
       token="$(require_keycloak_token)"
       ensure_keycloak_login_settings "$token"
+      ensure_console_audience "$token"
       unset token
 {{- if eq (toString (dig "config" "inline" "APISIX_STAND_ALONE" "false" .Values.apisix)) "true" }}
       # APISIX runs in standalone mode (APISIX_STAND_ALONE=true, the chart default): routes are

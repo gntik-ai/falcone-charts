@@ -103,6 +103,13 @@ if (method === 'GET' && url.includes('/clients?clientId=')) {
   respond(200, JSON.stringify([{ id: `client-${clientId}`, clientId }]))
 }
 
+if (method === 'GET' && url.endsWith('/protocol-mappers/models')) {
+  respond(200, JSON.stringify([{
+    ...JSON.parse(readFileSync('/bootstrap/payload/console-audience-mapper.json', 'utf8')),
+    id: 'bbx-console-audience',
+  }]))
+}
+
 if (method === 'PUT' && /\/clients\/[^/]+\/default-client-scopes\/[^/]+$/.test(url)) {
   respond(204, '')
 }

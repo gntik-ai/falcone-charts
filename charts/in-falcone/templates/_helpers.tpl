@@ -157,6 +157,24 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{- toJson (dict "keycloak" .Values.bootstrap.oneShot.keycloak "governanceCatalog" .Values.bootstrap.oneShot.governanceCatalog "internalNamespaces" .Values.bootstrap.oneShot.internalNamespaces) | sha256sum -}}
 {{- end -}}
 
+{{- define "in-falcone.consoleAudienceMapper" -}}
+{{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
+{{- dict "name" "in-falcone-audience" "protocol" "openid-connect" "protocolMapper" "oidc-audience-mapper" "consentRequired" false "config" (dict "included.custom.audience" $verifier.audience "access.token.claim" "true" "id.token.claim" "false") | toJson -}}
+{{- end -}}
+
+{{/* Inject the mapper for stored releases whose create-only clients predate #1505. */}}
+{{- define "in-falcone.keycloakClient" -}}
+{{- $client := deepCopy .client -}}
+{{- if eq $client.clientId "in-falcone-console" -}}
+{{- $mappers := list -}}
+{{- range ($client.protocolMappers | default list) -}}
+{{- if ne .name "in-falcone-audience" -}}{{- $mappers = append $mappers . -}}{{- end -}}
+{{- end -}}
+{{- $_ := set $client "protocolMappers" (append $mappers (include "in-falcone.consoleAudienceMapper" .root | fromJson)) -}}
+{{- end -}}
+{{- $client | toPrettyJson -}}
+{{- end -}}
+
 {{- /* ------------------------------------------------------------------ */ -}}
 {{- /* Temporal (flows engine) helpers.                                    */ -}}
 {{- /* Temporal is rendered by first-class umbrella templates (not via the */ -}}

@@ -52,7 +52,11 @@ data:
 {{- end }}
 {{- range .Values.bootstrap.oneShot.keycloak.clients }}
   client-{{ .clientId }}.json: |
-{{ toPrettyJson . | nindent 4 }}
+{{ include "in-falcone.keycloakClient" (dict "root" $ "client" .) | nindent 4 }}
+{{- if eq .clientId "in-falcone-console" }}
+  console-audience-mapper.json: |
+{{ include "in-falcone.consoleAudienceMapper" $ | fromJson | toPrettyJson | nindent 4 }}
+{{- end }}
 {{- end }}
   governance-plans.json: |
 {{ toPrettyJson .Values.bootstrap.oneShot.governanceCatalog.plans | nindent 4 }}

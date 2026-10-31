@@ -76,3 +76,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "component-wrapper.generatedConfigMapName" -}}
 {{- printf "%s-config" (include "component-wrapper.fullname" .) -}}
 {{- end -}}
+
+{{- define "component-wrapper.jwtEnvNames" -}}
+{{- list "KEYCLOAK_JWKS_URL" "KEYCLOAK_ISSUER" "KEYCLOAK_AUDIENCE" "KEYCLOAK_TENANT_AUDIENCE" "KEYCLOAK_ENFORCE_TENANT_AUDIENCE" "KEYCLOAK_TRUSTED_REALM_BASES" "KEYCLOAK_PLATFORM_REALM" "KEYCLOAK_PLATFORM_AUDIENCES" "KEYCLOAK_ALLOW_TENANT_REALMS" | toJson -}}
+{{- end -}}

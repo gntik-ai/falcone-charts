@@ -145,6 +145,20 @@ def delivery_outcome(result, scenario, path):
 
 
 class Offline(unittest.TestCase):
+    def test_shared_policy_upgrade_replaces_every_retained_jwt_literal_atomically(self):
+        target = select(render(ROOT), "Deployment", NAME)
+        live = copy.deepcopy(target)
+        live["metadata"]["resourceVersion"] = "1505"
+        keys = ("KEYCLOAK_TRUSTED_REALM_BASES", "KEYCLOAK_PLATFORM_REALM",
+                "KEYCLOAK_PLATFORM_AUDIENCES", "KEYCLOAK_ALLOW_TENANT_REALMS")
+        env(live).extend({"name": key, "value": "legacy"} for key in keys)
+        patch = migration.migration_patch(live, target, CONFIG)
+        self.assertEqual(patch[0], {"op": "test", "path": "/metadata/resourceVersion", "value": "1505"})
+        for key in keys:
+            self.assertEqual([item for item in patch[1]["value"] if item["name"] == key], [
+                {"name": key, "valueFrom": {"configMapKeyRef": {"name": CONFIG, "key": key}}}
+            ])
+
     def test_helper_real_upgrade_render_requires_explicit_probe_values(self):
         # Exercise the helper's actual Helm command, not a mocked render. The
         # install-only profiles previously passed every offline fake but failed
@@ -393,7 +407,7 @@ class Offline(unittest.TestCase):
                 else:
                     migration.validate_env(env(manifest), CONFIG)
 
-    def test_reused_historical_tls_values_preserve_jwt_env(self):
+    def test_reused_historical_tls_values_share_jwt_references_and_preserve_jwks(self):
         # Model stored, coalesced values without adding current umbrella defaults.
         # This complements the real fake-API Helm reuse-values test (bbx-048).
         def merge_values(target, override):
@@ -436,15 +450,30 @@ class Offline(unittest.TestCase):
                         target = select(after, "Deployment", NAME)
                         previous_jwt = resolved_jwt(before, previous)
                         self.assertIn("KEYCLOAK_JWKS_URL", previous_jwt)
-                        self.assertTrue(previous_jwt == resolved_jwt(after, target),
-                                        "reuse-values must retain effective JWT configuration")
+                        current_jwt = resolved_jwt(after, target)
+                        self.assertEqual(previous_jwt["KEYCLOAK_JWKS_URL"], current_jwt["KEYCLOAK_JWKS_URL"],
+                                         "reuse-values must retain the effective TLS JWKS endpoint")
+                        migration.validate_env(env(target), CONFIG)
+                        self.assertEqual(json.loads(current_jwt["KEYCLOAK_PLATFORM_AUDIENCES"]),
+                                         ["in-falcone", "account"])
+                        self.assertEqual(current_jwt["KEYCLOAK_ISSUER"], stored["gatewayPolicy"]["oidc"]["issuerUrl"])
+                        control = select(after, "Deployment", RELEASE + "-control-plane")
+                        control_env = next(item for item in control["spec"]["template"]["spec"]["containers"]
+                                           if item["name"] == "control-plane")["env"]
+                        migration.validate_env(control_env, CONFIG)
+                        payload = next(item for item in after if item["kind"] == "ConfigMap"
+                                       and "client-in-falcone-console.json" in item.get("data", {}))
+                        mappers = json.loads(payload["data"]["client-in-falcone-console.json"])["protocolMappers"]
+                        self.assertTrue(any(item["protocolMapper"] == "oidc-audience-mapper"
+                                            and item["config"]["included.custom.audience"] == "in-falcone"
+                                            for item in mappers))
                         for entry in env(target):
                             self.assertFalse("value" in entry and "valueFrom" in entry,
                                              "reused env must never contain both fields")
                         for key in previous_jwt:
                             entries = [entry for entry in env(target) if entry["name"] == key]
                             self.assertEqual(len(entries), 1, "inherited JWT env must remain unique")
-                            self.assertIn("value", entries[0], "inherited JWT literals must remain wired")
+                            self.assertIn("valueFrom", entries[0], "historical JWT literals must converge to shared references")
                         if configured_literals:
                             self.assertTrue(all(key in previous_jwt for key in migration.JWT_NAMES[:3]))
 
@@ -459,7 +488,8 @@ class Offline(unittest.TestCase):
                 migration.validate_env(env(new_deployment), CONFIG)
                 old_jwt = resolved_jwt(before, old_deployment)
                 new_jwt = resolved_jwt(after, new_deployment)
-                self.assertTrue(old_jwt == new_jwt, "TLS effective JWT configuration must be preserved")
+                self.assertEqual(old_jwt, {key: new_jwt[key] for key in old_jwt},
+                                 "existing TLS verifier settings must be preserved alongside the new policy")
                 old_url = urlsplit(old_jwt["KEYCLOAK_JWKS_URL"])
                 new_url = urlsplit(new_jwt["KEYCLOAK_JWKS_URL"])
                 self.assertTrue((new_url.scheme, new_url.hostname, new_url.port, new_url.path)
@@ -523,9 +553,15 @@ class Offline(unittest.TestCase):
                     ("INVITATION_EMAIL_HMAC_KEY_ID", "key-id"),
                 )]
                 additions = invitation_env + signer_env
-                self.assertTrue(new_container["env"] == additions + old_container["env"],
-                                "control-plane env must add only signer and invitation references")
-                new_container["env"] = new_container["env"][len(additions):]
+                migration.validate_env(new_container["env"], CONFIG)
+                old_env = [item for item in old_container["env"] if item["name"] not in migration.JWT_NAMES]
+                new_env = [item for item in new_container["env"] if item["name"] not in migration.JWT_NAMES]
+                self.assertEqual(new_env, additions + old_env,
+                                 "non-JWT env must add only signer and invitation references")
+                new_container["env"] = old_container["env"]
+                annotations = new_control["spec"]["template"]["metadata"]["annotations"]
+                checksum = annotations.pop("in-falcone.io/issuer-config-checksum")
+                self.assertRegex(checksum, r"^[0-9a-f]{64}$")
                 mounts = new_container["volumeMounts"]
                 self.assertEqual(mounts.pop(0), {
                     "name": "falcone-function-invocation",
