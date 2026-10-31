@@ -145,6 +145,82 @@ def delivery_outcome(result, scenario, path):
 
 
 class Offline(unittest.TestCase):
+    def test_control_plane_cli_migrates_historical_literals_while_paused(self):
+        revision = "a" * 40
+        with tempfile.TemporaryDirectory(prefix="falcone-1505-upgrade-") as directory:
+            base = Path(directory)
+            historical_checkout(base, "f81dcd5d39f2ebdedf760fd7b9b860a3f813a1b2")
+            for layers in ([], ["charts/in-falcone/values/kind-quickstart.yaml"], LAYERS["prod-tls"]):
+                with self.subTest(layers=layers):
+                    def rendered(root):
+                        args = ["helm", "template", RELEASE, str(root / "charts/in-falcone")]
+                        for layer in layers:
+                            args += ["-f", str(root / layer)]
+                        return [item for item in yaml.load_all(command(args), Loader=yaml.CSafeLoader) if item]
+                    name = RELEASE + "-control-plane"
+                    target_objects = rendered(ROOT)
+                    target = select(target_objects, "Deployment", name)
+                    config = select(target_objects, "ConfigMap", CONFIG)
+                    live = select(rendered(base), "Deployment", name)
+                    container = next(item for item in live["spec"]["template"]["spec"]["containers"]
+                                     if item["name"] == "control-plane")
+                    literals = [item for item in container["env"] if item["name"] in migration.JWT_NAMES]
+                    self.assertTrue(any(item["name"] == "KEYCLOAK_JWKS_URL" and "value" in item
+                                        for item in literals))
+                    if layers == LAYERS["prod-tls"]:
+                        self.assertEqual(sum(item["name"] == "KEYCLOAK_JWKS_URL" for item in literals), 2)
+                    if layers == ["charts/in-falcone/values/kind-quickstart.yaml"]:
+                        self.assertTrue(any(item["name"] == "KEYCLOAK_ISSUER" and "value" in item
+                                            for item in literals))
+                    live["metadata"].update(resourceVersion="1505", annotations={"other-manager": "keep"})
+                    live["spec"].update(paused=True, replicas=7)
+                    # A sidecar must survive, and the target container need not be first.
+                    live["spec"]["template"]["spec"]["containers"].insert(0, {"name": "sidecar", "image": "test"})
+                    before = copy.deepcopy(live)
+                    calls = []
+                    def fake(args, **kwargs):
+                        calls.append(args)
+                        if args[0] == "git":
+                            return revision if "rev-parse" in args else ""
+                        if args[0] == "helm":
+                            return yaml.safe_dump_all(target_objects)
+                        if "configmap" in args:
+                            return json.dumps(config)
+                        self.assertIn(name, args)
+                        self.assertNotIn(NAME, args)
+                        if "get" in args:
+                            return json.dumps(live)
+                        if "patch" in args:
+                            patch = json.loads(kwargs["input"])
+                            self.assertEqual(patch[0], {"op": "test", "path": "/metadata/resourceVersion", "value": "1505"})
+                            self.assertEqual(patch[1]["path"], "/spec/template/spec/containers/1/env")
+                            if "--dry-run=server" not in args:
+                                container["env"] = patch[1]["value"]
+                            return ""
+                        raise AssertionError("paused migration must not roll out or resume")
+                    argv = [str(HELPER), "--revision", revision, "--release", RELEASE,
+                            "--namespace", "disposable", "--context", "kind-fake", "--component", "control-plane"]
+                    for layer in layers:
+                        argv += ["--values", layer]
+                    with mock.patch.object(migration, "run", side_effect=fake), redirect_stdout(io.StringIO()) as output:
+                        with mock.patch.object(migration.sys, "argv", argv):
+                            migration.main()
+                        self.assertEqual(live, before, "dry-run must not mutate live state")
+                        with mock.patch.object(migration.sys, "argv", argv + ["--apply"]):
+                            migration.main()
+                            migration.main()
+                    self.assertIn("CONTROL_PLANE_UPGRADE_APPLIED_PAUSED", output.getvalue())
+                    self.assertIn("CONTROL_PLANE_UPGRADE_UNCHANGED_PAUSED", output.getvalue())
+                    self.assertEqual(sum("patch" in call for call in calls), 2, "dry-run plus one idempotent apply")
+                    expected_env = next(item for item in target["spec"]["template"]["spec"]["containers"]
+                                        if item["name"] == "control-plane")["env"]
+                    jwt = [item for item in expected_env if item["name"] in migration.JWT_NAMES]
+                    expected = copy.deepcopy(before)
+                    expected_container = expected["spec"]["template"]["spec"]["containers"][1]
+                    expected_container["env"] = [item for item in expected_container["env"]
+                                                 if item["name"] not in migration.JWT_NAMES] + jwt
+                    self.assertEqual(live, expected, "only JWT env may change")
+
     def test_shared_policy_upgrade_replaces_every_retained_jwt_literal_atomically(self):
         target = select(render(ROOT), "Deployment", NAME)
         live = copy.deepcopy(target)

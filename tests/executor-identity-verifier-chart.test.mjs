@@ -10,11 +10,11 @@ const verifierKeys = [
 ]
 
 test('both JWT verifiers consume one exact issuer and audience policy across deployment profiles', () => {
-  for (const args of [
-    [],
-    ['-f', resolve(umbrellaChart, 'values/staging-argocd.yaml')],
-    ['-f', resolve(umbrellaChart, 'values/kind-quickstart.yaml')],
-    ['-f', resolve(repoRoot, 'deploy/kind/values-production.yaml')],
+  for (const [args, internalBase] of [
+    [[], 'http://falcone-bbx-keycloak:8080/realms/'],
+    [['-f', resolve(umbrellaChart, 'values/staging-argocd.yaml')], 'http://falcone-bbx-keycloak:8080/realms/'],
+    [['-f', resolve(umbrellaChart, 'values/kind-quickstart.yaml')], 'http://falcone-bbx-keycloak:8080/realms/'],
+    [['-f', resolve(repoRoot, 'deploy/kind/values-production.yaml')], 'https://falcone-keycloak:8443/realms/'],
   ]) {
     const { objects } = render(umbrellaChart, args)
     const config = objects.find(o => o.kind === 'ConfigMap' && o.metadata.name === 'falcone-bbx-executor-jwt-config')
@@ -23,7 +23,7 @@ test('both JWT verifiers consume one exact issuer and audience policy across dep
     assert.equal(config.data.KEYCLOAK_ALLOW_TENANT_REALMS, '1')
     const bases = JSON.parse(config.data.KEYCLOAK_TRUSTED_REALM_BASES)
     assert.ok(bases.includes(`${config.data.KEYCLOAK_ISSUER.replace(/\/realms\/[^/]+$/, '')}/realms/`))
-    assert.ok(bases.includes('http://falcone-bbx-keycloak:8080/realms/'))
+    assert.ok(bases.includes(internalBase))
     const checksums = []
     for (const component of ['control-plane', 'control-plane-executor']) {
       const deployment = objects.find(o => o.kind === 'Deployment' && o.metadata.name === `falcone-bbx-${component}`)
@@ -64,6 +64,19 @@ test('strict rollout settings and exact custom realm bases reach both verifiers'
     assert.notEqual(select(objects).spec.template.metadata.annotations['in-falcone.io/issuer-config-checksum'],
       select(baseline).spec.template.metadata.annotations['in-falcone.io/issuer-config-checksum'])
   }
+})
+
+test('prod TLS trusts the effective HTTPS JWKS base without the stale HTTP alias', () => {
+  const { objects } = render(umbrellaChart, [
+    '-f', resolve(umbrellaChart, 'values/prod.yaml'),
+    '-f', resolve(repoRoot, 'deploy/kind/values-production.yaml'),
+  ])
+  const config = objects.find(o => o.kind === 'ConfigMap' && o.metadata.name === 'falcone-bbx-executor-jwt-config')
+  assert.equal(config.data.KEYCLOAK_JWKS_URL,
+    'https://falcone-keycloak:8443/realms/in-falcone-platform/protocol/openid-connect/certs')
+  assert.deepEqual(JSON.parse(config.data.KEYCLOAK_TRUSTED_REALM_BASES), [
+    'https://iam.in-falcone.example.com/realms/', 'https://falcone-keycloak:8443/realms/',
+  ])
 })
 
 test('invalid explicit audience lists and tenant realm switches fail closed during rendering', () => {

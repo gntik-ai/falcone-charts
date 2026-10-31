@@ -9,6 +9,10 @@ the platform realm and the tenant-realm switch expected by the source policy.
 Both workloads receive one `configMapKeyRef` per verifier setting. Historical
 component env literals and appended TLS duplicates are replaced by those
 references; TLS endpoint overrides are resolved once in the ConfigMap.
+The internal trusted realm base is derived from the effective platform JWKS URL
+after those overrides, preserving the scheme, host, port and any context path.
+Prod-TLS trusts the HTTPS port-8443 base and does not implicitly retain the old
+HTTP port-8080 alias. Tenant JWKS fetches therefore use the configured transport.
 
 The legacy `controlPlane.keycloakIssuer` value no longer selects a separate
 policy. Configure `gatewayPolicy.issuerJwksAuth` instead. Both application
@@ -34,6 +38,33 @@ Absent new values receive safe defaults under `helm upgrade --reuse-values`.
 Explicit empty or malformed audience lists and non-boolean tenant-realm switches
 fail closed. The executor env migration recognizes all nine shared keys and
 replaces retained literals atomically using its existing resource-version guard.
+The helper retains its executor default and accepts `--component control-plane`
+for the other Deployment/container. Run it once for each component while both
+Deployments remain paused through gated delivery, repair and any retry. Only the
+selected container's JWT env is patched; replicas, annotations, other env and
+sidecars are preserved. Verify both consumers again before resuming either.
+The regression exercises actual pre-change default, kind-quickstart and prod-TLS
+control-plane manifests, including literal issuer and duplicate JWKS entries,
+through the CLI with offline external-command boundaries.
+
+## Control-plane rollout effects requiring R3 review
+
+The shared tenant audience switch now applies to every control-plane route too.
+With enforcement enabled, tenant tokens without `falcone-data-api` are rejected.
+The operator must confirm audience-mapper coverage for every existing tenant app
+and console client before rollout; new-client provisioning does not establish it.
+
+The public `KEYCLOAK_ISSUER` also affects existing control-plane consumers:
+service-account credential responses return a public `tokenEndpoint` instead of
+the internal endpoint, and social-provider responses return a public broker
+`callbackUrl` instead of `null`. Review consumer reachability and registered
+provider callbacks. Login continues to use `KEYCLOAK_BASE_URL`.
+
+These effects, the wider temporary `account` audience and the removal deadline
+require explicit R3 human approval before rollout. This maker records the
+configuration and pending review; it does not approve deployment. The removal
+task is tracked in [tasks.md](tasks.md), with operator steps in the
+[release notes](../../../charts/in-falcone/RELEASE-NOTES-0.4.20.md).
 
 The console client receives an `oidc-audience-mapper` adding the configured API
 audience to access tokens. Stored client values acquire it at render time too.

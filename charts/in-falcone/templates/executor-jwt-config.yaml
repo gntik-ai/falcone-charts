@@ -24,7 +24,6 @@
       "KEYCLOAK_ISSUER" (printf "%s/realms/%s" $verifier.issuer_base_url $verifier.platform_realm)
       "KEYCLOAK_JWKS_URL" (printf "%s/realms/%s/protocol/openid-connect/certs" $verifier.jwks_base_url $verifier.platform_realm)
       "KEYCLOAK_AUDIENCE" $verifier.audience
-      "KEYCLOAK_TRUSTED_REALM_BASES" (toJson (uniq (list (printf "%s/realms/" $verifier.issuer_base_url) (printf "%s/realms/" $verifier.jwks_base_url))))
       "KEYCLOAK_PLATFORM_REALM" $verifier.platform_realm
       "KEYCLOAK_PLATFORM_AUDIENCES" (toJson $audiences)
       "KEYCLOAK_ALLOW_TENANT_REALMS" (ternary "1" "0" $allowTenantRealms)
@@ -45,6 +44,16 @@
     {{- end -}}
   {{- end -}}
 {{- end -}}
+{{- /* Tenant keys are fetched under these bases. Derive them after TLS
+       overrides so tenant lookup cannot retain the stale plaintext endpoint. */ -}}
+{{- $realmSuffix := printf "/realms/%s" $jwt.KEYCLOAK_PLATFORM_REALM -}}
+{{- $certsSuffix := printf "%s/protocol/openid-connect/certs" $realmSuffix -}}
+{{- if or (not (hasSuffix $realmSuffix $jwt.KEYCLOAK_ISSUER)) (not (hasSuffix $certsSuffix $jwt.KEYCLOAK_JWKS_URL)) -}}
+  {{- fail "shared JWT issuer and JWKS URL must use the configured platform realm" -}}
+{{- end -}}
+{{- $_ := set $jwt "KEYCLOAK_TRUSTED_REALM_BASES" (toJson (uniq (list
+      (printf "%s/realms/" (trimSuffix $realmSuffix $jwt.KEYCLOAK_ISSUER))
+      (printf "%s/realms/" (trimSuffix $certsSuffix $jwt.KEYCLOAK_JWKS_URL))))) -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

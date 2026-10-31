@@ -17,6 +17,21 @@ No appended TLS JWT literal may override those references independently.
 - THEN both application Deployments reference the same complete verifier configuration
 - AND both application checksums track that configuration while preserving TLS endpoints.
 
+#### Scenario: Existing control-plane literal env transition
+
+- GIVEN a control-plane Deployment with literal issuer/JWKS env or duplicate
+  TLS JWKS entries
+- WHEN both JWT consumers are paused and the migration selects control-plane
+- THEN a resource-version-fenced atomic patch installs all nine shared references
+- AND unrelated fields remain unchanged and repeated application is a no-op.
+
+#### Scenario: Effective TLS trust base
+
+- GIVEN TLS overrides configure the platform JWKS URL on HTTPS port 8443
+- WHEN the chart renders the shared policy
+- THEN its internal trusted realm base uses that effective HTTPS endpoint
+- AND the pre-override HTTP port-8080 base is not implicitly trusted.
+
 ### Requirement: Platform console audience
 
 Fresh provisioning and existing realms MUST receive an `oidc-audience-mapper`
