@@ -588,7 +588,7 @@ data:
       local desired="$PAYLOAD_DIR/console-audience-mapper.json"
       [ -f "$desired" ] || return 0
       local work status client_uuid mapper_id endpoint
-      work="$(mktemp -d)"
+      work="$(mktemp -d /tmp/console-audience.XXXXXXXXXX)"
       if ! status="$(curl -sS -o "$work/client" -w '%{http_code}' \
         -H "Authorization: Bearer $token" \
         "$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID/clients?clientId=in-falcone-console" 2>/dev/null)" \

@@ -20,10 +20,10 @@ const method = explicitMethod ?? (url.includes('/protocol/openid-connect/token')
 
 const call = {
   dataFile: dataArgument?.startsWith('@')
-    ? dataArgument.slice(1).replace(/^\/tmp\/tmp\.[^/]+\//, '/tmp/console-audience/') : null,
+    ? dataArgument.slice(1).replace(/^\/tmp\/console-audience\.[^/]+\//, '/tmp/console-audience/') : null,
   method,
   // Compare request behavior across runs while keeping mktemp response files isolated.
-  output: output?.replace(/^\/tmp\/tmp\.[^/]+\//, '/tmp/console-audience/') ?? null,
+  output: output?.replace(/^\/tmp\/console-audience\.[^/]+\//, '/tmp/console-audience/') ?? null,
   url,
 }
 appendFileSync(logFile, `${JSON.stringify(call)}\n`)

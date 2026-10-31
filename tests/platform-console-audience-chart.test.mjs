@@ -35,6 +35,7 @@ if [[ "$*" == *"apply -f -"* ]]; then cat >/dev/null; echo marker >> '${work}/ma
 `, { mode: 0o755 })
     const result = run('bash', [resolve(work, 'bootstrap.sh')], { timeout: 0, env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, JWT_BOOTSTRAP_TEST_DIR: work,
+      TMPDIR: scenario === 'missing-tmpdir' ? resolve(work, 'absent') : process.env.TMPDIR,
       JWT_BOOTSTRAP_TEST_SCENARIO: scenario, BOOTSTRAP_KEYCLOAK_ADMIN_USERNAME: 'fixture',
       BOOTSTRAP_KEYCLOAK_ADMIN_PASSWORD: 'fixture', BOOTSTRAP_SUPERADMIN_PASSWORD: 'fixture',
       BOOTSTRAP_APISIX_ADMIN_KEY: 'fixture',
@@ -78,4 +79,10 @@ test('failed mapper writes and readback drift prevent success without logging pr
     assert.doesNotMatch(result.stderr, /private-provider-response-must-not-escape|offline-fixture/)
     assert.ok(result.stderr.length < 1024)
   }
+})
+
+test('mapper reconciliation works when an inherited temporary directory is unavailable', () => {
+  const result = bootstrap(render(umbrellaChart).objects, 'missing-tmpdir')
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  assert.equal(result.markers, 'marker\n')
 })
