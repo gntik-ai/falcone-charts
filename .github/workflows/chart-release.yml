@@ -141,7 +141,7 @@ jobs:
       - name: Validate C-25 chart, credential runtime, and PostgreSQL authority
         run: sh tests/webhook-database-chart-ci.test.sh
       - name: Validate flow-audit, workflow worker PG env, and observability scrape limits
-        run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs tests/observability-baseline-alerts-chart.test.mjs tests/kind-quickstart-surface-chart.test.mjs tests/executor-identity-verifier-chart.test.mjs tests/platform-console-audience-chart.test.mjs tests/large-task-runtime-chart.test.mjs
+        run: node --test tests/flow-audit-chart.test.mjs tests/workflow-worker-pg-env-chart.test.mjs tests/observability-scrape-limits-chart.test.mjs tests/observability-baseline-alerts-chart.test.mjs tests/kind-quickstart-surface-chart.test.mjs tests/executor-identity-verifier-chart.test.mjs tests/platform-console-audience-chart.test.mjs tests/jwt-policy-snapshot.test.mjs tests/large-task-runtime-chart.test.mjs
       - name: Validate APISIX standalone route provisioning
         run: node --test tests/apisix-standalone-routes-chart.test.mjs
       - name: Validate executor provider identity profiles and token projection
