@@ -5,7 +5,8 @@ import { repoRoot } from '../fixtures/blackbox.mjs'
 
 test('#1053 historical render, invalid env, and atomic executor migration contracts', () => {
   const result = spawnSync('python3', ['tests/blackbox/deployment-packaging/executor-env-upgrade.py', 'Offline'], {
-    cwd: repoRoot, encoding: 'utf8', timeout: 120_000, maxBuffer: 1024 * 1024,
+    // Historical renders can exceed two minutes; use the CI job's 20-minute bound.
+    cwd: repoRoot, encoding: 'utf8', timeout: 1_200_000, maxBuffer: 1024 * 1024,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
   })
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
