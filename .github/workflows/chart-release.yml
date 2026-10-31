@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   executor-env-upgrade:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -74,7 +74,7 @@ jobs:
           path: ${{ runner.temp }}/executor-env-upgrade-evidence.json
           if-no-files-found: error
   kind-quickstart-surface:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -103,7 +103,7 @@ jobs:
           path: ${{ runner.temp }}/kind-quickstart-surface-evidence.json
           if-no-files-found: error
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -292,7 +292,7 @@ jobs:
   publish:
     if: github.event_name == 'push'
     needs: [validate, executor-env-upgrade, kind-quickstart-surface]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
