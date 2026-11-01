@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 
 const args = process.argv.slice(2)
 const scenario = process.env.FALCONE_BBX_KEYCLOAK_SCENARIO ?? 'success'
@@ -105,11 +106,22 @@ if (method === 'GET' && url.includes('/clients?clientId=')) {
   respond(200, JSON.stringify([{ id: `client-${clientId}`, clientId }]))
 }
 
-if (method === 'GET' && url.endsWith('/protocol-mappers/models')) {
-  respond(200, JSON.stringify([{
-    ...JSON.parse(readFileSync('/bootstrap/payload/console-audience-mapper.json', 'utf8')),
-    id: 'bbx-console-audience',
-  }]))
+if (url.includes('/protocol-mappers/models')) {
+  const storedFile = resolve(dirname(traceFile), 'console-audience.json')
+  const desired = JSON.parse(readFileSync('/bootstrap/payload/console-audience-mapper.json', 'utf8'))
+  const withDefaults = mapper => ({
+    ...mapper, id: 'bbx-console-audience',
+    config: { ...mapper.config, 'introspection.token.claim': 'true', 'lightweight.claim': 'false' },
+  })
+  if (method === 'GET') {
+    const stored = existsSync(storedFile) ? JSON.parse(readFileSync(storedFile, 'utf8'))
+      : scenario === 'audience-missing' ? null : desired
+    respond(200, JSON.stringify(stored ? [withDefaults(stored)] : []))
+  }
+  if (['POST', 'PUT'].includes(method) && dataArgument?.startsWith('@')) {
+    writeFileSync(storedFile, JSON.stringify(withDefaults(JSON.parse(readFileSync(dataArgument.slice(1), 'utf8')))))
+    respond(method === 'POST' ? 201 : 204)
+  }
 }
 
 if (method === 'PUT' && /\/clients\/[^/]+\/default-client-scopes\/[^/]+$/.test(url)) {
