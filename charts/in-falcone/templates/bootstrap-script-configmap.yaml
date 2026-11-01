@@ -576,8 +576,14 @@ data:
     }
 
     console_audience_failed() {
-      rm -rf "$1"
-      echo "[bootstrap] console audience mapper did not converge; correct the configuration and retry" >&2
+      local diagnostic="$2"
+      if [ "$#" = 3 ]; then
+        local status="$3"
+        [[ "$status" =~ ^[0-9]{3}$ ]] || status=000
+        diagnostic="$diagnostic status=$status"
+      fi
+      rm -rf "$1" >/dev/null 2>&1
+      echo "[bootstrap] console audience $diagnostic" >&2
       exit 1
     }
 
@@ -587,44 +593,87 @@ data:
       local token="$1"
       local desired="$PAYLOAD_DIR/console-audience-mapper.json"
       [ -f "$desired" ] || return 0
-      local work status client_uuid mapper_id endpoint
-      work="$(mktemp -d /tmp/console-audience.XXXXXXXXXX)"
+      local work status client_uuid mapper_id endpoint count mismatch
+      # Return only a desired field/key name, never a value from the provider.
+      # The same predicate decides both whether to write and whether readback converged.
+      local mismatch_filter='
+        [.[] | select(type == "object") | select(.name == "in-falcone-audience")][0] as $actual
+        | $desired[0] as $want
+        | (["name", "protocol", "protocolMapper", "consentRequired"]
+            | map(select(. as $key | $actual[$key] != $want[$key])))
+          + ($want.config | to_entries | map(select(
+              . as $entry | if ($actual.config | type) != "object" then true
+              else ($actual.config | has($entry.key) | not) or $actual.config[$entry.key] != $entry.value end
+            ) | .key))
+        | .[0] // ""'
+      if ! work="$(mktemp -d /tmp/console-audience.XXXXXXXXXX 2>/dev/null)"; then
+        console_audience_failed "" "work-dir"
+      fi
       if ! status="$(curl -sS -o "$work/client" -w '%{http_code}' \
         -H "Authorization: Bearer $token" \
         "$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID/clients?clientId=in-falcone-console" 2>/dev/null)" \
-        || [ "$status" != "200" ]; then console_audience_failed "$work"; fi
-      if ! client_uuid="$(jq -er '[.[] | select(.clientId == "in-falcone-console")] | if length == 1 then .[0].id else error("client") end | select(test("^[A-Za-z0-9_-]+$"))' "$work/client" 2>/dev/null)"; then
-        console_audience_failed "$work"
+        || [ "$status" != "200" ]; then console_audience_failed "$work" "lookup-client"; fi
+      if ! client_uuid="$(jq -ers '
+        if length == 1 and (.[0] | type == "array") then .[0] else error("shape") end
+        | if length == 1 then .[0] else error("client") end
+        | select(.clientId == "in-falcone-console") | .id | strings
+        | select(length > 0 and (test("[^A-Za-z0-9_-]") | not))' "$work/client" 2>/dev/null)"; then
+        console_audience_failed "$work" "lookup-client"
       fi
       endpoint="$KEYCLOAK_BASE_URL/admin/realms/$KEYCLOAK_REALM_ID/clients/$client_uuid/protocol-mappers/models"
       if ! status="$(curl -sS -o "$work/mappers" -w '%{http_code}' \
         -H "Authorization: Bearer $token" "$endpoint" 2>/dev/null)" \
-        || [ "$status" != "200" ]; then console_audience_failed "$work"; fi
-      if ! jq -e 'type == "array" and ([.[] | select(.name == "in-falcone-audience")] | length <= 1)' "$work/mappers" >/dev/null 2>&1; then
-        console_audience_failed "$work"
+        || [ "$status" != "200" ]; then console_audience_failed "$work" "list-mappers" "$status"; fi
+      if ! jq -es 'length == 1 and (.[0] | type == "array")' "$work/mappers" >/dev/null 2>/dev/null; then
+        console_audience_failed "$work" "list-mappers invalid-shape"
       fi
-      if ! jq -e --slurpfile desired "$desired" '[.[] | select(.name == "in-falcone-audience") | {name, protocol, protocolMapper, consentRequired, config}] == $desired' "$work/mappers" >/dev/null 2>&1; then
-        mapper_id="$(jq -r '.[] | select(.name == "in-falcone-audience") | .id' "$work/mappers")"
+      if ! count="$(jq -er '[.[] | select(type == "object") | select(.name == "in-falcone-audience")] | length' "$work/mappers" 2>/dev/null)"; then
+        console_audience_failed "$work" "list-mappers invalid-shape"
+      fi
+      [ "$count" -le 1 ] || console_audience_failed "$work" "duplicate"
+      mapper_id=""
+      if [ "$count" = 1 ]; then
+        if ! mapper_id="$(jq -er '.[] | select(type == "object") | select(.name == "in-falcone-audience") | .id | strings | select(length > 0 and (test("[^A-Za-z0-9_-]") | not))' "$work/mappers" 2>/dev/null)"; then
+          console_audience_failed "$work" "list-mappers invalid-id"
+        fi
+      fi
+      if ! mismatch="$(jq -r --slurpfile desired "$desired" "$mismatch_filter" "$work/mappers" 2>/dev/null)"; then
+        console_audience_failed "$work" "list-mappers invalid-shape"
+      fi
+      if [ "$count" = 0 ] || [ -n "$mismatch" ]; then
         local method=POST target="$endpoint" payload="$desired"
         if [ -n "$mapper_id" ]; then
-          [[ "$mapper_id" =~ ^[A-Za-z0-9_-]+$ ]] || console_audience_failed "$work"
           method=PUT
           target="$endpoint/$mapper_id"
           payload="$work/desired"
-          jq --arg id "$mapper_id" '. + {id: $id}' "$desired" > "$payload"
+          if ! jq --arg id "$mapper_id" '. + {id: $id}' "$desired" > "$payload" 2>/dev/null; then
+            console_audience_failed "$work" "write-payload"
+          fi
         fi
         if ! status="$(curl -sS -o "$work/update" -w '%{http_code}' -X "$method" \
           -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-          --data @"$payload" "$target" 2>/dev/null)"; then console_audience_failed "$work"; fi
-        case "$status" in 200|201|204) ;; *) console_audience_failed "$work" ;; esac
+          --data @"$payload" "$target" 2>/dev/null)"; then console_audience_failed "$work" "write" "$status"; fi
+        case "$status" in 2[0-9][0-9]) ;; *) console_audience_failed "$work" "write" "$status" ;; esac
       fi
       if ! status="$(curl -sS -o "$work/readback" -w '%{http_code}' \
         -H "Authorization: Bearer $token" "$endpoint" 2>/dev/null)" \
-        || [ "$status" != "200" ]; then console_audience_failed "$work"; fi
-      if ! jq -e --slurpfile desired "$desired" '[.[] | select(.name == "in-falcone-audience") | {name, protocol, protocolMapper, consentRequired, config}] == $desired' "$work/readback" >/dev/null 2>&1; then
-        console_audience_failed "$work"
+        || [ "$status" != "200" ]; then console_audience_failed "$work" "readback" "$status"; fi
+      if ! jq -es 'length == 1 and (.[0] | type == "array")' "$work/readback" >/dev/null 2>/dev/null; then
+        console_audience_failed "$work" "readback invalid-shape"
       fi
-      rm -rf "$work"
+      if ! count="$(jq -er '[.[] | select(type == "object") | select(.name == "in-falcone-audience")] | length' "$work/readback" 2>/dev/null)"; then
+        console_audience_failed "$work" "readback invalid-shape"
+      fi
+      [ "$count" != 0 ] || console_audience_failed "$work" "readback-missing"
+      [ "$count" = 1 ] || console_audience_failed "$work" "readback-duplicate"
+      if ! mapper_id="$(jq -er '.[] | select(type == "object") | select(.name == "in-falcone-audience") | .id | strings | select(length > 0 and (test("[^A-Za-z0-9_-]") | not))' "$work/readback" 2>/dev/null)"; then
+        console_audience_failed "$work" "readback invalid-id"
+      fi
+      if ! mismatch="$(jq -r --slurpfile desired "$desired" "$mismatch_filter" "$work/readback" 2>/dev/null)"; then
+        console_audience_failed "$work" "readback invalid-shape"
+      fi
+      [ -z "$mismatch" ] || console_audience_failed "$work" "readback-mismatch key=$mismatch"
+      rm -rf "$work" >/dev/null 2>&1 || console_audience_failed "$work" "cleanup"
       log "reconciled platform console audience mapper"
     }
 

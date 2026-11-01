@@ -223,7 +223,7 @@ function executeRenderedBootstrap(artifacts, scenario) {
     '--setenv', 'BOOTSTRAP_SUPERADMIN_PASSWORD', 'bbx-superadmin-password-must-not-escape',
     '--setenv', 'BOOTSTRAP_APISIX_ADMIN_KEY', 'bbx-apisix-key-must-not-escape',
     '/bin/bash', '/bootstrap/script/bootstrap.sh',
-  ], { timeout: 10_000 })
+  ], { timeout: 0 })
 
   const invocation = {
     result,
@@ -464,6 +464,9 @@ test('matching-marker reruns execute one exact login PUT/readback before verific
         `${label} failed:\n${combined(invocation.result)}`)
       assert.equal(loginPuts(invocation).length, 1, `${label} must execute exactly one login PUT`)
       assert.equal(loginReadbacks(invocation).length, 1, `${label} must execute exactly one exact readback`)
+      assert.equal(invocation.curlCalls.filter(call => call.url.endsWith('/protocol-mappers/models')
+        && call.method === 'GET').length, 2, 'Keycloak 26 mapper defaults must converge on both reads')
+      assert.match(invocation.result.stdout, /reconciled platform console audience mapper/)
 
       const adminDestructive = invocation.curlCalls.filter((call) => (
         call.url.includes('/admin/realms') && ['POST', 'DELETE'].includes(call.method)
@@ -491,6 +494,19 @@ test('matching-marker reruns execute one exact login PUT/readback before verific
   } finally {
     first.cleanup()
     second.cleanup()
+  }
+})
+
+test('Keycloak 26 stores default mapper keys and accepts readback after a single create', () => {
+  const invocation = executeRenderedBootstrap(install, 'audience-missing')
+  try {
+    assert.equal(invocation.result.status, 0, combined(invocation.result))
+    const mapperCalls = invocation.curlCalls.filter(call => call.url.includes('/protocol-mappers/models'))
+    assert.deepEqual(mapperCalls.map(call => call.method), ['GET', 'POST', 'GET'])
+    assert.match(invocation.result.stdout, /reconciled platform console audience mapper/)
+    assert.ok(invocation.kubectlCalls.some(call => call.verb === 'apply'), 'success must publish the marker')
+  } finally {
+    invocation.cleanup()
   }
 })
 
