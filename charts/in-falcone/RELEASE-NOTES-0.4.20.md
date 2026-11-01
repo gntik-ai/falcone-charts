@@ -1,27 +1,72 @@
 # in-falcone 0.4.20 (next unpublished release)
 
+## Shared JWT policy rollout (#1505)
+
+Both application Deployments now consume the same nine JWT settings from
+`{release}-executor-jwt-config`. The control plane also needs the paused atomic
+transition below: its former literal JWKS URL, kind-quickstart issuer, and
+duplicate prod-TLS JWKS entries cannot safely merge with `valueFrom`. Run the
+helper separately for each component. `--component control-plane` selects the
+control-plane Deployment/container; the default remains `control-plane-executor`
+for existing automation. Only that component's JWT env changes in each fenced
+patch. Dry-run, repair, repeat verification and resume cover **both** Deployments.
+
+The internal trusted realm base is derived from the effective JWKS URL **after**
+TLS overrides. Prod-TLS therefore trusts `https://falcone-keycloak:8443/realms/`,
+without implicitly retaining `http://falcone-keycloak:8080/realms/`. Tenant JWKS
+lookups preserve the configured HTTPS transport. Platform aliases use the same
+configured platform JWKS endpoint. Check both workloads' resolved configuration
+against the exact ordered values before release.
+
+R3 review and explicit operator approval remain required before rollout:
+
+- The temporary platform audience `account` admits existing console sessions and
+  other tokens from the trusted platform realm carrying that audience. The mapper
+  is reconciled on existing realms even when the one-shot marker matches. Remove
+  `account` after reconciliation and access-token refresh/expiry, no later than
+  **2026-11-14**, by setting `platformAudiences: [in-falcone]` under
+  `gatewayPolicy.issuerJwksAuth`. This deadline is an operator configuration task,
+  tracked in the [ChangeSet tasks](../../openspec/changes/fix-1505-shared-jwt-trust-policy/tasks.md),
+  not an automatic timer or an approval recorded by this implementation.
+- Tenant audience enforcement now also rejects tenant tokens without
+  `falcone-data-api` on all control-plane routes. Confirm audience-mapper coverage
+  for **every existing tenant app and console client** before rollout; new-client
+  provisioning alone is insufficient evidence.
+- Setting the control-plane public issuer changes service-account credential
+  responses to return a public `tokenEndpoint` instead of the internal endpoint.
+  Social-provider responses return a public broker `callbackUrl` instead of
+  `null`. Assess consumer reachability and registered provider callbacks. Login
+  continues to use `KEYCLOAK_BASE_URL`; grant types and role mappings are unchanged.
+
+After normal publication, verify superadmin and tenant-owner flows/MCP lists and
+cross-tenant denial. Roll back the source image and shared chart policy together;
+the additive audience mapper may remain. All existing release gates still apply.
+
 ## Executor JWT environment upgrade (#980, #1053)
 
 #980 moved the executor JWT configuration to five reference-only entries in
 `{release}-executor-jwt-config`. An existing Deployment with literal JWT env
 can reject an apply that retains both `value` and `valueFrom`. Use the one-time
-atomic env patch below **while the executor Deployment is paused**.
-Pause only the executor Deployment, then run normal gated target delivery through
-Helm or Argo's Helm render. This reconciles the target ConfigMap and attempts the
-executor apply, which may reject the env transition or accept an invalid merge. Dry-run and apply
-the atomic step while paused; retry rejected delivery with the same target, then
-verify or repair again before resume and the final readiness gates. This protects
+atomic env patch below **while both JWT consumer Deployments are paused**.
+Pause the control-plane and executor Deployments, then run normal gated target
+delivery through Helm or Argo's Helm render. This reconciles the target ConfigMap
+and attempts the consumer applies, which may reject the env transition or accept
+an invalid merge. Dry-run and apply the atomic step while paused; retry rejected
+delivery with the same target, then verify or repair again before resume and the
+final readiness gates. This protects
 against a client merge driven by Helm's stored duplicate-name manifest. This
 order applies to pre-#980 literals and to existing #980
 prod-TLS/kind-TLS releases with duplicate `KEYCLOAK_JWKS_URL` entries. A successful
-untreated delivery can still drop JWKS; never deliver it with the executor unpaused.
+untreated delivery can still drop JWKS; never deliver it with either consumer
+unpaused.
 On migrated staging the step is a no-op after ConfigMap verification. Fresh
 installs need no transition.
 
-The chosen mechanism changes only the five executor JWT env entries in one
-resourceVersion-fenced JSON Patch. It preserves non-JWT env, HPA-managed replicas,
-other-manager annotations, the Service and ConfigMap. Removing the old value
-and adding its reference happen atomically. The rollout pause prevents any later
+The chosen mechanism changes only the nine JWT env entries of the selected
+component in one resourceVersion-fenced JSON Patch. It preserves non-JWT env,
+HPA-managed replicas, other-manager annotations, the Service and ConfigMap.
+Removing the old value and adding its reference happen atomically. The rollout
+pause prevents any later
 client merge from creating a pod or ReplicaSet template without JWKS URL, issuer
 or audience; the env is verified again before resume. This avoids whole-object replace's
 field-loss risk. There is no permanent Argo replacement option; Helm remains the
@@ -77,8 +122,9 @@ migration; it does not prove the full chart avoids unrelated SSA ownership confl
 Prerequisites: `python3` with **PyYAML**, `helm`, `kubectl`, and the clean target
 checkout. Use the reviewed client versions and the same values as gated delivery.
 
-1. Complete tenant-app and service-account audience reconciliation, idempotent
-   rerun and fresh-token checks **before enforcement**. Prod inherits true.
+1. Complete platform-console, tenant-app/console and service-account audience
+   reconciliation, idempotent rerun and fresh-token checks **before enforcement**.
+   Prod inherits true.
    Retain every existing backup, migration, ownership, parity and validation gate.
 2. Confirm **real production issuer/JWKS hosts** in the exact ordered values.
    `https://iam.in-falcone.example.com` is a placeholder; staging's
@@ -89,6 +135,8 @@ checkout. Use the reviewed client versions and the same values as gated delivery
    from the verifier's HTTP default to the previously effective TLS literal.
    Release review must explicitly acknowledge this ConfigMap representation change;
    the effective runtime endpoint is unchanged.
+   The shared trusted internal realm base now follows that effective HTTPS
+   endpoint too; the obsolete HTTP alias is removed.
    Verify the resolved executor endpoint (scheme, host, port and path) for the exact
    ordered values before rollout. Gateway verifier settings and other components'
    TLS env remain unchanged. Without executor transport TLS, verifier values still
@@ -105,12 +153,14 @@ checkout. Use the reviewed client versions and the same values as gated delivery
    for the helper and delivery. Retain a protected rollback
    render from `433be51` with the actual old release values and live replicas/
    annotations; never copy configuration/env payloads into release evidence.
-4. Pause only the executor Deployment, keeping serving pods running. Keep that
+4. Pause both JWT consumer Deployments, keeping serving pods running. Keep that
    pause through normal gated target delivery, atomic repair and any retry:
 
    ```sh
-   kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-     rollout pause "deployment/$RELEASE-control-plane-executor"
+   for component in control-plane control-plane-executor; do
+     kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
+       rollout pause "deployment/$RELEASE-$component" || exit 1
+   done
    TARGET_REVISION="$(git rev-parse HEAD)"
    ```
 
@@ -127,7 +177,7 @@ checkout. Use the reviewed client versions and the same values as gated delivery
 
    Use the reviewed Helm 3 client or, for the harness's Helm 4 SSA path, add
    `--server-side=true`. Do not use a rollout-wait or automatic-rollback flag
-   during this paused apply: the executor cannot roll out until step 6. Readiness
+   during this paused apply: both consumers remain paused until step 6. Readiness
    and all existing post-delivery gates still run after resume. If the env apply
    is rejected, retain the failed revision and continue to step 5 only after the
    target ConfigMap is present; retry the same gated delivery in step 6. Other
@@ -154,10 +204,10 @@ checkout. Use the reviewed client versions and the same values as gated delivery
    For pre-#980 delivery creates the ConfigMap; for existing #980 TLS it updates
    the stale HTTP default to the already effective HTTPS endpoint. The ConfigMap
    must match the target before the helper can repair env or new pods can start.
-   Keep the executor paused if delivery stops before that ConfigMap is ready;
+   Keep both consumers paused if delivery stops before that ConfigMap is ready;
    correct the gated delivery and retry.
    The helper never creates/changes the ConfigMap or reads a Secret. It compares
-   all live data with the exact target render in-process, requires all five keys
+   all live data with the exact target render in-process, requires all nine keys
    to be nonempty, and fails before dry-run, mutation or rollout on any mismatch,
    even when the env is already migrated. Only statuses are printed.
 5. From that checkout run a server-side dry-run, then `--apply`, with an explicit
@@ -165,53 +215,64 @@ checkout. Use the reviewed client versions and the same values as gated delivery
    additional values layer; prod.yaml alone has placeholder hosts and is insufficient.
 
    ```sh
-   python3 charts/in-falcone/migrations/executor-jwt-env-upgrade.py \
-     --revision "$TARGET_REVISION" --context "$CONTEXT" \
-     --release "$RELEASE" --namespace "$NAMESPACE" \
-     --values charts/in-falcone/values/prod.yaml \
-     --values "$REVIEWED_PROD_VALUES_LAYER"
-   python3 charts/in-falcone/migrations/executor-jwt-env-upgrade.py \
-     --revision "$TARGET_REVISION" --context "$CONTEXT" \
-     --release "$RELEASE" --namespace "$NAMESPACE" \
-     --values charts/in-falcone/values/prod.yaml \
-     --values "$REVIEWED_PROD_VALUES_LAYER" --apply
+   for component in control-plane control-plane-executor; do
+     python3 charts/in-falcone/migrations/executor-jwt-env-upgrade.py \
+       --revision "$TARGET_REVISION" --context "$CONTEXT" \
+       --release "$RELEASE" --namespace "$NAMESPACE" --component "$component" \
+       --values charts/in-falcone/values/prod.yaml \
+       --values "$REVIEWED_PROD_VALUES_LAYER" || exit 1
+     python3 charts/in-falcone/migrations/executor-jwt-env-upgrade.py \
+       --revision "$TARGET_REVISION" --context "$CONTEXT" \
+       --release "$RELEASE" --namespace "$NAMESPACE" --component "$component" \
+       --values charts/in-falcone/values/prod.yaml \
+       --values "$REVIEWED_PROD_VALUES_LAYER" --apply || exit 1
+   done
    ```
 
    For staging use its three Argo layers in README order; for Helm use that release's
    exact ordered layers. The helper follows the first paused target apply,
    including on existing TLS releases. It mutates only
-   `{release}-control-plane-executor`, checks reference-only env and retained
+   the selected `{release}-{component}`, checks reference-only env and retained
    replicas/annotations. While paused, `--apply` verifies env without waiting for
    a rollout and prints `EXECUTOR_UPGRADE_APPLIED_PAUSED` or
    `EXECUTOR_UPGRADE_UNCHANGED_PAUSED`; it never resumes the Deployment.
-   Kubernetes' controller-owned Deployment revision annotation may advance. A concurrent change fails the
-   resourceVersion test: recheck live state and retry instead of bypassing the fence.
+   For `--component control-plane`, the corresponding status prefix is
+   `CONTROL_PLANE_UPGRADE_`. A failed step leaves both consumers paused; do not
+   resume either until both pass verification after the final delivery attempt.
+   Kubernetes' controller-owned Deployment revision annotation may advance.
+   A concurrent change fails the resourceVersion test: recheck live state and
+   retry instead of bypassing the fence.
 6. If the first delivery was rejected, rerun the same gated target delivery
-   **while the executor remains paused**; it must now succeed. Confirm no executor
+   **while both consumers remain paused**; it must now succeed. Confirm no consumer
    apply/retry remains in flight. Check that delivery retained the pause:
 
    ```sh
-   test "$(kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-     get deployment "$RELEASE-control-plane-executor" -o jsonpath='{.spec.paused}')" = true
+   for component in control-plane control-plane-executor; do
+     test "$(kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
+       get deployment "$RELEASE-$component" -o jsonpath='{.spec.paused}')" = true || exit 1
+   done
    ```
 
    Rerun the same dry-run and `--apply` commands before resuming. This repairs any
    JWT name removed by a merge based on the historical Helm manifest without
    creating a pod or ReplicaSet with missing JWT config. A failed delivery or
-   helper check must leave the executor paused; fix and retry forward.
-   Once the helper confirms five unique reference-only entries, resume only that
-   Deployment and wait for rollout:
+   helper check must leave both consumers paused; fix and retry forward.
+   Once the helper confirms nine unique reference-only entries in each consumer,
+   resume those Deployments and wait for rollout:
 
    ```sh
-   kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-     rollout resume "deployment/$RELEASE-control-plane-executor"
-   kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-     rollout status "deployment/$RELEASE-control-plane-executor" --timeout=300s
+   for component in control-plane control-plane-executor; do
+     kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
+       rollout resume "deployment/$RELEASE-$component" || exit 1
+     kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
+       rollout status "deployment/$RELEASE-$component" --timeout=300s || exit 1
+   done
    ```
 
-   Rerun the helper after rollout, then existing #980 bearer/isolation checks.
-   Verify five unique reference-only entries, pod config readiness, Available,
-   replicas/annotations, and `EXECUTOR_UPGRADE_UNCHANGED` on repeat. Retain only
+   Rerun the helper for both components after rollout, then existing #980
+   bearer/isolation checks. Verify nine unique reference-only entries per
+   consumer, pod config readiness, Available, replicas/annotations, and unchanged
+   status on repeat for both components. Retain only
    statuses/hashes. ConfigMap-only changes do not refresh running env: later audience
    enforcement changes still need the existing APISIX/executor reload procedure.
    If Helm 4 reports a conflict on HPA-managed `spec.replicas`, the env step cannot
@@ -242,6 +303,13 @@ with actual old values, after checking replicas and preserving other-manager
 annotations. Restore literals and remove references atomically. No whole-release
 forced upgrade or Helm rollback is part of this step; existing database/auth
 fail-forward rules remain authoritative. Audience mappers may remain.
+
+For a #1505 rollback, retain protected pre-change renders for both consumers
+with their actual installed values. Coordinate restoring both verifier policies
+with the source image rollback; preserve replicas and other-manager annotations
+and restore literals atomically. The historical executor-only render does not
+restore the control-plane policy. Keep both consumers paused while repairing
+env, and verify both before resume.
 
 These are new unpublished notes; published 0.4.19 notes/packages and render
 baselines remain unchanged. Release review must finalize the shipping version

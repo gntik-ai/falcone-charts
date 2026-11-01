@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time #1053 JWT env transition; no Secret reads or payload logging."""
+"""One-time #1053/#1505 JWT env transition; no Secret reads or payload logging."""
 import argparse
 import copy
 import json
@@ -13,6 +13,8 @@ import yaml
 JWT_NAMES = (
     "KEYCLOAK_JWKS_URL", "KEYCLOAK_ISSUER", "KEYCLOAK_AUDIENCE",
     "KEYCLOAK_TENANT_AUDIENCE", "KEYCLOAK_ENFORCE_TENANT_AUDIENCE",
+    "KEYCLOAK_TRUSTED_REALM_BASES", "KEYCLOAK_PLATFORM_REALM",
+    "KEYCLOAK_PLATFORM_AUDIENCES", "KEYCLOAK_ALLOW_TENANT_REALMS",
 )
 
 
@@ -31,10 +33,10 @@ def validate_env(env, config_name):
             raise ValueError("EXECUTOR_ENV_REFERENCE_REQUIRED")
 
 
-def migration_patch(live, target, config_name):
+def migration_patch(live, target, config_name, component="control-plane-executor"):
     containers = live["spec"]["template"]["spec"]["containers"]
     wanted = target["spec"]["template"]["spec"]["containers"]
-    expected = next(item for item in wanted if item["name"] == "control-plane-executor")
+    expected = next(item for item in wanted if item["name"] == component)
     validate_env(expected["env"], config_name)
     index = next(i for i, item in enumerate(containers) if item["name"] == expected["name"])
     before = containers[index].get("env", [])
@@ -74,6 +76,8 @@ def main():
     for name in ("revision", "release", "namespace", "context"):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--values", action="append", default=[])
+    parser.add_argument("--component", choices=("control-plane-executor", "control-plane"),
+                        default="control-plane-executor", help="Deployment/container to migrate; run once per consumer")
     parser.add_argument("--apply", action="store_true", help="default is server-side dry-run")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[3]
@@ -96,7 +100,7 @@ def main():
     for value in args.values:
         command += ["-f", str(root / value)]
     objects = list(yaml.safe_load_all(run(command)))
-    name = f"{args.release}-control-plane-executor"
+    name = f"{args.release}-{args.component}"
     targets = [item for item in objects if item and item.get("kind") == "Deployment"
                and item["metadata"]["name"] == name]
     if len(targets) != 1:
@@ -107,13 +111,13 @@ def main():
     if len(configs) != 1:
         raise ValueError("EXECUTOR_UPGRADE_TARGET_CONFIG_INVALID")
     validate_env(next(item for item in targets[0]["spec"]["template"]["spec"]["containers"]
-                      if item["name"] == "control-plane-executor")["env"], config_name)
+                      if item["name"] == args.component)["env"], config_name)
     kube = ["kubectl", "--context", args.context, "--namespace", args.namespace]
     # A stale TLS ConfigMap can have every key yet resolve to the wrong endpoint.
     # Fail before any patch/rollout, including dry-runs and already-migrated env.
     validate_config(json.loads(run(kube + ["get", "configmap", config_name, "-o", "json"])), configs[0])
     live = json.loads(run(kube + ["get", "deployment", name, "-o", "json"]))
-    patch = migration_patch(live, targets[0], config_name)
+    patch = migration_patch(live, targets[0], config_name, args.component)
     if patch:
         command = kube + ["patch", "deployment", name, "--type=json", "--patch-file=/dev/stdin"]
         if not args.apply:
@@ -125,7 +129,7 @@ def main():
         if not live["spec"].get("paused", False):
             run(kube + ["rollout", "status", f"deployment/{name}", "--timeout=300s"])
         after = json.loads(run(kube + ["get", "deployment", name, "-o", "json"]))
-        if migration_patch(after, targets[0], config_name):
+        if migration_patch(after, targets[0], config_name, args.component):
             raise ValueError("EXECUTOR_UPGRADE_VERIFY_FAILED")
         if after["spec"].get("paused", False) != live["spec"].get("paused", False) or after["spec"].get("replicas") != live["spec"].get("replicas") or any(
             after["metadata"].get("annotations", {}).get(key) != value
@@ -133,7 +137,8 @@ def main():
             if key != "deployment.kubernetes.io/revision"
         ) or after["spec"]["template"]["metadata"].get("annotations", {}) != live["spec"]["template"]["metadata"].get("annotations", {}):
             raise ValueError("EXECUTOR_UPGRADE_LIVE_STATE_CHANGED")
-    print("EXECUTOR_UPGRADE_" + ("UNCHANGED" if not patch else "APPLIED" if args.apply else "DRY_RUN_OK")
+    prefix = "EXECUTOR" if args.component == "control-plane-executor" else "CONTROL_PLANE"
+    print(prefix + "_UPGRADE_" + ("UNCHANGED" if not patch else "APPLIED" if args.apply else "DRY_RUN_OK")
           + ("_PAUSED" if args.apply and live["spec"].get("paused", False) else ""))
 
 

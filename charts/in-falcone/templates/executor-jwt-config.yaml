@@ -1,9 +1,32 @@
-{{- if ne .Values.controlPlaneExecutor.enabled false }}
+{{- if or (ne .Values.controlPlaneExecutor.enabled false) (ne .Values.controlPlane.enabled false) }}
 {{- $verifier := include "in-falcone.issuerJwksAuth" . | fromJson -}}
+{{- $settings := include "in-falcone.issuerJwksSettings" . | fromJson -}}
+{{- $audiences := dig "platformAudiences" (list $verifier.audience "account") $settings.verifier -}}
+{{- if not (kindIs "slice" $audiences) -}}
+  {{- fail "gatewayPolicy.issuerJwksAuth.platformAudiences must be a non-empty list of audiences" -}}
+{{- end -}}
+{{- if eq (len $audiences) 0 -}}
+  {{- fail "gatewayPolicy.issuerJwksAuth.platformAudiences must be a non-empty list of audiences" -}}
+{{- end -}}
+{{- range $audiences -}}
+  {{- if not (kindIs "string" .) -}}
+    {{- fail "gatewayPolicy.issuerJwksAuth.platformAudiences entries must be non-empty strings" -}}
+  {{- end -}}
+  {{- if not (trim .) -}}
+    {{- fail "gatewayPolicy.issuerJwksAuth.platformAudiences entries must be non-empty strings" -}}
+  {{- end -}}
+{{- end -}}
+{{- $allowTenantRealms := dig "allowTenantRealms" true $settings.verifier -}}
+{{- if not (kindIs "bool" $allowTenantRealms) -}}
+  {{- fail "gatewayPolicy.issuerJwksAuth.allowTenantRealms must be boolean" -}}
+{{- end -}}
 {{- $jwt := dict
       "KEYCLOAK_ISSUER" (printf "%s/realms/%s" $verifier.issuer_base_url $verifier.platform_realm)
       "KEYCLOAK_JWKS_URL" (printf "%s/realms/%s/protocol/openid-connect/certs" $verifier.jwks_base_url $verifier.platform_realm)
       "KEYCLOAK_AUDIENCE" $verifier.audience
+      "KEYCLOAK_PLATFORM_REALM" $verifier.platform_realm
+      "KEYCLOAK_PLATFORM_AUDIENCES" (toJson $audiences)
+      "KEYCLOAK_ALLOW_TENANT_REALMS" (ternary "1" "0" $allowTenantRealms)
       "KEYCLOAK_TENANT_AUDIENCE" $verifier.tenant_audience
       "KEYCLOAK_ENFORCE_TENANT_AUDIENCE" ($verifier.enforce_tenant_audience | toString) -}}
 {{- /* #1053: preserve the previously effective appended TLS literals in the
@@ -21,6 +44,16 @@
     {{- end -}}
   {{- end -}}
 {{- end -}}
+{{- /* Tenant keys are fetched under these bases. Derive them after TLS
+       overrides so tenant lookup cannot retain the stale plaintext endpoint. */ -}}
+{{- $realmSuffix := printf "/realms/%s" $jwt.KEYCLOAK_PLATFORM_REALM -}}
+{{- $certsSuffix := printf "%s/protocol/openid-connect/certs" $realmSuffix -}}
+{{- if or (not (hasSuffix $realmSuffix $jwt.KEYCLOAK_ISSUER)) (not (hasSuffix $certsSuffix $jwt.KEYCLOAK_JWKS_URL)) -}}
+  {{- fail "shared JWT issuer and JWKS URL must use the configured platform realm" -}}
+{{- end -}}
+{{- $_ := set $jwt "KEYCLOAK_TRUSTED_REALM_BASES" (toJson (uniq (list
+      (printf "%s/realms/" (trimSuffix $realmSuffix $jwt.KEYCLOAK_ISSUER))
+      (printf "%s/realms/" (trimSuffix $certsSuffix $jwt.KEYCLOAK_JWKS_URL))))) -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -32,6 +65,10 @@ data:
   KEYCLOAK_ISSUER: {{ $jwt.KEYCLOAK_ISSUER | quote }}
   KEYCLOAK_JWKS_URL: {{ $jwt.KEYCLOAK_JWKS_URL | quote }}
   KEYCLOAK_AUDIENCE: {{ $jwt.KEYCLOAK_AUDIENCE | quote }}
+  KEYCLOAK_TRUSTED_REALM_BASES: {{ $jwt.KEYCLOAK_TRUSTED_REALM_BASES | quote }}
+  KEYCLOAK_PLATFORM_REALM: {{ $jwt.KEYCLOAK_PLATFORM_REALM | quote }}
+  KEYCLOAK_PLATFORM_AUDIENCES: {{ $jwt.KEYCLOAK_PLATFORM_AUDIENCES | quote }}
+  KEYCLOAK_ALLOW_TENANT_REALMS: {{ $jwt.KEYCLOAK_ALLOW_TENANT_REALMS | quote }}
   KEYCLOAK_TENANT_AUDIENCE: {{ $jwt.KEYCLOAK_TENANT_AUDIENCE | quote }}
   KEYCLOAK_ENFORCE_TENANT_AUDIENCE: {{ $jwt.KEYCLOAK_ENFORCE_TENANT_AUDIENCE | quote }}
 {{- end }}

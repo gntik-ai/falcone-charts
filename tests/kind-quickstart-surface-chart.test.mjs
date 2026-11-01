@@ -54,14 +54,14 @@ const container = (objects, component) => deployment(objects, component).spec.te
 const issuer = 'http://iam.127.0.0.1.nip.io'
 const internal = 'http://falcone-bbx-keycloak:8080'
 
-test('canonical public issuer keeps all key fetches internal and preserves control-plane env', () => {
+test('canonical public issuer keeps key fetches internal and shares control-plane verifier config', () => {
   const { objects } = render(umbrellaChart, args())
   assert.deepEqual(container(objects, 'keycloak').args, ['start', '--http-enabled=true', '--hostname-strict=false',
     `--hostname=${issuer}`, '--hostname-backchannel-dynamic=true'])
   const cp = container(objects, 'control-plane').env
-  assert.deepEqual(cp.find(e => e.name === 'KEYCLOAK_ISSUER'), { name: 'KEYCLOAK_ISSUER', value: `${issuer}/realms/in-falcone-platform` })
+  assert.deepEqual(cp.find(e => e.name === 'KEYCLOAK_ISSUER'), { name: 'KEYCLOAK_ISSUER', valueFrom: { configMapKeyRef: { name: 'falcone-bbx-executor-jwt-config', key: 'KEYCLOAK_ISSUER' } } })
   assert.equal(cp.find(e => e.name === 'KEYCLOAK_BASE_URL').value, internal)
-  assert.equal(cp.find(e => e.name === 'KEYCLOAK_JWKS_URL').value, `${internal}/realms/in-falcone-platform/protocol/openid-connect/certs`)
+  assert.deepEqual(cp.find(e => e.name === 'KEYCLOAK_JWKS_URL').valueFrom, { configMapKeyRef: { name: 'falcone-bbx-executor-jwt-config', key: 'KEYCLOAK_JWKS_URL' } })
   const jwt = objects.find(o => o.metadata.name === 'falcone-bbx-executor-jwt-config').data
   assert.equal(jwt.KEYCLOAK_ISSUER, `${issuer}/realms/in-falcone-platform`)
   assert.equal(jwt.KEYCLOAK_JWKS_URL, `${internal}/realms/in-falcone-platform/protocol/openid-connect/certs`)
@@ -70,8 +70,7 @@ test('canonical public issuer keeps all key fetches internal and preserves contr
   assert.equal(plugin.issuer_base_url, issuer)
   assert.equal(plugin.jwks_base_url, internal)
   const oldEnv = container(render(umbrellaChart, args(false)).objects, 'control-plane').env
-  assert.equal(oldEnv.some(e => e.name === 'KEYCLOAK_ISSUER'), false)
-  assert.deepEqual(cp.filter(e => e.name !== 'KEYCLOAK_ISSUER'), oldEnv)
+  assert.deepEqual(cp, oldEnv, 'profile changes shared ConfigMap data rather than workload env')
 })
 
 test('issuer config changes roll exactly the three consumers and checksums are deterministic', () => {
@@ -81,12 +80,12 @@ test('issuer config changes roll exactly the three consumers and checksums are d
   for (const component of ['control-plane', 'control-plane-executor', 'apisix']) {
     const checksum = objects => deployment(objects, component).spec.template.metadata.annotations?.['in-falcone.io/issuer-config-checksum']
     assert.match(checksum(withProfile) ?? '', /^[0-9a-f]{64}$/)
-    assert.equal(checksum(without), undefined, component)
+    assert.notEqual(checksum(without), checksum(withProfile), component)
     assert.equal(checksum(withProfile), checksum(repeat), component)
   }
 })
 
-test('profiles without a control-plane issuer preserve their pod annotations and environment', () => {
+test('all profiles receive verifier checksums and shared references without an optional issuer', () => {
   for (const [profile, values] of [
     ['default', []],
     ['prod-tls', ['-f', `${umbrellaChart}/values/prod.yaml`, '-f', `${umbrellaChart}/../../deploy/kind/values-production.yaml`]],
@@ -95,23 +94,22 @@ test('profiles without a control-plane issuer preserve their pod annotations and
     ['null issuer', [...args(), '--set', 'controlPlane.keycloakIssuer=null']],
   ]) {
     const { objects } = render(umbrellaChart, values)
-    for (const object of objects.filter(o => o.kind === 'Deployment')) {
-      assert.equal(object.spec.template.metadata.annotations?.['in-falcone.io/issuer-config-checksum'],
-        undefined, `${profile}: ${object.metadata.name}`)
+    for (const component of ['control-plane', 'control-plane-executor']) {
+      assert.match(deployment(objects, component).spec.template.metadata.annotations?.['in-falcone.io/issuer-config-checksum'], /^[a-f0-9]{64}$/, profile)
     }
     assert.equal(deployment(objects, 'apisix').spec.template.metadata.annotations, undefined, profile)
-    assert.equal(container(objects, 'control-plane').env.some(e => e.name === 'KEYCLOAK_ISSUER'), false, profile)
+    assert.ok(container(objects, 'control-plane').env.find(e => e.name === 'KEYCLOAK_ISSUER').valueFrom, profile)
   }
 })
 
-test('optional issuer merges with existing env entries and absent reused key renders safely', () => {
+test('shared issuer replaces legacy env entries and absent reused keys render safely', () => {
   const duplicate = container(render(umbrellaChart, [...args(),
     '--set', 'controlPlane.env[0].name=KEYCLOAK_ISSUER',
     '--set-string', 'controlPlane.env[0].value=http://previous.example/realms/platform',
   ]).objects, 'control-plane').env.filter(e => e.name === 'KEYCLOAK_ISSUER')
-  assert.deepEqual(duplicate, [{ name: 'KEYCLOAK_ISSUER', value: `${issuer}/realms/in-falcone-platform` }])
+  assert.deepEqual(duplicate, [{ name: 'KEYCLOAK_ISSUER', valueFrom: { configMapKeyRef: { name: 'falcone-bbx-executor-jwt-config', key: 'KEYCLOAK_ISSUER' } } }])
   const without = render(umbrellaChart, [...args(false), '--set', 'controlPlane.keycloakIssuer=null']).objects
-  assert.equal(container(without, 'control-plane').env.some(e => e.name === 'KEYCLOAK_ISSUER'), false)
+  assert.equal(container(without, 'control-plane').env.filter(e => e.name === 'KEYCLOAK_ISSUER').length, 1)
 })
 
 test('CoreDNS setup refuses other contexts and is idempotent at the kubectl boundary', async () => {
@@ -162,12 +160,12 @@ else: assert 'rollout' in args
 test('checksums track each consumed issuer config without rolling unrelated consumers', () => {
   const baseline = render(umbrellaChart, args()).objects
   const ttlChange = render(umbrellaChart, [...args(), '--set', 'gatewayPolicy.issuerJwksAuth.cache_ttl=301']).objects
-  const cpChange = render(umbrellaChart, [...args(), '--set-string', 'controlPlane.keycloakIssuer=http://other.example/realms/platform']).objects
+  const policyChange = render(umbrellaChart, [...args(), '--set-json', 'gatewayPolicy.issuerJwksAuth.platformAudiences=["in-falcone"]']).objects
   const unrelated = render(umbrellaChart, [...args(), '--set-string', 'controlPlane.podAnnotations.other=preserved']).objects
   const checksum = (objects, component) => deployment(objects, component).spec.template.metadata.annotations?.['in-falcone.io/issuer-config-checksum']
   for (const component of ['control-plane', 'control-plane-executor', 'apisix']) {
     assert.equal(checksum(baseline, component) === checksum(ttlChange, component), component !== 'apisix', component)
-    assert.equal(checksum(baseline, component) === checksum(cpChange, component), component !== 'control-plane', component)
+    assert.equal(checksum(baseline, component) === checksum(policyChange, component), component === 'apisix', component)
     assert.equal(checksum(baseline, component), checksum(unrelated, component), component)
   }
   assert.equal(deployment(unrelated, 'control-plane').spec.template.metadata.annotations.other, 'preserved')

@@ -474,3 +474,21 @@ Removing all base-image overrides while private source-build mode remains
 enabled is intentionally rejected, because it would restore the public
 Dockerfile defaults. To return to connected defaults, disable private-registry
 mode or source-build mode in the same validated values revision.
+
+## Shared JWT policy upgrade (#1505)
+
+The control plane and executor now share issuer and audience configuration.
+Existing releases require the paused atomic env migration for **both** consumers;
+the helper's `--component control-plane` option complements its executor default.
+See the [0.4.20 upgrade runbook](charts/in-falcone/RELEASE-NOTES-0.4.20.md).
+
+R3 review must assess the control-plane public issuer's additional effects:
+service-account credential responses expose a public `tokenEndpoint`, and
+social-provider responses expose a public broker `callbackUrl` instead of `null`.
+Confirm consumer reachability, provider callback registration and audience-mapper
+coverage for every existing tenant app and console client before rollout.
+Tenant audience enforcement now rejects missing audiences on control-plane
+routes too. The temporary platform `account` audience needs explicit human
+approval and removal after mapper reconciliation and session refresh/expiry,
+no later than 2026-11-14; the [ChangeSet tasks](openspec/changes/fix-1505-shared-jwt-trust-policy/tasks.md)
+track that release follow-up. Login continues to use `KEYCLOAK_BASE_URL`.

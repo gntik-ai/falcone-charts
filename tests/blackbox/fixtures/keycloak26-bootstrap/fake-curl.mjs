@@ -19,9 +19,11 @@ const explicitMethod = option('-X')
 const method = explicitMethod ?? (url.includes('/protocol/openid-connect/token') ? 'POST' : 'GET')
 
 const call = {
-  dataFile: dataArgument?.startsWith('@') ? dataArgument.slice(1) : null,
+  dataFile: dataArgument?.startsWith('@')
+    ? dataArgument.slice(1).replace(/^\/tmp\/console-audience\.[^/]+\//, '/tmp/console-audience/') : null,
   method,
-  output: output ?? null,
+  // Compare request behavior across runs while keeping mktemp response files isolated.
+  output: output?.replace(/^\/tmp\/console-audience\.[^/]+\//, '/tmp/console-audience/') ?? null,
   url,
 }
 appendFileSync(logFile, `${JSON.stringify(call)}\n`)
@@ -101,6 +103,13 @@ if (method === 'GET' && url.endsWith('/client-scopes')) {
 if (method === 'GET' && url.includes('/clients?clientId=')) {
   const clientId = new URL(url).searchParams.get('clientId')
   respond(200, JSON.stringify([{ id: `client-${clientId}`, clientId }]))
+}
+
+if (method === 'GET' && url.endsWith('/protocol-mappers/models')) {
+  respond(200, JSON.stringify([{
+    ...JSON.parse(readFileSync('/bootstrap/payload/console-audience-mapper.json', 'utf8')),
+    id: 'bbx-console-audience',
+  }]))
 }
 
 if (method === 'PUT' && /\/clients\/[^/]+\/default-client-scopes\/[^/]+$/.test(url)) {
