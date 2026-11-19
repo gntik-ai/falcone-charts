@@ -146,6 +146,8 @@ jobs:
         run: node --test tests/apisix-standalone-routes-chart.test.mjs
       - name: Validate executor provider identity profiles and token projection
         run: node --test tests/executor-provider-identity-chart.test.mjs
+      - name: Validate digest-pinned and tag-only web console image rendering
+        run: node --test tests/web-console-image-digest-chart.test.mjs
       - name: Validate bundled alert rules with promtool
         shell: bash
         run: |
