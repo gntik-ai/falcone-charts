@@ -266,6 +266,10 @@ Prepare all of the following before enabling builds:
 * An OpenShift project and a GitLab repository reachable from the build pods.
   Mirror the Falcone source repository, including the Dockerfiles under
   `apps/`, and expose a stable branch or tag through `global.openshiftBuild.git.ref`.
+  For the #1656 console retirement, this chart builds `in-falcone-web-console`
+  from `apps/web-console-next/Dockerfile`. Select a source revision containing
+  that moved file and release the chart and source changes together. To roll
+  back source builds, restore both the prior chart and its matching source ref.
 * A private registry reachable from the OpenShift image-builder network path,
   or an approved internal mirror. Mirror every runtime image referenced by the
   selected values profile, plus the Node base images used by the six

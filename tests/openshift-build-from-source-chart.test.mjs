@@ -22,7 +22,7 @@ const services = [
 const dockerfiles = {
   'control-plane': 'apps/control-plane/Dockerfile',
   'control-plane-executor': 'apps/control-plane-executor/Dockerfile',
-  'web-console': 'apps/web-console/Dockerfile',
+  'web-console': 'apps/web-console-next/Dockerfile',
   'workflow-worker': 'apps/workflow-worker/Dockerfile',
   'mcp-runtime': 'apps/mcp-runtime/Dockerfile',
   'fn-runtime': 'apps/fn-runtime/Dockerfile',

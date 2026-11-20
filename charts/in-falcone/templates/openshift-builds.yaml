@@ -1,6 +1,6 @@
 {{- $b := .Values.global.openshiftBuild }}
 {{- if $b.enabled }}
-{{- $services := list (dict "name" "control-plane" "identity" "control-plane" "path" "apps/control-plane/Dockerfile") (dict "name" "control-plane-executor" "identity" "control-plane-executor" "path" "apps/control-plane-executor/Dockerfile") (dict "name" "web-console" "identity" "web-console" "path" "apps/web-console/Dockerfile") (dict "name" "workflow-worker" "identity" "workflow-worker" "path" "apps/workflow-worker/Dockerfile") (dict "name" "mcp-runtime" "identity" "mcp-runtime" "path" "apps/mcp-runtime/Dockerfile") (dict "name" "fn-runtime" "identity" "fn-runtime" "path" "apps/fn-runtime/Dockerfile") }}
+{{- $services := list (dict "name" "control-plane" "identity" "control-plane" "path" "apps/control-plane/Dockerfile") (dict "name" "control-plane-executor" "identity" "control-plane-executor" "path" "apps/control-plane-executor/Dockerfile") (dict "name" "web-console" "identity" "web-console" "path" "apps/web-console-next/Dockerfile") (dict "name" "workflow-worker" "identity" "workflow-worker" "path" "apps/workflow-worker/Dockerfile") (dict "name" "mcp-runtime" "identity" "mcp-runtime" "path" "apps/mcp-runtime/Dockerfile") (dict "name" "fn-runtime" "identity" "fn-runtime" "path" "apps/fn-runtime/Dockerfile") }}
 {{- range $s := $services }}
 ---
 apiVersion: image.openshift.io/v1
